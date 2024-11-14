@@ -1,0 +1,1 @@
+export const stripe_currency =  "usd"
