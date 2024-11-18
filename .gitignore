@@ -1,0 +1,6 @@
+node_modules
+.env
+.idea
+public/category-data
+public/profile-image
+dist
