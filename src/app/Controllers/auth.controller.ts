@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { validate } from "class-validator";
 import passport from "passport";
-import { genSaltSync, hashSync } from "bcryptjs";
+import { genSaltSync, hashSync,compareSync } from "bcryptjs";
 import { compareAsc } from "date-fns";
 
 import { ValidationErrorResponse } from "../../types/ValidationErrorResponse";
@@ -215,6 +215,11 @@ class AuthController {
         return res.status(404).json({ error: "Phone Number already exists" });
       }
 
+      if(updateData.password){      
+      const salt = genSaltSync(10);
+      updateData.password= hashSync(updateData.password, salt);
+      console.log("updateData.password", updateData.password)
+    }
       const updatedUser = await User.findByIdAndUpdate(user.id, updateData, {
         new: true,
       });
@@ -240,7 +245,7 @@ class AuthController {
 
   static userLogin = async (req: Request, res: Response): Promise<Response> => {
     try {
-      console.log("api is hitting")
+    
       const userInput = plainToClass(UserLoginDto, req.body);
       const errors = await validate(userInput);
 
@@ -255,19 +260,64 @@ class AuthController {
           .json({ error: { message: "VALIDATIONS_ERROR", info: errorsInfo } });
       }
 
-      let userExists = await User.findOne({
+      if (userInput.phoneNumber && userInput.email) {
+        return res.status(400).json({
+            status: false,
+            message: "Provide either phone number or email, not both" 
+          })
+        }
+
+      let userExists;
+      if(userInput.phoneNumber && userInput.dialCode){
+        console.log("user number section running")
+        userExists = await User.findOne({
         isDeleted: false,
         completePhoneNumber: `${userInput.dialCode}--${userInput.phoneNumber}`,
       });
+    }
+
+    else if(userInput.email){
+      console.log("user email section")
+        userExists = await User.findOne({
+        isDeleted: false,
+        email: userInput.email
+      });
+    }
+    else{
+      return res.status(400).json({
+       status: false,
+       message: "Invalid login details"
+
+      })
+    }
 
       if (userExists) {
-        const updatedData = {
-          otpInvalidAt: addMinutes(new Date(), 10),
-          otp: otpGenerator(),
-        };
+    
+       if( userInput.password && !(await compareSync(userInput.password, userExists.password)))
+       {
+        return res.status(404).json({
+          status: false,
+          message: "Password is incorrect",
+        });
+       }
+
+       const updatedData = {
+        otpInvalidAt: addMinutes(new Date(), 10),
+        otp: otpGenerator(),
+      };
+
         const user = (await User.findByIdAndUpdate(userExists.id, updatedData, {
           new: true,
         })) as UserInterface;
+  
+        //From here we can send the otp either email or phoneNumber
+        // if(userInput.email){
+        //   await sendEmail(userInput.email, updatedData.otp)
+        // }
+        // else (userInput.phoneNumber){
+        //   await sendOtpToPhone(userInput.phoneNumber, updatedData.otp) 
+        // }
+    
         // user.otp = "";
 
         return res.json({
@@ -276,11 +326,13 @@ class AuthController {
         });
       }
 
+      //if user not exist
       const dataToSave = {
         ...userInput,
         otpInvalidAt: addMinutes(new Date(), 10),
         otp: otpGenerator(),
       };
+
       const user = await User.create(dataToSave);
 
       const collection = await Collection.create({
