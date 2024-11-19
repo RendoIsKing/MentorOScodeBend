@@ -12,4 +12,4 @@ RUN npm install --legacy-peer-deps
 
 EXPOSE 3005
 
-CMD ["npm", "start"]
+CMD ["npm", "run", "dev"]
