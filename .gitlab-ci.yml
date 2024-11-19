@@ -1,0 +1,52 @@
+stages:          # List of stages for jobs, and their order of execution
+  - build
+  - deploy
+variables:
+  DOCKER_IMAGE_PREFIX: "have-me-backend-"
+  DOCKER_IMAGE_TAG: "$DOCKER_IMAGE_PREFIX$CI_COMMIT_REF_NAME"
+  DOCKER_TLS_CERTDIR: "/certs"
+
+build-job:       # This job runs in the build stage, which runs first.
+  image: docker:20.10.16
+  stage: build
+  environment: $CI_COMMIT_REF_NAME
+  only:
+    - staging
+    
+  services: 
+    - docker:20.10.16-dind
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin
+     
+  script:
+    - echo "$Env_variable" >> .env
+
+    - docker build -t $DOCKER_IMAGE_TAG .
+    - docker tag $DOCKER_IMAGE_TAG codistan/haveme:$DOCKER_IMAGE_TAG
+    - docker push codistan/haveme:$DOCKER_IMAGE_TAG
+    
+  
+    
+
+deploy-job:      # This job runs in the deploy stage.
+  stage: deploy  # It only runs when *both* jobs in the test stage complete successfully.
+  environment: $CI_COMMIT_REF_NAME
+     
+  only:
+    - staging
+    
+  before_script:
+    - apt update
+    - mkdir ~/.ssh
+    - eval $(ssh-agent -s)
+    - echo "$PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - chmod 700 /root/.ssh
+    - ssh-keyscan -H "$PUBLIC_KEY" >> ~/.ssh/known_hosts
+  script:
+    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY
+    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
+    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker image rm -f codistan/haveme:$DOCKER_IMAGE_TAG
+    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker pull codistan/haveme:$DOCKER_IMAGE_TAG
+    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker rm -f haveme-backend-container
+    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker run -d --name haveme-backend-container -p 3005:3005 codistan/haveme:$DOCKER_IMAGE_TAG
+    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker image prune -f
