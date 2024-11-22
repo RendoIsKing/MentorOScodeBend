@@ -27,6 +27,7 @@ import { SubscriptionPlanType } from "../../types/enums/subscriptionPlanEnum";
 import { InteractionType } from "../../types/enums/InteractionTypeEnum";
 import { PostType } from "../../types/enums/postTypeEnum";
 import { SubscriptionStatusEnum } from "../../types/enums/SubscriptionStatusEnum";
+import { sendMessage } from "../../utils/Twillio/sendMessage";
 
 class AuthController {
   static regsiter = async (req: Request, res: Response): Promise<any> => {
@@ -278,10 +279,17 @@ class AuthController {
 
     else if(userInput.email){
       console.log("user email section")
-        userExists = await User.findOne({
+      userExists = await User.findOne({
         isDeleted: false,
         email: userInput.email
       });
+    if(!userExists){
+      return res.status(500).json({
+        status: false,
+        message: "No user found"
+      })
+    }
+      console.log("user detail inside the email is", userExists)
     }
     else{
       return res.status(400).json({
@@ -291,17 +299,14 @@ class AuthController {
       })
     }
 
-      if (userExists) {
-    
-       if( userInput.password && !(await compareSync(userInput.password, userExists.password)))
-       {
-        return res.status(404).json({
-          status: false,
-          message: "Password is incorrect",
-        });
-       }
 
-       const updatedData = {
+
+      if (userExists) {
+        console.log("userInput password", userInput?.password);
+
+        
+        if(!userExists.isVerified===true){
+        const updatedData = {
         otpInvalidAt: addMinutes(new Date(), 10),
         otp: otpGenerator(),
       };
@@ -309,20 +314,62 @@ class AuthController {
         const user = (await User.findByIdAndUpdate(userExists.id, updatedData, {
           new: true,
         })) as UserInterface;
-  
-        //From here we can send the otp either email or phoneNumber
-        // if(userInput.email){
-        //   await sendEmail(userInput.email, updatedData.otp)
-        // }
-        // else (userInput.phoneNumber){
-        //   await sendOtpToPhone(userInput.phoneNumber, updatedData.otp) 
-        // }
+
+
+          await sendMessage(`${userInput.dialCode}${userInput.phoneNumber}`, `Your Otp is ${updatedData?.otp}`) 
+
+          return res.status(400).json({
+            status: false,
+            otp: user.otp,
+            isVerified: "false",
+            userId: user._id,
+            message: "You are not verified so first verify your otp"
+          })
+        }
+
+      
+        if(userExists.password===null){
+          return res.status(400).json({
+            status: false,
+            isPassword: "false",
+            message: "You are verified but not set your password"
+          })
+        }
     
-        // user.otp = "";
+       if( userInput?.password && !(await compareSync(userInput?.password, userExists?.password)))
+       {
+        return res.status(404).json({
+          status: false,
+          message: "Password is incorrect",
+        });
+       }
+
+      //  const updatedData = {
+      //   otpInvalidAt: addMinutes(new Date(), 10),
+      //   otp: otpGenerator(),
+      // };
+
+        // const user = (await User.findByIdAndUpdate(userExists.id, updatedData, {
+        //   new: true,
+        // })) as UserInterface;
+  
+        // From here we can send the otp either email or phoneNumber
+        // Hya line error doyan
+        // if(userInput?.email){
+        //   await sendEmail(userInput?.email,  'Otp verification', `Your otp is ${updatedData?.otp}`)
+        // }
+
+        // if(userInput?.phoneNumber){
+        //   await sendMessage(`${userInput?.dialCode}${userInput?.phoneNumber}`, `Your Otp is ${updatedData?.otp}`) 
+        // }
+
+        const token = await generateAuthToken(userExists);
 
         return res.json({
-          data: user,
-          message: "OTP Sent , please verify using it",
+          // data: user,
+          message: "User login sucessfully",
+          data: userExists,
+          token: token
         });
       }
 
@@ -333,6 +380,8 @@ class AuthController {
         otp: otpGenerator(),
       };
 
+      const userPassword = userInput?.password;
+      console.log("userPassword", userPassword)
       const user = await User.create(dataToSave);
 
       const collection = await Collection.create({
@@ -351,6 +400,10 @@ class AuthController {
         primaryCollection: collection.id,
       });
 
+         if(userInput?.phoneNumber){
+          await sendMessage(`${userInput?.dialCode}${userInput?.phoneNumber}`, `Your Otp is ${dataToSave?.otp}`) 
+        }
+
       // user.otp = "";
       return res.json({
         data: user,
@@ -359,8 +412,7 @@ class AuthController {
     } catch (error) {
       console.log(error, "error in user login");
       return res.status(400).json({
-        error: { message: "something went wrong" },
-      });
+        error: { message: "something went wrong" } });
     }
   };
 
@@ -452,7 +504,7 @@ class AuthController {
 
       return res.json({
         data: {
-          ...user.toObject(),
+          ...updatedUser.toObject(),
           token,
         },
         message: "User verified succesfully",
