@@ -25,6 +25,7 @@ export const createSubscription = async (
       isDeleted: false,
       deletedAt: null,
     });
+    //why find subscription plan => as the data added in table with each user
     const plan = await SubscriptionPlan.findOne({
       _id: planId,
       isDeleted: false,
@@ -39,6 +40,8 @@ export const createSubscription = async (
         .status(404)
         .json({ error: { message: "Plan/Product not registerd on stripe" } });
     }
+
+    console.log("Plan/Product registerd on stripe", plan.stripeProductObject )
 
     if (!user) {
       return res.status(404).json({ error: { message: "User not found" } });
@@ -59,6 +62,7 @@ export const createSubscription = async (
       isDefault: true,
     });
 
+    console.log("User card details is", card)
     if (!card) {
       return res
         .status(404)
