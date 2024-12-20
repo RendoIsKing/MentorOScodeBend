@@ -9,18 +9,19 @@ export const getCardDetails = async (
   res: Response
 ): Promise<Response> => {
   try {
+    
+
     const tokenId = req.body;
     const user = req.user as UserInterface;
+    console.log("user ",user)
 
     if (!tokenId) {
       return res.status(400).json({ error: "Token ID is required" });
     }
 
-    const token = req.body.tokenId;
-
     const paymentMethod = await stripeInstance.paymentMethods.create({
       type: "card",
-      card: { token: token },
+      card: { token: tokenId },
     });
 
     const existingCards = await stripeInstance.paymentMethods.list({

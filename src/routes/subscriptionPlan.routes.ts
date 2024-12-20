@@ -9,5 +9,6 @@ subscriptionPlan.get("/", Auth,SubscriptionPlanController.getSubscriptionPlan);
 subscriptionPlan.post("/:id", Auth, SubscriptionPlanController.updateSubscriptionPlan);
 subscriptionPlan.delete("/:id", Auth, SubscriptionPlanController.softDeleteSubscriptionPlan);
 
+subscriptionPlan.get('/subscription', Auth, SubscriptionPlanController.oneSameSubscirptionPlanForAllUsers)
 
 export default subscriptionPlan;

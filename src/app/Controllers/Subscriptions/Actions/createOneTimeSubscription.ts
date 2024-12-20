@@ -19,11 +19,13 @@ export const createOneTimeSubscription = async (
   const reqUser = req.user as UserInterface;
 
   try {
+    console.log("subscirption api is hitting")
     const user = await User.findOne({
       _id: reqUser?.id,
       isDeleted: false,
       deletedAt: null,
     });
+    console.log("postId is", postId)
     const post = await Post.findOne({
       _id: postId,
       privacy: Privacy.PAY_PER_VIEW,
@@ -49,7 +51,8 @@ export const createOneTimeSubscription = async (
         .status(404)
         .json({ error: { message: "User not registerd on stripe" } });
     }
-
+    
+    console.log("ali User id is", user.id)
     const card = await cardDetails.findOne({
       userId: user.id,
       isDefault: true,

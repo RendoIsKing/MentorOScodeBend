@@ -1,8 +1,10 @@
 import { Request, Response } from "express";
 import { postSubscriptionPlan } from "./Actions/createSubscriptionPlanAction";
-import { getSubscriptionPlan } from "./Actions/getSubscriptionPlanAction";
+import { getSubscriptionPlan, getOneSubscriptionPlanForAllUsers } from "./Actions/getSubscriptionPlanAction";
 import { updateSubscriptionPlan } from "./Actions/updateSubscriptionPlanAction";
 import { softDeleteSubscriptionPlan } from "./Actions/deleteSubscriptionPlanAction";
+
+// import {  }
 import createProduct from "./Actions/createProduct";
 
 export class SubscriptionPlanController {
@@ -24,6 +26,12 @@ export class SubscriptionPlanController {
 
   static softDeleteSubscriptionPlan = (req: Request, res:Response) => {
     softDeleteSubscriptionPlan(req, res);
+  };
+
+  static oneSameSubscirptionPlanForAllUsers = (req: Request, res: Response) =>{
+    getOneSubscriptionPlanForAllUsers(req, res);
   }
+
+
 
 }

@@ -109,3 +109,40 @@ export const getSubscriptionPlan = async (
       .json({ error: { message: "Something went wrong." } });
   }
 };
+
+// new addition: 
+export const getOneSubscriptionPlanForAllUsers = async (
+  req: Request,
+  res: Response
+): Promise<Response> => {
+  try {
+    // Define the price to query
+    const queryPrice = 20;
+
+    // Fetch the subscription plan with the specified price
+    const subscriptionPlan = await SubscriptionPlan.findOne({
+      price: queryPrice,
+      isDeleted: false,
+    });
+
+    // Check if a subscription plan was found
+    if (!subscriptionPlan) {
+      return res.status(404).json({
+        success: false,
+        message: `No subscription plan found for price ${queryPrice}.`,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: subscriptionPlan,
+    });
+  } catch (error) {
+    console.error("Error fetching subscription plan:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Something went wrong while fetching the subscription plan.",
+      error: error.message,
+    });
+  }
+};

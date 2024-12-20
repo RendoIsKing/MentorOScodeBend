@@ -25,6 +25,7 @@ export const createSubscription = async (
       isDeleted: false,
       deletedAt: null,
     });
+    //why find subscription plan => as the data added in table with each user
     const plan = await SubscriptionPlan.findOne({
       _id: planId,
       isDeleted: false,
@@ -40,6 +41,8 @@ export const createSubscription = async (
         .json({ error: { message: "Plan/Product not registerd on stripe" } });
     }
 
+    console.log("Plan/Product registerd on stripe", plan.stripeProductObject )
+
     if (!user) {
       return res.status(404).json({ error: { message: "User not found" } });
     }
@@ -54,16 +57,24 @@ export const createSubscription = async (
 
     // FIXME: cardDetails should be CardDetail
     // Always have Class names with first letter capital
+    console.log("user.id ",user.id)
     const card = await cardDetails.findOne({
       userId: user.id,
       isDefault: true,
     });
 
+    console.log("User card details is", card)
     if (!card) {
       return res
         .status(404)
         .json({ error: { message: "Card not found for the user" } });
     }
+    console.log("card.paymentMethodId ",card.paymentMethodId)
+    console.log("user.stripeClientId ",user.stripeClientId)
+    const paymentMethod = await stripeInstance.paymentMethods.retrieve(
+      card.paymentMethodId
+    );
+    console.log("paymentMethod ",paymentMethod)
 
     const subscription = await stripeInstance.subscriptions.create({
       customer: user.stripeClientId,
@@ -77,20 +88,17 @@ export const createSubscription = async (
       payment_settings: { save_default_payment_method: "on_subscription" },
       expand: ["latest_invoice.payment_intent"],
     });
+    console.log("subscription ",subscription)
 
-    // const latestInvoice = subscription.latest_invoice;
+    const latestInvoice = subscription.latest_invoice;
+    console.log("latestInvoice ",latestInvoice)
 
-    // if (!latestInvoice || typeof latestInvoice === "string") {
-    //   throw new Error("Failed to retrieve latest invoice.");
-    // }
+    if (!latestInvoice || typeof latestInvoice === "string") {
+      throw new Error("Failed to retrieve latest invoice.");
+    }
 
-    // const paymentIntent = latestInvoice.payment_intent;
-
-    // if (!paymentIntent || typeof paymentIntent === "string") {
-    //   throw new Error("Failed to retrieve payment intent.");
-    // }
-
-    const paymentIntent = (subscription?.latest_invoice as any)?.payment_intent;
+    const paymentIntent = latestInvoice.payment_intent;
+    console.log("paymentIntent ",paymentIntent)
 
     if (!paymentIntent) {
       console.error(

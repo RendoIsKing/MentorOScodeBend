@@ -5,6 +5,7 @@ import { setDefaultCard } from "./Actions/setCardtoDefault";
 import { deleteCard } from "./Actions/deleteCard";
 
 export class CardDetailsController {
+  // To add card details into db by extracting from token, token is generated from frontend side.
   static getCardDetails = async (req: Request, res: Response) => {
     return getCardDetails(req, res);
   };
