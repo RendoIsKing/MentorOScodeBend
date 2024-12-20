@@ -7,6 +7,7 @@ import { compareAsc } from "date-fns";
 import { ValidationErrorResponse } from "../../types/ValidationErrorResponse";
 import { RegisterInput } from "../Inputs/Register.input";
 import { User } from "../Models/User";
+import { Subscription } from "../Models/Subscription";
 
 import { UserInterface } from "../../types/UserInterface";
 
@@ -209,15 +210,6 @@ class AuthController {
         return res.status(400).json({ errors });
       }
 
-      let phoneNumberExists = await User.findOne({
-        isDeleted: false,
-        completePhoneNumber: `${updateData.dialCode}--${updateData.phoneNumber}`,
-      });
-
-      if (phoneNumberExists) {
-        return res.status(404).json({ error: "Phone Number already exists" });
-      }
-
       if(updateData.password){      
       const salt = genSaltSync(10);
       updateData.password= hashSync(updateData.password, salt);
@@ -271,6 +263,7 @@ class AuthController {
         }
 
       let userExists;
+      //if user pass phoneNumber with dial code in body
       if(userInput.phoneNumber && userInput.dialCode){
         console.log("user number section running")
         userExists = await User.findOne({
@@ -279,6 +272,7 @@ class AuthController {
       });
     }
 
+    //if user pass phoneNumber with dial code in body
     else if(userInput.email){
       console.log("user email section")
       userExists = await User.findOne({
@@ -305,8 +299,8 @@ class AuthController {
 
       if (userExists) {
         console.log("userInput password", userInput?.password);
-
         
+        //if user is not verified then generate otp and send in email
         if(!userExists.isVerified===true){
         const updatedData = {
         otpInvalidAt: addMinutes(new Date(), 10),
@@ -329,7 +323,7 @@ class AuthController {
           })
         }
 
-      
+      //if user verfiy thier account but not set password in the profile section
         if(userExists.password===null){
           return res.status(400).json({
             status: false,
@@ -366,6 +360,14 @@ class AuthController {
         // }
 
         const token = await generateAuthToken(userExists);
+        
+        //From here you need to get the subscription detail of user
+
+        // console.log("Existing user id is", userExists._id)
+        // await Subscription.findOne({
+        //   userId: userExists._id,
+        //   plaId: '66d02546966d636fe97b535f' //for same subscri
+        // })
 
         return res.json({
           // data: user,
@@ -375,7 +377,7 @@ class AuthController {
         });
       }
 
-      //if user not exist
+      //if user not exist then below block run
       const dataToSave = {
         ...userInput,
         otpInvalidAt: addMinutes(new Date(), 10),
@@ -384,6 +386,7 @@ class AuthController {
 
       const userPassword = userInput?.password;
       console.log("userPassword", userPassword)
+
       const user = await User.create(dataToSave);
 
       const collection = await Collection.create({
@@ -418,6 +421,8 @@ class AuthController {
     }
   };
 
+
+  
   static checkUser = async (req: Request, res: Response): Promise<Response> => {
     const input = req.body;
     const userInput = new CheckUserInput();

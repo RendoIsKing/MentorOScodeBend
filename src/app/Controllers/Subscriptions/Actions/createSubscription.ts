@@ -57,6 +57,7 @@ export const createSubscription = async (
 
     // FIXME: cardDetails should be CardDetail
     // Always have Class names with first letter capital
+    console.log("user.id ",user.id)
     const card = await cardDetails.findOne({
       userId: user.id,
       isDefault: true,
@@ -68,6 +69,12 @@ export const createSubscription = async (
         .status(404)
         .json({ error: { message: "Card not found for the user" } });
     }
+    console.log("card.paymentMethodId ",card.paymentMethodId)
+    console.log("user.stripeClientId ",user.stripeClientId)
+    const paymentMethod = await stripeInstance.paymentMethods.retrieve(
+      card.paymentMethodId
+    );
+    console.log("paymentMethod ",paymentMethod)
 
     const subscription = await stripeInstance.subscriptions.create({
       customer: user.stripeClientId,
@@ -81,20 +88,17 @@ export const createSubscription = async (
       payment_settings: { save_default_payment_method: "on_subscription" },
       expand: ["latest_invoice.payment_intent"],
     });
+    console.log("subscription ",subscription)
 
-    // const latestInvoice = subscription.latest_invoice;
+    const latestInvoice = subscription.latest_invoice;
+    console.log("latestInvoice ",latestInvoice)
 
-    // if (!latestInvoice || typeof latestInvoice === "string") {
-    //   throw new Error("Failed to retrieve latest invoice.");
-    // }
+    if (!latestInvoice || typeof latestInvoice === "string") {
+      throw new Error("Failed to retrieve latest invoice.");
+    }
 
-    // const paymentIntent = latestInvoice.payment_intent;
-
-    // if (!paymentIntent || typeof paymentIntent === "string") {
-    //   throw new Error("Failed to retrieve payment intent.");
-    // }
-
-    const paymentIntent = (subscription?.latest_invoice as any)?.payment_intent;
+    const paymentIntent = latestInvoice.payment_intent;
+    console.log("paymentIntent ",paymentIntent)
 
     if (!paymentIntent) {
       console.error(
