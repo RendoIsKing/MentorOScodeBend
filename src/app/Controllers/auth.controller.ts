@@ -362,18 +362,22 @@ class AuthController {
         const token = await generateAuthToken(userExists);
         
         //From here you need to get the subscription detail of user
+        console.log("Existing user id is", userExists._id)
+        const subscriptionDetails = await Subscription.findOne({
+          userId: userExists._id,
+          planId: '67648382f267d99e0dc8de11' //same $20 plan used for all users.
+        }).select('-stripeSubscriptionObject')
 
-        // console.log("Existing user id is", userExists._id)
-        // await Subscription.findOne({
-        //   userId: userExists._id,
-        //   plaId: '66d02546966d636fe97b535f' //for same subscri
-        // })
-
+        // if(subscriptionDetails){
+         
+        // }
+        
         return res.json({
           // data: user,
           message: "User login sucessfully",
           data: userExists,
-          token: token
+          token: token,
+          subscriptoindetali: subscriptionDetails
         });
       }
 
