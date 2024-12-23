@@ -770,6 +770,13 @@ class AuthController {
         },
       ]);
 
+      // get the user platform subscription
+      console.log("Existing user id is", user.id)
+      const subscriptionDetails = await Subscription.findOne({
+        userId: user.id,
+        planId: '67648382f267d99e0dc8de11' //same $20 plan used for all users.
+      }).select('-stripeSubscriptionObject')
+
       if (result && result.user) {
         return res.json({
           data: {
@@ -779,6 +786,7 @@ class AuthController {
             postsCount: result.postsCount,
             totalLikes: result.totalLikes,
             subscriberCount: result.subscriberCount,
+            platformSubscription: subscriptionDetails
           },
         });
       }
