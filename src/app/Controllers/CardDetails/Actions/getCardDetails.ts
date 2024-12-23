@@ -11,7 +11,7 @@ export const getCardDetails = async (
   try {
     
 
-    const tokenId = req.body;
+    const {tokenId} = req.body;
     const user = req.user as UserInterface;
     console.log("user ",user)
 
@@ -39,7 +39,7 @@ export const getCardDetails = async (
       return res.status(400).json({ error: "Card already exists" });
     }
 
-    const cardDetail = await extractCardDetailsFromToken(token);
+    const cardDetail = await extractCardDetailsFromToken(tokenId);
 
     await stripeInstance.paymentMethods.attach(paymentMethod.id, {
       customer: user.stripeClientId,
