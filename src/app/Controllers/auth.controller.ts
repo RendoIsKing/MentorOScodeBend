@@ -377,7 +377,7 @@ class AuthController {
           message: "User login sucessfully",
           data: userExists,
           token: token,
-          subscriptoindetali: subscriptionDetails
+          subscriptiondetails: subscriptionDetails
         });
       }
 
