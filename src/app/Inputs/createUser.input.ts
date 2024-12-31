@@ -44,6 +44,10 @@ export class UserInput {
   tiktokLink?: string;
 
   @IsOptional()
+  @IsString({ message: "password should be string" })
+  password?: string;
+
+  @IsOptional()
   @IsString({ message: "YouTube link should be a string." })
   youtubeLink?: string;
 

@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import { User } from "../Models/User";
 import { UpdateUserDTO } from "../Inputs/UpdateUser.input";
+import { genSaltSync, hashSync } from "bcryptjs";
+
 import { validate } from "class-validator";
 import { FileEnum } from "../../types/FileEnum";
 import { UserInput } from "../Inputs/createUser.input";
@@ -64,30 +66,121 @@ export class UsersControllers {
     }
   };
   
+  
+  // static onboardUser = async (
+  //   req: Request,
+  //   res: Response
+  // ): Promise<Response> => {
+  //   try {
+  //     const user = req.user as UserInterface;
+
+  //     const userToAddOnboardingDetails = await User.findById(user.id);
+  //     if (!userToAddOnboardingDetails) {
+  //       return res.status(404).json({ error: { message: "User not found." } });
+  //     }
+
+  //     const userInput = req.body as UserInput;
+  //     const validationErrors = await validate(userInput);
+  //     if (validationErrors.length > 0) {
+  //       return res.status(400).json({ errors: validationErrors });
+  //     }
+
+  //     const updateData: Partial<UserInterface | any> = { ...userInput };
+
+  //     if (!userInput.coverPhotoId && !user.coverPhotoId) {
+  //       updateData.coverPhotoId = default_user_cover;
+  //     }
+
+  //     if (
+  //       userInput.fullName ||
+  //       userInput.userName ||
+  //       userInput.email ||
+  //       userInput.gender
+  //     ) {
+  //       updateData.hasPersonalInfo = true;
+  //     }
+  //     if (userInput.photoId) {
+  //       updateData.hasPhotoInfo = true;
+  //     } else if (!userInput.photoId && !user.photoId) {
+  //       updateData.photoId = default_user_pfp;
+  //     }
+  //     if (userInput.dob) {
+  //       updateData.hasConfirmedAge = true;
+  //     }
+
+  //     const newUser = await User.findByIdAndUpdate(
+  //       userToAddOnboardingDetails._id,
+  //       updateData,
+  //       { new: true }
+  //     );
+
+  //     if (newUser) {
+  //       const paramsToCreateCustomer = {
+  //         email: newUser.email,
+  //         firstName: newUser.fullName,
+  //         userId: newUser.id,
+  //       };
+  //       try {
+  //         createCustomerOnStripe(paramsToCreateCustomer);
+  //       } catch (error) {
+  //         console.error("Error creating customer on Stripe", error);
+  //       }
+
+  //       try {
+  //         const stripeTipProduct = await createTipProductOnStripe({
+  //           title: `${newUser.userName} + Tip Product`,
+  //         });
+  //         newUser.stripeProductId = (stripeTipProduct as any)?.id;
+  //         newUser.stripeProduct = stripeTipProduct;
+  //         await newUser.save();
+  //       } catch (error) {
+  //         console.error("Error creating user Tip product on Stripe", error);
+  //       }
+  //     }
+
+  //     return res.json({
+  //       data: newUser,
+  //       message: "User onboarded successfully.",
+  //     });
+  //   } catch (err) {
+  //     console.error(err, "Error in user onboarding");
+  //     return res
+  //       .status(500)
+  //       .json({ error: { message: "Something went wrong." } });
+  //   }
+  // };
+
   static onboardUser = async (
     req: Request,
     res: Response
   ): Promise<Response> => {
     try {
       const user = req.user as UserInterface;
-
+  
       const userToAddOnboardingDetails = await User.findById(user.id);
       if (!userToAddOnboardingDetails) {
         return res.status(404).json({ error: { message: "User not found." } });
       }
-
+  
       const userInput = req.body as UserInput;
       const validationErrors = await validate(userInput);
       if (validationErrors.length > 0) {
         return res.status(400).json({ errors: validationErrors });
       }
-
+  
       const updateData: Partial<UserInterface | any> = { ...userInput };
-
+  
+      // Hash the password if it exists in userInput
+      if (userInput.password) {
+        const salt = genSaltSync(10);
+        updateData.password = hashSync(userInput.password, salt);
+        console.log("Hashed password is", updateData.password);
+      }
+  
       if (!userInput.coverPhotoId && !user.coverPhotoId) {
         updateData.coverPhotoId = default_user_cover;
       }
-
+  
       if (
         userInput.fullName ||
         userInput.userName ||
@@ -104,13 +197,13 @@ export class UsersControllers {
       if (userInput.dob) {
         updateData.hasConfirmedAge = true;
       }
-
+  
       const newUser = await User.findByIdAndUpdate(
         userToAddOnboardingDetails._id,
         updateData,
         { new: true }
       );
-
+  
       if (newUser) {
         const paramsToCreateCustomer = {
           email: newUser.email,
@@ -122,7 +215,7 @@ export class UsersControllers {
         } catch (error) {
           console.error("Error creating customer on Stripe", error);
         }
-
+  
         try {
           const stripeTipProduct = await createTipProductOnStripe({
             title: `${newUser.userName} + Tip Product`,
@@ -134,7 +227,7 @@ export class UsersControllers {
           console.error("Error creating user Tip product on Stripe", error);
         }
       }
-
+  
       return res.json({
         data: newUser,
         message: "User onboarded successfully.",
@@ -146,6 +239,7 @@ export class UsersControllers {
         .json({ error: { message: "Something went wrong." } });
     }
   };
+  
 
   static fileUpload = async (
     req: Request,

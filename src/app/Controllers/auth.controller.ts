@@ -945,7 +945,7 @@ class AuthController {
       const salt = genSaltSync(10);
       const password = newPassword;
       const hashPassword = hashSync(password, salt);
-      await User.findByIdAndUpdate(
+      await User.findOneAndUpdate(
         { completePhoneNumber, isDeleted: false },
           {
               password: hashPassword
