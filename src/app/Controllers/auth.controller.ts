@@ -305,6 +305,7 @@ class AuthController {
         const updatedData = {
         otpInvalidAt: addMinutes(new Date(), 10),
         otp: otpGenerator(),
+        isVerified: false
       };
 
         const user = (await User.findByIdAndUpdate(userExists.id, updatedData, {
@@ -316,7 +317,6 @@ class AuthController {
 
           return res.status(400).json({
             status: false,
-            isVerified: "false",
             data: user,
             message: "Please verify your identitiy! Either you not set password or not verified previously"
           })
