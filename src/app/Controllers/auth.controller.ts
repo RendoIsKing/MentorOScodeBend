@@ -301,7 +301,7 @@ class AuthController {
         console.log("userInput password", userInput?.password);
         
         //if user is not verified then generate otp and send in email
-        if(!userExists.isVerified===true){
+        if(!userExists.isVerified===true || userExists.password===null){
         const updatedData = {
         otpInvalidAt: addMinutes(new Date(), 10),
         otp: otpGenerator(),
@@ -319,18 +319,19 @@ class AuthController {
             otp: user.otp,
             isVerified: "false",
             userId: user._id,
-            message: "You are not verified so first verify your otp"
+            message: "Please verify your identitiy! Either you not set password or not verified previously"
           })
         }
 
       //if user verfiy thier account but not set password in the profile section
-        if(userExists.password===null){
-          return res.status(400).json({
-            status: false,
-            isPassword: "false",
-            message: "You are verified but not set your password"
-          })
-        }
+
+        // if(userExists.password===null){
+        //   return res.status(400).json({
+        //     status: false,
+        //     isPassword: "false",
+        //     message: "You are verified but not set your password"
+        //   })
+        // }
     
        if( userInput?.password && !(await compareSync(userInput?.password, userExists?.password)))
        {
