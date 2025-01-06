@@ -316,9 +316,8 @@ class AuthController {
 
           return res.status(400).json({
             status: false,
-            otp: user.otp,
             isVerified: "false",
-            userId: user._id,
+            data: user,
             message: "Please verify your identitiy! Either you not set password or not verified previously"
           })
         }
