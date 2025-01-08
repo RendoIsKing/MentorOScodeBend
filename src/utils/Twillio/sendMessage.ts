@@ -6,13 +6,16 @@ const client = twilio(process.env.TWILLIO_ACCOUNT_SID, process.env.TWILLIO_AUTH_
 
 export const sendMessage = async (to: string, message: string): Promise<boolean> => {
   try {
+    console.log("TWILLIO_ACCOUNT_SID:", process.env.TWILLIO_ACCOUNT_SID);
+    console.log("TWILLIO_AUTH_TOKEN:", process.env.TWILLIO_AUTH_TOKEN);
+    
    await client.messages.create({
+      
       body: message,
       to: `+${to}`,
-      from: "+1 510 694 2651",
+      from: "+1 231 936 2567",
     });
 
-    // console.log(result);
     return true;
   } catch (error) {
     console.error("Error sending message:", error);
