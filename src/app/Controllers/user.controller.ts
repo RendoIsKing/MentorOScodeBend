@@ -260,7 +260,7 @@ export class UsersControllers {
       });
     } catch (error) {
       console.error("Error uploading file:", error);
-      return res.status(500).json({ error: "Internal Server Error" });
+      return res.status(500).json({ error: "Internal Server Error", message: error.message });
     }
   };
 

@@ -5,6 +5,10 @@ import passport from "passport";
 import cors from "cors";
 import { connectDatabase } from "./utils/dbConnection";
 import "reflect-metadata";
+//************* */
+import fs from'fs'
+import path from'path'
+//***********8 */
 
 import {
   AuthRoutes,
@@ -38,6 +42,22 @@ import downloadRouter from "./routes/download.router";
 import { expireDataSetCronJob } from "./utils/scheduledJobs/expireDataSets";
 
 const version = "0.0.1";
+//*********** */
+// Define the path to the 'public' directory
+const publicDir = path.join(__dirname, '../public');
+//**********8 */
+
+//*************** */
+// Function to create the 'public' directory if it doesn't exist
+const createPublicDirectory = () => {
+  if (!fs.existsSync(publicDir)) {
+      fs.mkdirSync(publicDir, { recursive: true }); // Create the directory, including parent directories if necessary
+      console.log(`'public' directory created at: ${publicDir}`);
+  } else {
+      console.log(`'public' directory already exists.`);
+  }
+};
+//*************** */
 
 export class Server {
   public app: Application;
@@ -114,6 +134,9 @@ export class Server {
 
   start() {
     const http = require("http").createServer(this.app);
+    // *********
+    createPublicDirectory();
+     // *********
     http.listen(this.port, () => {
       console.log(`:rocket: HTTP Server started at port ${this.port}`);
     });
