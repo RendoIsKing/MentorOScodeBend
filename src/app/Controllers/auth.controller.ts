@@ -393,10 +393,14 @@ class AuthController {
 
         // }
 
+        const userOject = userExists?.toObject();
         return res.json({
           // data: user,
           message: "User login sucessfully",
-          data: userExists,
+          data: {
+            ...userOject,
+            platformSubscription: subscriptionDetails,
+          },
           token: token,
           subscriptiondetails: subscriptionDetails,
         });
