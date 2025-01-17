@@ -6,8 +6,8 @@ import cors from "cors";
 import { connectDatabase } from "./utils/dbConnection";
 import "reflect-metadata";
 //************* */
-import fs from'fs'
-import path from'path'
+import fs from "fs";
+import path from "path";
 //***********8 */
 
 import {
@@ -44,17 +44,17 @@ import { expireDataSetCronJob } from "./utils/scheduledJobs/expireDataSets";
 const version = "0.0.1";
 //*********** */
 // Define the path to the 'public' directory
-const publicDir = path.join(__dirname, '../public');
+const publicDir = path.join(__dirname, "../public");
 //**********8 */
 
 //*************** */
 // Function to create the 'public' directory if it doesn't exist
 const createPublicDirectory = () => {
   if (!fs.existsSync(publicDir)) {
-      fs.mkdirSync(publicDir, { recursive: true }); // Create the directory, including parent directories if necessary
-      console.log(`'public' directory created at: ${publicDir}`);
+    fs.mkdirSync(publicDir, { recursive: true }); // Create the directory, including parent directories if necessary
+    console.log(`'public' directory created at: ${publicDir}`);
   } else {
-      console.log(`'public' directory already exists.`);
+    console.log(`'public' directory already exists.`);
   }
 };
 //*************** */
@@ -98,31 +98,36 @@ export class Server {
   }
 
   regsiterRoutes() {
-    this.app.get("/", (req: Request, res: Response) => {
+    this.app.get("/api", (req: Request, res: Response) => {
       res.status(200).json({ message: `App running on version ${version}` });
     });
+    this.app.get("/api/backend", (req: Request, res: Response) => {
+      res
+        .status(200)
+        .json({ message: `App running on version ${version}. api/backend` });
+    });
     this.app.use(express.static("public"));
-    this.app.use("/backend/v1/auth", AuthRoutes);
-    this.app.use("/backend/v1/profile", Auth, ProfileRoutes);
-    this.app.use("/backend/v1/user", UserRoutes);
-    this.app.use("/backend/v1/module", OnlyAdmins, ModuleRoutes);
-    this.app.use("/backend/v1/category", Auth, CategoryRoutes);
-    this.app.use("/backend/v1/post", PostRoutes);
-    this.app.use("/backend/v1/documents", Auth, DocumentRoutes);
-    this.app.use("/backend/v1/interests", Auth, InterestRoutes);
-    this.app.use("/backend/v1/interaction", Auth, InteractionRoutes);
-    this.app.use("/backend/v1/plans", Auth, SubscriptionPlanRoutes);
-    this.app.use("/backend/v1/user-connections", Auth, ConnectionRoutes);
-    this.app.use("/backend/v1/payment", Auth, PaymentRoutes);
-    this.app.use("/backend/v1/stats", StatsRoutes);
-    this.app.use("/backend/v1/feature", Auth, FeatureRoutes);
-    this.app.use("/backend/v1/card-details", CardDetailsRoutes);
-    this.app.use("/backend/v1/subscriptions", Auth, SubscriptionRoutes);
-    this.app.use("/backend/v1/support", Auth, SupportRoutes);
-    this.app.use("/backend/v1/transactions", Auth, TransactionRoutes);
-    this.app.use("/backend/v1/notifications", Auth, NotificationRoutes);
-    this.app.use("/backend/v1/more-actions", Auth, moreActionRoutes);
-    this.app.use("/backend/v1/process-data", Auth, userDataRoutes);
+    this.app.use("/api/backend/v1/auth", AuthRoutes);
+    this.app.use("/api/backend/v1/profile", Auth, ProfileRoutes);
+    this.app.use("/api/backend/v1/user", UserRoutes);
+    this.app.use("/api/backend/v1/module", OnlyAdmins, ModuleRoutes);
+    this.app.use("/api/backend/v1/category", Auth, CategoryRoutes);
+    this.app.use("/api/backend/v1/post", PostRoutes);
+    this.app.use("/api/backend/v1/documents", Auth, DocumentRoutes);
+    this.app.use("/api/backend/v1/interests", Auth, InterestRoutes);
+    this.app.use("/api/backend/v1/interaction", Auth, InteractionRoutes);
+    this.app.use("/api/backend/v1/plans", Auth, SubscriptionPlanRoutes);
+    this.app.use("/api/backend/v1/user-connections", Auth, ConnectionRoutes);
+    this.app.use("/api/backend/v1/payment", Auth, PaymentRoutes);
+    this.app.use("/api/backend/v1/stats", StatsRoutes);
+    this.app.use("/api/backend/v1/feature", Auth, FeatureRoutes);
+    this.app.use("/api/backend/v1/card-details", CardDetailsRoutes);
+    this.app.use("/api/backend/v1/subscriptions", Auth, SubscriptionRoutes);
+    this.app.use("/api/backend/v1/support", Auth, SupportRoutes);
+    this.app.use("/api/backend/v1/transactions", Auth, TransactionRoutes);
+    this.app.use("/api/backend/v1/notifications", Auth, NotificationRoutes);
+    this.app.use("/api/backend/v1/more-actions", Auth, moreActionRoutes);
+    this.app.use("/api/backend/v1/process-data", Auth, userDataRoutes);
     this.app.use("/", downloadRouter);
   }
 
@@ -136,7 +141,7 @@ export class Server {
     const http = require("http").createServer(this.app);
     // *********
     createPublicDirectory();
-     // *********
+    // *********
     http.listen(this.port, () => {
       console.log(`:rocket: HTTP Server started at port ${this.port}`);
     });
