@@ -90,7 +90,10 @@ export class Server {
   }
 
   registerMiddlewares() {
-    this.app.use(express.static(`${process.cwd()}${FileEnum.PUBLICDIR}`));
+    this.app.use(
+      "/api/backend",
+      express.static(`${process.cwd()}${FileEnum.PUBLICDIR}`)
+    );
     this.app.use(express.json({ limit: "50mb" }));
     this.app.use(express.urlencoded({ limit: "50mb", extended: true }));
     this.app.use(helmet());
