@@ -11,7 +11,7 @@ build-job:       # This job runs in the build stage, which runs first.
   stage: build
   environment: $CI_COMMIT_REF_NAME
   only:
-    - staging
+    - main
     
   services: 
     - docker:20.10.16-dind
@@ -33,7 +33,7 @@ deploy-job:      # This job runs in the deploy stage.
   environment: $CI_COMMIT_REF_NAME
      
   only:
-    - staging
+    - main
     
   before_script:
     - apt update
@@ -47,6 +47,6 @@ deploy-job:      # This job runs in the deploy stage.
     - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD
     - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker image rm -f codistan/haveme:$DOCKER_IMAGE_TAG
     - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker pull codistan/haveme:$DOCKER_IMAGE_TAG
-    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker rm -f haveme-backend-container
-    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker run -d --name haveme-backend-container -p 3005:3005 codistan/haveme:$DOCKER_IMAGE_TAG
+    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker rm -f haveme-backend-prod
+    - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker run -d --name haveme-backend-prod -p 3006:3006 codistan/haveme:$DOCKER_IMAGE_TAG
     - ssh -o StrictHostKeyChecking=no ubuntu@$PUBLIC_KEY sudo docker image prune -f
