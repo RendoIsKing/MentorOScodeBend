@@ -1,5 +1,6 @@
 import multer from "multer";
 import { Request } from "express";
+import fs from "fs";
 
 interface FileInterface {
   fieldname: string;
@@ -16,20 +17,22 @@ const ALLOWED_FILE_TYPES = [
   "video/mp4",
   "video/mpeg",
   "video/x-msvideo",
-  "video/quicktime"
+  "video/quicktime",
 ];
 
 export function createMulterInstance(path: string) {
+  // Ensure the directory exists
+  if (!fs.existsSync(path)) {
+    fs.mkdirSync(path, { recursive: true }); // Create the directory
+  }
+
   const storage = multer.diskStorage({
     destination: function (req: Request, file: FileInterface, cb: Function) {
       cb(null, path);
     },
     filename: function (req: Request, file: FileInterface, cb: Function) {
       const fileExtension = file.originalname.split(".").pop();
-      cb(
-        null,
-        `${file.fieldname}-${Date.now()}.${fileExtension}`
-      );
+      cb(null, `${file.fieldname}-${Date.now()}.${fileExtension}`);
     },
   });
 
@@ -45,7 +48,7 @@ export function createMulterInstance(path: string) {
     storage: storage,
     fileFilter: fileFilter,
     limits: {
-      fileSize: 1024 * 1024 * 50
-    }
+      fileSize: 1024 * 1024 * 50,
+    },
   });
 }

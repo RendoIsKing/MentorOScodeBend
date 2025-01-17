@@ -34,5 +34,11 @@ user.get("/:id", UsersControllers.show);
 user.post("/:id", OnlyAdmins, upload.single("image"), UsersControllers.update);
 user.delete("/:id", OnlyAdmins, UsersControllers.destroy);
 user.delete("/file-remove/:id", Auth, UsersControllers.deleteFile);
+user.patch(
+  "/:id/make-it-free",
+  OnlyAdmins,
+  UsersControllers.makeUserSubscriptionActive
+);
+user.put("/:id/status", OnlyAdmins, UsersControllers.updateUserStatus);
 
 export default user;
