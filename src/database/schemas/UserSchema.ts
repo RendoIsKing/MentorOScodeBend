@@ -17,7 +17,7 @@ const UserSchema = new Schema(
     },
     password: {
       type: String,
-      default: null
+      default: null,
     },
 
     dob: {
@@ -168,6 +168,10 @@ const UserSchema = new Schema(
     completePhoneNumber: String,
     otp: {
       type: String,
+    },
+    isFreeSubscription: {
+      type: Boolean,
+      default: false,
     },
     otpInvalidAt: Date,
   },

@@ -42,5 +42,6 @@ export interface UserInterface extends Document {
   deletedAt: Date;
   otp: string;
   otpInvalidAt: Date;
+  isFreeSubscription: Boolean;
   primaryCollection: Types.ObjectId | ICollection;
 }

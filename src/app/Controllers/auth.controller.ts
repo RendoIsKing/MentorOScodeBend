@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { validate } from "class-validator";
 import passport from "passport";
-import { genSaltSync, hashSync,compareSync } from "bcryptjs";
+import { genSaltSync, hashSync, compareSync } from "bcryptjs";
 import { compareAsc } from "date-fns";
 
 import { ValidationErrorResponse } from "../../types/ValidationErrorResponse";
@@ -210,11 +210,11 @@ class AuthController {
         return res.status(400).json({ errors });
       }
 
-      if(updateData.password){      
-      const salt = genSaltSync(10);
-      updateData.password= hashSync(updateData.password, salt);
-      console.log("updateData.password", updateData.password)
-    }
+      if (updateData.password) {
+        const salt = genSaltSync(10);
+        updateData.password = hashSync(updateData.password, salt);
+        console.log("updateData.password", updateData.password);
+      }
       const updatedUser = await User.findByIdAndUpdate(user.id, updateData, {
         new: true,
       });
@@ -240,7 +240,6 @@ class AuthController {
 
   static userLogin = async (req: Request, res: Response): Promise<Response> => {
     try {
-    
       const userInput = plainToClass(UserLoginDto, req.body);
       const errors = await validate(userInput);
 
@@ -257,72 +256,75 @@ class AuthController {
 
       if (userInput.phoneNumber && userInput.email) {
         return res.status(400).json({
-            status: false,
-            message: "Provide either phone number or email, not both" 
-          })
-        }
+          status: false,
+          message: "Provide either phone number or email, not both",
+        });
+      }
 
       let userExists;
       //if user pass phoneNumber with dial code in body
-      if(userInput.phoneNumber && userInput.dialCode){
-        console.log("user number section running")
+      if (userInput.phoneNumber && userInput.dialCode) {
+        console.log("user number section running");
         userExists = await User.findOne({
-        isDeleted: false,
-        completePhoneNumber: `${userInput.dialCode}--${userInput.phoneNumber}`,
-      });
-    }
+          isDeleted: false,
+          completePhoneNumber: `${userInput.dialCode}--${userInput.phoneNumber}`,
+        });
+      }
 
-    //if user pass phoneNumber with dial code in body
-    else if(userInput.email){
-      console.log("user email section")
-      userExists = await User.findOne({
-        isDeleted: false,
-        email: userInput.email
-      });
-    if(!userExists){
-      return res.status(500).json({
-        status: false,
-        message: "No user found"
-      })
-    }
-      console.log("user detail inside the email is", userExists)
-    }
-    else{
-      return res.status(400).json({
-       status: false,
-       message: "Invalid login details"
-
-      })
-    }
-
-
+      //if user pass phoneNumber with dial code in body
+      else if (userInput.email) {
+        console.log("user email section");
+        userExists = await User.findOne({
+          isDeleted: false,
+          email: userInput.email,
+        });
+        if (!userExists) {
+          return res.status(404).json({
+            status: false,
+            message: "No user found",
+          });
+        }
+        console.log("user detail inside the email is", userExists);
+      } else {
+        return res.status(400).json({
+          status: false,
+          message: "Invalid login details",
+        });
+      }
 
       if (userExists) {
         console.log("userInput password", userInput?.password);
-        
+
         //if user is not verified then generate otp and send in email
-        if(!userExists.isVerified===true || userExists.password===null){
-        const updatedData = {
-        otpInvalidAt: addMinutes(new Date(), 10),
-        otp: otpGenerator(),
-        isVerified: false
-      };
+        if (!userExists.isVerified === true || userExists.password === null) {
+          const updatedData = {
+            otpInvalidAt: addMinutes(new Date(), 10),
+            otp: otpGenerator(),
+            isVerified: false,
+          };
 
-        const user = (await User.findByIdAndUpdate(userExists.id, updatedData, {
-          new: true,
-        })) as UserInterface;
+          const user = (await User.findByIdAndUpdate(
+            userExists.id,
+            updatedData,
+            {
+              new: true,
+            }
+          )) as UserInterface;
 
-
-          await sendMessage(`${userInput.dialCode}${userInput.phoneNumber}`, `Your Otp is ${updatedData?.otp}`) 
+          await sendMessage(
+            `${userInput.dialCode}${userInput.phoneNumber}`,
+            `Your Otp is ${updatedData?.otp}`
+          );
 
           return res.status(400).json({
             status: false,
             data: user,
-            message: "Please verify your identitiy! Either you not set password or not verified previously"
-          })
+            message:
+              "Please verify your identitiy! Either you not set password or not verified previously",
+          });
         }
 
-      //if user verfiy thier account but not set password in the profile section
+        //if user verfiy thier account but not set password in the profile section
 
         // if(userExists.password===null){
         //   return res.status(400).json({
@@ -331,53 +333,72 @@ class AuthController {
         //     message: "You are verified but not set your password"
         //   })
         // }
-    
-       if( userInput?.password && !(await compareSync(userInput?.password, userExists?.password)))
-       {
-        return res.status(404).json({
-          status: false,
-          message: "Password is incorrect",
-        });
-       }
 
-      //  const updatedData = {
-      //   otpInvalidAt: addMinutes(new Date(), 10),
-      //   otp: otpGenerator(),
-      // };
+        if (
+          userInput?.password &&
+          !(await compareSync(userInput?.password, userExists?.password))
+        ) {
+          return res.status(400).json({
+            status: false,
+            message: "Password is incorrect",
+          });
+        }
+
+        if (!userExists.isActive) {
+          return res.status(403).json({
+            status: false,
+            message:
+              "Your account is disabled. Kindly contact to administrator to enable it.",
+          });
+        }
+
+        //  const updatedData = {
+        //   otpInvalidAt: addMinutes(new Date(), 10),
+        //   otp: otpGenerator(),
+        // };
 
         // const user = (await User.findByIdAndUpdate(userExists.id, updatedData, {
         //   new: true,
         // })) as UserInterface;
-  
+
         // From here we can send the otp either email or phoneNumber
         // Hya line error doyan
         // if(userInput?.email){
         //   await sendEmail(userInput?.email,  'Otp verification', `Your otp is ${updatedData?.otp}`)
         // }
 
-        // if(userInput?.phoneNumber){
-        //   await sendMessage(`${userInput?.dialCode}${userInput?.phoneNumber}`, `Your Otp is ${updatedData?.otp}`) 
+        // if (userInput?.phoneNumber) {
+        //   await sendMessage(
+        //     `${userInput?.dialCode}${userInput?.phoneNumber}`,
+        //     `Your Otp is ${userExists?.otp}`
+        //   );
         // }
 
         const token = await generateAuthToken(userExists);
-        
+
         //From here you need to get the subscription detail of user
-        console.log("Existing user id is", userExists._id)
+        console.log("Existing user id is", userExists._id);
+        let planId = "67648382f267d99e0dc8de11";
+
+        if (userExists.isFreeSubscription) {
+          planId = "678a0764e01be7cfa52b9a9c";
+        }
+
         const subscriptionDetails = await Subscription.findOne({
           userId: userExists._id,
-          planId: '67648382f267d99e0dc8de11' //same $20 plan used for all users.
-        }).select('-stripeSubscriptionObject')
+          planId: planId, //same $20 plan used for all users.
+        }).select("-stripeSubscriptionObject");
 
         // if(subscriptionDetails){
-         
+
         // }
-        
+
         return res.json({
           // data: user,
           message: "User login sucessfully",
           data: userExists,
           token: token,
-          subscriptiondetails: subscriptionDetails
+          subscriptiondetails: subscriptionDetails,
         });
       }
 
@@ -389,7 +410,7 @@ class AuthController {
       };
 
       const userPassword = userInput?.password;
-      console.log("userPassword", userPassword)
+      console.log("userPassword", userPassword);
 
       const user = await User.create(dataToSave);
 
@@ -409,9 +430,12 @@ class AuthController {
         primaryCollection: collection.id,
       });
 
-         if(userInput?.phoneNumber){
-          await sendMessage(`${userInput?.dialCode}${userInput?.phoneNumber}`, `Your Otp is ${dataToSave?.otp}`) 
-        }
+      if (userInput?.phoneNumber) {
+        await sendMessage(
+          `${userInput?.dialCode}${userInput?.phoneNumber}`,
+          `Your Otp is ${dataToSave?.otp}`
+        );
+      }
 
       // user.otp = "";
       return res.json({
@@ -421,12 +445,11 @@ class AuthController {
     } catch (error) {
       console.log(error, "error in user login");
       return res.status(400).json({
-        error: { message: "something went wrong" } });
+        error: { message: "something went wrong" },
+      });
     }
   };
 
-
-  
   static checkUser = async (req: Request, res: Response): Promise<Response> => {
     const input = req.body;
     const userInput = new CheckUserInput();
@@ -771,11 +794,16 @@ class AuthController {
       ]);
 
       // get the user platform subscription
-      console.log("Existing user id is", user.id)
+      console.log("Existing user id is", user.id);
+      let planId = "67648382f267d99e0dc8de11";
+
+      if (user?.isFreeSubscription) {
+        planId = "678a0764e01be7cfa52b9a9c";
+      }
       const subscriptionDetails = await Subscription.findOne({
         userId: user.id,
-        planId: '67648382f267d99e0dc8de11' //same $20 plan used for all users.
-      }).select('-stripeSubscriptionObject')
+        planId: planId, //same $20 plan used for all users.
+      }).select("-stripeSubscriptionObject");
 
       if (result && result.user) {
         return res.json({
@@ -786,7 +814,7 @@ class AuthController {
             postsCount: result.postsCount,
             totalLikes: result.totalLikes,
             subscriberCount: result.subscriberCount,
-            platformSubscription: subscriptionDetails
+            platformSubscription: subscriptionDetails,
           },
         });
       }
@@ -801,7 +829,10 @@ class AuthController {
   };
 
   //Below forget password apis
-  static sendForgotPasswordOtp = async (req: Request, res: Response): Promise<Response> => {
+  static sendForgotPasswordOtp = async (
+    req: Request,
+    res: Response
+  ): Promise<Response> => {
     try {
       // Validate input using DTO
       const userInput = plainToClass(UserForgotPasswordDto, req.body);
@@ -820,8 +851,11 @@ class AuthController {
 
       // Check if the user exists
       const completePhoneNumber = `${userInput.dialCode}--${userInput.phoneNumber}`;
-      const user = await User.findOne({ completePhoneNumber, isDeleted: false });
-     console.log("Reached")
+      const user = await User.findOne({
+        completePhoneNumber,
+        isDeleted: false,
+      });
+      console.log("Reached");
       if (!user) {
         return res.status(404).json({
           status: false,
@@ -841,11 +875,15 @@ class AuthController {
       await User.findByIdAndUpdate(user.id, updatedData, { new: true });
 
       // Send OTP via SMS
-      await sendMessage(completePhoneNumber, `Your OTP for password reset is: ${otp}`);
+      await sendMessage(
+        completePhoneNumber,
+        `Your OTP for password reset is: ${otp}`
+      );
 
       return res.status(200).json({
         status: true,
         message: "OTP sent successfully. Please verify within 10 minutes.",
+        otp,
       });
     } catch (error) {
       console.error("Error in sending OTP:", error);
@@ -856,114 +894,125 @@ class AuthController {
     }
   };
 
-  static validateForgotPasswordOtp = async (req: Request, res: Response): Promise<Response> => {
+  static validateForgotPasswordOtp = async (
+    req: Request,
+    res: Response
+  ): Promise<Response> => {
     try {
       const { dialCode, phoneNumber, otp } = req.body;
-  
+
       if (!dialCode || !phoneNumber || !otp) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           status: false,
-          message: "Phone number, dial code, and OTP are required." 
-        });
-      }
-  
-      const completePhoneNumber = `${dialCode}--${phoneNumber}`;
-      const user = await User.findOne({ completePhoneNumber, isDeleted: false });
-  
-      if (!user) {
-        return res.status(404).json({ 
-          status: false,
-          message: "User not found with this phone number." 
+          message: "Phone number, dial code, and OTP are required.",
         });
       }
 
-      console.log("user details are", user)
-    
-      if (!user.otp || user.otp !== otp.toString()) {
-        return res.status(400).json({ 
+      const completePhoneNumber = `${dialCode}--${phoneNumber}`;
+      const user = await User.findOne({
+        completePhoneNumber,
+        isDeleted: false,
+      });
+
+      if (!user) {
+        return res.status(404).json({
           status: false,
-          message: "Invalid OTP."
+          message: "User not found with this phone number.",
         });
       }
-  
-      if (new Date() > user.otpInvalidAt) {
-        return res.status(400).json({ 
+
+      console.log("user details are", user);
+
+      if (!user.otp || user.otp !== otp.toString()) {
+        return res.status(400).json({
           status: false,
-          message: "OTP has expired." });
+          message: "Invalid OTP.",
+        });
       }
-      
+
+      if (new Date() > user.otpInvalidAt) {
+        return res.status(400).json({
+          status: false,
+          message: "OTP has expired.",
+        });
+      }
+
       // const usreInfo = await User.findOneAndUpdate(
       //   {completePhoneNumber: completePhoneNumber},
       //   {otp: ""},
       //  {new: true}
       // );
-  
-      return res.status(200).json({ 
+
+      return res.status(200).json({
         status: true,
-        message: "OTP validated successfully." ,
-        user: user
+        message: "OTP validated successfully.",
+        user: user,
         // user: usreInfo
       });
     } catch (error) {
       console.error("Error in validating OTP:", error);
-      return res.status(500).json({ 
+      return res.status(500).json({
         status: false,
-        message: "Failed to validate OTP." ,
-        error: error.message
-      
+        message: "Failed to validate OTP.",
+        error: error.message,
       });
     }
   };
 
-  static resetPassword = async (req: Request, res: Response): Promise<Response> => {
+  static resetPassword = async (
+    req: Request,
+    res: Response
+  ): Promise<Response> => {
     try {
       const { dialCode, phoneNumber, newPassword, confirmPassword } = req.body;
-  
+
       // Validate required fields
       if (!dialCode || !phoneNumber || !newPassword || !confirmPassword) {
-        return res
-          .status(400)
-          .json({ message: "Dial code, phone number, new password, and confirm password are required." });
+        return res.status(400).json({
+          message:
+            "Dial code, phone number, new password, and confirm password are required.",
+        });
       }
-  
+
       // Check if passwords match
       if (newPassword !== confirmPassword) {
         return res
           .status(400)
           .json({ message: "New password and confirm password do not match." });
       }
-  
+
       const completePhoneNumber = `${dialCode}--${phoneNumber}`;
-      const user = await User.findOne({ completePhoneNumber, isDeleted: false });
-  
+      const user = await User.findOne({
+        completePhoneNumber,
+        isDeleted: false,
+      });
+
       // Check if the user exists
       if (!user) {
-        return res.status(404).json({ message: "User not found with this phone number." });
+        return res
+          .status(404)
+          .json({ message: "User not found with this phone number." });
       }
-  
-      
+
       const salt = genSaltSync(10);
       const password = newPassword;
       const hashPassword = hashSync(password, salt);
       await User.findOneAndUpdate(
         { completePhoneNumber, isDeleted: false },
-          {
-              password: hashPassword
-          },
-          {
-              new: true,
-          }
+        {
+          password: hashPassword,
+        },
+        {
+          new: true,
+        }
       );
-      
-  
+
       return res.status(200).json({ message: "Password reset successfully." });
     } catch (error) {
       console.error("Error in resetting password:", error);
       return res.status(500).json({ message: "Failed to reset password." });
     }
   };
-  
-
 }
 
 export { AuthController };

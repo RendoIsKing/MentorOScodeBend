@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import { User } from "../Models/User";
 import { UpdateUserDTO } from "../Inputs/UpdateUser.input";
 import { genSaltSync, hashSync } from "bcryptjs";
-
+import { v4 as uuidv4 } from "uuid";
 import { validate } from "class-validator";
 import { FileEnum } from "../../types/FileEnum";
 import { UserInput } from "../Inputs/createUser.input";
@@ -65,8 +65,7 @@ export class UsersControllers {
         .json({ error: { message: "Something went wrong." } });
     }
   };
-  
-  
+
   // static onboardUser = async (
   //   req: Request,
   //   res: Response
@@ -156,31 +155,31 @@ export class UsersControllers {
   ): Promise<Response> => {
     try {
       const user = req.user as UserInterface;
-  
+
       const userToAddOnboardingDetails = await User.findById(user.id);
       if (!userToAddOnboardingDetails) {
         return res.status(404).json({ error: { message: "User not found." } });
       }
-  
+
       const userInput = req.body as UserInput;
       const validationErrors = await validate(userInput);
       if (validationErrors.length > 0) {
         return res.status(400).json({ errors: validationErrors });
       }
-  
+
       const updateData: Partial<UserInterface | any> = { ...userInput };
-  
+
       // Hash the password if it exists in userInput
       if (userInput.password) {
         const salt = genSaltSync(10);
         updateData.password = hashSync(userInput.password, salt);
         console.log("Hashed password is", updateData.password);
       }
-  
+
       if (!userInput.coverPhotoId && !user.coverPhotoId) {
         updateData.coverPhotoId = default_user_cover;
       }
-  
+
       if (
         userInput.fullName ||
         userInput.userName ||
@@ -197,13 +196,13 @@ export class UsersControllers {
       if (userInput.dob) {
         updateData.hasConfirmedAge = true;
       }
-  
+
       const newUser = await User.findByIdAndUpdate(
         userToAddOnboardingDetails._id,
         updateData,
         { new: true }
       );
-  
+
       if (newUser) {
         const paramsToCreateCustomer = {
           email: newUser.email,
@@ -215,7 +214,7 @@ export class UsersControllers {
         } catch (error) {
           console.error("Error creating customer on Stripe", error);
         }
-  
+
         try {
           const stripeTipProduct = await createTipProductOnStripe({
             title: `${newUser.userName} + Tip Product`,
@@ -227,7 +226,7 @@ export class UsersControllers {
           console.error("Error creating user Tip product on Stripe", error);
         }
       }
-  
+
       return res.json({
         data: newUser,
         message: "User onboarded successfully.",
@@ -239,7 +238,6 @@ export class UsersControllers {
         .json({ error: { message: "Something went wrong." } });
     }
   };
-  
 
   static fileUpload = async (
     req: Request,
@@ -260,7 +258,9 @@ export class UsersControllers {
       });
     } catch (error) {
       console.error("Error uploading file:", error);
-      return res.status(500).json({ error: "Internal Server Error", message: error.message });
+      return res
+        .status(500)
+        .json({ error: "Internal Server Error", message: error.message });
     }
   };
 
@@ -494,7 +494,7 @@ export class UsersControllers {
       let matchCondition: any = {
         role: RolesEnum.USER,
         isDeleted: false,
-        isActive: true,
+        // isActive: true,
       };
       if (search) {
         matchCondition = {
@@ -614,6 +614,29 @@ export class UsersControllers {
               },
             ],
             as: "planInfo",
+          },
+        },
+
+        {
+          $lookup: {
+            from: "subscriptions",
+            let: { userId: "$_id" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $eq: ["$userId", "$$userId"],
+                  },
+                },
+              },
+              {
+                $project: {
+                  _id: 0,
+                  status: 1, // Include only the subscription status
+                },
+              },
+            ],
+            as: "subscriptions",
           },
         },
         {
@@ -1185,6 +1208,122 @@ export class UsersControllers {
     } catch (error) {
       console.error("Error in finding user by username", error);
       return res.status(500).json({ error: "Something went wrong." });
+    }
+  };
+
+  static makeUserSubscriptionActive = async (
+    req: Request,
+    res: Response
+  ): Promise<Response> => {
+    const { id } = req.params;
+
+    try {
+      const checkUser = await User.findById(id);
+
+      if (!checkUser) {
+        return res
+          .status(404)
+          .json({ error: { message: "User to update does not exists." } });
+      }
+      const user = await User.findByIdAndUpdate(
+        id,
+        {
+          isFreeSubscription: true,
+        },
+        {
+          new: true,
+        }
+      );
+
+      const subscription = await this.grantFreeSubscription(
+        id,
+        "678a0764e01be7cfa52b9a9c"
+      );
+
+      if (!user) {
+        return res
+          .status(400)
+          .json({ error: { message: "User to update does not exists." } });
+      }
+
+      return res.json({ data: user, subscription });
+    } catch (err) {
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong." } });
+    }
+  };
+
+  static grantFreeSubscription = async (
+    userId: String,
+    freePlanId: String
+  ): Promise<any> => {
+    try {
+      const now = new Date();
+      const endDate = new Date();
+      endDate.setMonth(now.getMonth() + 1);
+
+      const freeSubscription = new Subscription({
+        userId,
+        planId: freePlanId,
+        StripeSubscriptionId: uuidv4(),
+        StripePriceId: uuidv4(),
+        status: "active",
+        startDate: now,
+        endDate: endDate,
+      });
+      const savedSubscription = await freeSubscription.save();
+
+      console.log("Saved subscription...", savedSubscription);
+      return savedSubscription;
+    } catch (error) {
+      console.log("erro...", error);
+    }
+  };
+
+  static updateUserStatus = async (
+    req: Request,
+    res: Response
+  ): Promise<Response> => {
+    try {
+      const { id } = req.params;
+      const { status } = req.query;
+
+      // Validate the `status` query parameter
+      if (!status || (status !== "active" && status !== "inactive")) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid status. Use 'active' or 'inactive'.",
+        });
+      }
+
+      // Find the user by ID
+      const user = await User.findById(id);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found.",
+        });
+      }
+
+      // Update the `isActive` field based on the `status`
+      user.isActive = status === "active";
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        message: `User status updated to ${status}.`,
+        data: {
+          userId: user.id,
+          isActive: user.isActive,
+        },
+      });
+    } catch (error) {
+      console.error("Error updating user status:", error);
+      return res.status(500).json({
+        success: false,
+        message: "An error occurred while updating user status.",
+      });
     }
   };
 }
