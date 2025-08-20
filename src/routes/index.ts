@@ -17,6 +17,7 @@ import NotificationRoutes from "./notification.routes";
 import SupportRoutes from "./support.routes";
 import moreActionRoutes from "./moreAction.routes";
 import userDataRoutes from "./userData.routes";
+import StudentRoutes from "./student.routes";
 
 export {
   AuthRoutes,
@@ -38,4 +39,5 @@ export {
   NotificationRoutes,
   moreActionRoutes,
   userDataRoutes,
+  StudentRoutes,
 };

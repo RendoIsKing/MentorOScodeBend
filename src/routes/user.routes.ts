@@ -1,10 +1,12 @@
 import { Router } from "express";
+import passport from 'passport';
 
 import { UsersControllers } from "../app/Controllers/";
 import { Auth, OnlyAdmins } from "../app/Middlewares";
 
 import { FileEnum } from "../types/FileEnum";
 import { createMulterInstance } from "../app/Middlewares/fileUpload";
+import { updateProfilePicture } from '../app/Controllers/updateProfilePicture';
 
 const user: Router = Router();
 const upload = createMulterInstance(
@@ -40,5 +42,11 @@ user.patch(
   UsersControllers.makeUserSubscriptionActive
 );
 user.put("/:id/status", OnlyAdmins, UsersControllers.updateUserStatus);
+
+user.post(
+  '/profile-picture',
+  passport.authenticate('jwt', { session: false }),
+  updateProfilePicture
+);
 
 export default user;

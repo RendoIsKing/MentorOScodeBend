@@ -53,6 +53,7 @@ export class CreatePostDto {
   @IsString()
   planToAccess: string;
 
+  @IsOptional()
   @IsString()
   orientation: string;
 

@@ -15,17 +15,18 @@ import { LoginInput } from "../Inputs/Login.input";
 import { generateAuthToken } from "../../utils/jwt";
 import { RolesEnum } from "../../types/RolesEnum";
 import { CheckUserInput } from "../Inputs/checkUser.input";
-import { UserLoginDto } from "../Inputs/UserLogin.input";
+// import { UserLoginDto } from "../Inputs/UserLogin.input";
 import { plainToClass } from "class-transformer";
 import { addMinutes } from "date-fns";
 import otpGenerator from "../../utils/otpGenerator";
 import { OTPInput } from "../Inputs/OTPInput";
-import { Collection } from "../Models/Collection";
-import { SubscriptionPlan } from "../Models/SubscriptionPlan";
+// import { Collection } from "../Models/Collection";
+// import { SubscriptionPlan } from "../Models/SubscriptionPlan";
 import { UpdateUserDTO } from "../Inputs/UpdateUser.input";
 
 import { UserForgotPasswordDto } from "../Inputs/UserForgotPassword.input";
 import mongoose from "mongoose";
+// import jwt from "jsonwebtoken";
 import { SubscriptionPlanType } from "../../types/enums/subscriptionPlanEnum";
 import { InteractionType } from "../../types/enums/InteractionTypeEnum";
 import { PostType } from "../../types/enums/postTypeEnum";
@@ -33,6 +34,7 @@ import { SubscriptionStatusEnum } from "../../types/enums/SubscriptionStatusEnum
 import { sendMessage } from "../../utils/Twillio/sendMessage";
 
 class AuthController {
+  // NOTE: legacy misspelling kept for backward compatibility with any callers
   static regsiter = async (req: Request, res: Response): Promise<any> => {
     const input = req.body;
 
@@ -108,7 +110,7 @@ class AuthController {
                 .json({ error: "User is deleted.Please contact admin" });
             }
             const token = generateAuthToken(user);
-
+            res.cookie('auth_token', token, { httpOnly: false, sameSite: 'lax', secure: false, maxAge: 1000*60*60*24*30, path: '/' });
             return res.json({
               data: {
                 _id: user._id,
@@ -180,7 +182,7 @@ class AuthController {
             .json({ error: "User is deleted.Please contact admin" });
         }
         const token = generateAuthToken(user);
-
+        res.cookie('auth_token', token, { httpOnly: false, sameSite: 'lax', secure: false, maxAge: 1000*60*60*24*30, path: '/' });
         return res.json({
           data: {
             _id: user._id,
@@ -213,7 +215,7 @@ class AuthController {
       if (updateData.password) {
         const salt = genSaltSync(10);
         updateData.password = hashSync(updateData.password, salt);
-        console.log("updateData.password", updateData.password);
+        // Do not log sensitive data
       }
       const updatedUser = await User.findByIdAndUpdate(user.id, updateData, {
         new: true,
@@ -240,217 +242,137 @@ class AuthController {
 
   static userLogin = async (req: Request, res: Response): Promise<Response> => {
     try {
-      const userInput = plainToClass(UserLoginDto, req.body);
-      const errors = await validate(userInput);
+      const { email, username, phoneNumber, password, dialCode } = req.body;
 
-      if (errors.length) {
-        const errorsInfo: ValidationErrorResponse[] = errors.map((error) => ({
-          property: error.property,
-          constraints: error.constraints,
-        }));
+      // Branch A: Phone-only initiation (no password) → generate OTP (signup/OTP login flow)
+      if (!password && (phoneNumber || email || username)) {
+        // Normalize phone from either "dial--num", "country--dial--num", or separate dialCode/phoneNumber
+        let dial = '';
+        let num = '';
+        if (typeof phoneNumber === 'string' && phoneNumber.includes('--')) {
+          const parts = phoneNumber.split('--');
+          if (parts.length === 2) {
+            dial = String(parts[0] || '').replace(/^\+/, '').replace(/\s+/g, '');
+            num = String(parts[1] || '').replace(/\s+/g, '');
+          } else if (parts.length === 3) {
+            dial = String(parts[1] || '').replace(/^\+/, '').replace(/\s+/g, '');
+            num = String(parts[2] || '').replace(/\s+/g, '');
+          }
+        } else if (phoneNumber && dialCode) {
+          dial = String(dialCode || '').replace(/^\+/, '').replace(/\s+/g, '');
+          num = String(phoneNumber || '').replace(/\s+/g, '');
+        }
 
-        return res
-          .status(400)
-          .json({ error: { message: "VALIDATIONS_ERROR", info: errorsInfo } });
-      }
+        if (dial && num) {
+          // Find or create user by phone
+          const threePartRegex = new RegExp(`^[A-Za-z]{2}--${dial.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}--${num.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, 'i');
+          let user = await User.findOne({
+            isDeleted: false,
+            $or: [
+              { completePhoneNumber: `${dial}--${num}` },
+              { completePhoneNumber: { $regex: threePartRegex } },
+              { $and: [{ dialCode: dial }, { phoneNumber: num }] },
+            ],
+          });
 
-      if (userInput.phoneNumber && userInput.email) {
-        return res.status(400).json({
-          status: false,
-          message: "Provide either phone number or email, not both",
-        });
-      }
+          if (!user) {
+            user = await User.create({
+              firstName: '',
+              lastName: '',
+              email: email || undefined,
+              dialCode: dial,
+              phoneNumber: num,
+              role: RolesEnum.USER,
+              isActive: true,
+              isVerified: false,
+            } as any);
+          }
 
-      let userExists;
-      //if user pass phoneNumber with dial code in body
-      if (userInput.phoneNumber && userInput.dialCode) {
-        console.log("user number section running");
-        userExists = await User.findOne({
-          isDeleted: false,
-          completePhoneNumber: `${userInput.dialCode}--${userInput.phoneNumber}`,
-        });
-      }
+          const otp = otpGenerator();
+          const otpInvalidAt = addMinutes(new Date(), 10);
+          user.otp = String(otp);
+          // @ts-ignore
+          user.otpInvalidAt = otpInvalidAt;
+          await user.save();
 
-      //if user pass phoneNumber with dial code in body
-      else if (userInput.email) {
-        console.log("user email section");
-        userExists = await User.findOne({
-          isDeleted: false,
-          email: userInput.email,
-        });
-        if (!userExists) {
-          return res.status(404).json({
-            status: false,
-            message: "No user found",
+          // Send OTP (dev: also return it in response for easy verification)
+          try {
+            await sendMessage(`${dial}--${num}`, `Your OTP is: ${otp}`);
+          } catch (e) {
+            // ignore SMS errors in dev
+          }
+
+          return res.status(200).json({
+            data: { _id: user._id, dialCode: dial, phoneNumber: num, otp },
+            message: 'OTP sent successfully',
           });
         }
-        console.log("user detail inside the email is", userExists);
-      } else {
-        return res.status(400).json({
-          status: false,
-          message: "Invalid login details",
-        });
       }
 
-      if (userExists) {
-        console.log("userInput password", userInput?.password);
+      // Accept both formats: "<dialCode>--<number>" and "<country>--<dialCode>--<number>"
+      const orClauses: any[] = [];
+      if (email) orClauses.push({ email });
+      if (username) orClauses.push({ userName: username });
 
-        //if user is not verified then generate otp and send in email
-        if (!userExists.isVerified === true || userExists.password === null) {
-          const updatedData = {
-            otpInvalidAt: addMinutes(new Date(), 10),
-            otp: otpGenerator(),
-            isVerified: false,
-          };
-
-          const user = (await User.findByIdAndUpdate(
-            userExists.id,
-            updatedData,
-            {
-              new: true,
-            }
-          )) as UserInterface;
-
-          await sendMessage(
-            `${userInput.dialCode}${userInput.phoneNumber}`,
-            `Your Otp is ${updatedData?.otp}`
-          );
-
-          return res.status(400).json({
-            status: false,
-            data: user,
-            message:
-              "Please verify your identitiy! Either you not set password or not verified previously",
+      if (typeof phoneNumber === "string" && phoneNumber.includes("--")) {
+        const esc = (s: string) => s.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
+        const parts = phoneNumber.split("--");
+        if (parts.length === 2) {
+          const [rawDial, rawNum] = parts;
+          const dial = String(rawDial || "").replace(/^\+/, "").replace(/\s+/g, "");
+          const num = String(rawNum || "").replace(/\s+/g, "");
+          // Try exact two-part match and a regex that matches stored three-part format
+          orClauses.push({ completePhoneNumber: `${dial}--${num}` });
+          orClauses.push({
+            completePhoneNumber: {
+              $regex: new RegExp(`^[A-Za-z]{2}--${esc(dial)}--${esc(num)}$`, "i"),
+            },
           });
+          // Also allow direct match on separate fields
+          orClauses.push({ $and: [{ dialCode: dial }, { phoneNumber: num }] });
+        } else {
+          // Already three-part; try exact match
+          const [, rawDial3, rawNum3] = parts as any;
+          const dial3 = String(rawDial3 || "").replace(/^\+/, "").replace(/\s+/g, "");
+          const num3 = String(rawNum3 || "").replace(/\s+/g, "");
+          orClauses.push({ completePhoneNumber: `${dial3}--${num3}` });
+          orClauses.push({ $and: [{ dialCode: dial3 }, { phoneNumber: num3 }] });
         }
-
-        //if user verfiy thier account but not set password in the profile section
-
-        // if(userExists.password===null){
-        //   return res.status(400).json({
-        //     status: false,
-        //     isPassword: "false",
-        //     message: "You are verified but not set your password"
-        //   })
-        // }
-
-        if (
-          userInput?.password &&
-          !(await compareSync(userInput?.password, userExists?.password))
-        ) {
-          return res.status(400).json({
-            status: false,
-            message: "Password is incorrect",
-          });
-        }
-
-        if (!userExists.isActive) {
-          return res.status(403).json({
-            status: false,
-            message:
-              "Your account is disabled. Kindly contact to administrator to enable it.",
-          });
-        }
-
-        //  const updatedData = {
-        //   otpInvalidAt: addMinutes(new Date(), 10),
-        //   otp: otpGenerator(),
-        // };
-
-        // const user = (await User.findByIdAndUpdate(userExists.id, updatedData, {
-        //   new: true,
-        // })) as UserInterface;
-
-        // From here we can send the otp either email or phoneNumber
-        // Hya line error doyan
-        // if(userInput?.email){
-        //   await sendEmail(userInput?.email,  'Otp verification', `Your otp is ${updatedData?.otp}`)
-        // }
-
-        // if (userInput?.phoneNumber) {
-        //   await sendMessage(
-        //     `${userInput?.dialCode}${userInput?.phoneNumber}`,
-        //     `Your Otp is ${userExists?.otp}`
-        //   );
-        // }
-
-        const token = await generateAuthToken(userExists);
-
-        //From here you need to get the subscription detail of user
-        console.log("Existing user id is", userExists._id);
-        let planId = "67648382f267d99e0dc8de11";
-
-        if (userExists.isFreeSubscription) {
-          planId = "678a0764e01be7cfa52b9a9c";
-        }
-
-        const subscriptionDetails = await Subscription.findOne({
-          userId: userExists._id,
-          planId: planId, //same $20 plan used for all users.
-        }).select("-stripeSubscriptionObject");
-
-        // if(subscriptionDetails){
-
-        // }
-
-        const userOject = userExists?.toObject();
-        return res.json({
-          // data: user,
-          message: "User login sucessfully",
-          data: {
-            ...userOject,
-            platformSubscription: subscriptionDetails,
-          },
-          token: token,
-          subscriptiondetails: subscriptionDetails,
-        });
       }
 
-      //if user not exist then below block run
-      const dataToSave = {
-        ...userInput,
-        otpInvalidAt: addMinutes(new Date(), 10),
-        otp: otpGenerator(),
+      const user = await User.findOne({
+        ...(orClauses.length ? { $or: orClauses } : {}),
+        isDeleted: false,
+      });
+
+      if (!user || !user.password || !compareSync(password, user.password)) {
+        return res.status(400).json({ message: "Invalid login credentials" });
+      }
+
+      // @ts-ignore
+      req.session.user = {
+        id: user._id,
+        email: user.email,
+        role: user.role,
       };
 
-      const userPassword = userInput?.password;
-      console.log("userPassword", userPassword);
+      const token = generateAuthToken(user as unknown as UserInterface);
+      // Set cookie to support endpoints that read from cookies (student/interaction routes)
+      res.cookie('auth_token', token, { httpOnly: false, sameSite: 'lax', secure: false, maxAge: 1000*60*60*24*30, path: '/' });
 
-      const user = await User.create(dataToSave);
-
-      const collection = await Collection.create({
-        title: "Saved",
-        owner: user.id,
-      });
-
-      await SubscriptionPlan.create({
-        title: "Basic-Free",
-        planType: SubscriptionPlanType.BASIC_FREE,
-        price: 0,
-        userId: user.id,
-      });
-
-      await User.findByIdAndUpdate(user.id, {
-        primaryCollection: collection.id,
-      });
-
-      if (userInput?.phoneNumber) {
-        await sendMessage(
-          `${userInput?.dialCode}${userInput?.phoneNumber}`,
-          `Your Otp is ${dataToSave?.otp}`
-        );
-      }
-
-      // user.otp = "";
       return res.json({
-        data: user,
-        message: "OTP Sent , please verify using it with in 10 minutes",
+        message: "User login successfully",
+        token,
+        user: {
+          id: user._id,
+          name: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim(),
+          email: user.email,
+          role: user.role,
+          userName: user.userName,
+        },
       });
     } catch (error) {
-      console.log(error, "error in user login");
-      return res.status(400).json({
-        error: { message: "something went wrong" },
-      });
+      return res.status(500).json({ message: "Something went wrong" });
     }
   };
 
@@ -555,8 +477,11 @@ class AuthController {
   };
 
   static me = async (req: Request, res: Response): Promise<Response> => {
-    const user = req.user as UserInterface;
+    const user = req.user as UserInterface | undefined;
     try {
+      if (!user?.id) {
+        return res.status(401).json({ error: { message: "Unauthorized" } });
+      }
       const userId = new mongoose.Types.ObjectId(user.id);
 
       const [result] = await User.aggregate([
@@ -854,10 +779,16 @@ class AuthController {
       }
 
       // Check if the user exists
-      const completePhoneNumber = `${userInput.dialCode}--${userInput.phoneNumber}`;
+      // Support both two-part and three-part stored formats
+      const dial = String(userInput.dialCode || '');
+      const num = String(userInput.phoneNumber || '');
+      const threePartRegex = new RegExp(`^[A-Za-z]{2}--${dial.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}--${num.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, 'i');
       const user = await User.findOne({
-        completePhoneNumber,
         isDeleted: false,
+        $or: [
+          { completePhoneNumber: `${dial}--${num}` },
+          { completePhoneNumber: { $regex: threePartRegex } },
+        ],
       });
       console.log("Reached");
       if (!user) {
@@ -880,7 +811,7 @@ class AuthController {
 
       // Send OTP via SMS
       await sendMessage(
-        completePhoneNumber,
+        `${dial}--${num}`,
         `Your OTP for password reset is: ${otp}`
       );
 
@@ -912,10 +843,13 @@ class AuthController {
         });
       }
 
-      const completePhoneNumber = `${dialCode}--${phoneNumber}`;
+      const threePartRegex = new RegExp(`^[A-Za-z]{2}--${String(dialCode || '').replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}--${String(phoneNumber || '').replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, 'i');
       const user = await User.findOne({
-        completePhoneNumber,
         isDeleted: false,
+        $or: [
+          { completePhoneNumber: `${dialCode}--${phoneNumber}` },
+          { completePhoneNumber: { $regex: threePartRegex } },
+        ],
       });
 
       if (!user) {
@@ -985,10 +919,13 @@ class AuthController {
           .json({ message: "New password and confirm password do not match." });
       }
 
-      const completePhoneNumber = `${dialCode}--${phoneNumber}`;
+      const threePartRegex = new RegExp(`^[A-Za-z]{2}--${String(dialCode || '').replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}--${String(phoneNumber || '').replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, 'i');
       const user = await User.findOne({
-        completePhoneNumber,
         isDeleted: false,
+        $or: [
+          { completePhoneNumber: `${dialCode}--${phoneNumber}` },
+          { completePhoneNumber: { $regex: threePartRegex } },
+        ],
       });
 
       // Check if the user exists
@@ -1002,7 +939,7 @@ class AuthController {
       const password = newPassword;
       const hashPassword = hashSync(password, salt);
       await User.findOneAndUpdate(
-        { completePhoneNumber, isDeleted: false },
+        { _id: user._id, isDeleted: false },
         {
           password: hashPassword,
         },

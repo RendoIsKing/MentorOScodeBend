@@ -30,6 +30,7 @@ import {
   SupportRoutes,
   moreActionRoutes,
   userDataRoutes,
+  StudentRoutes,
 } from "./routes";
 
 import { local, jwt } from "./utils/strategies";
@@ -40,6 +41,7 @@ import InteractionRoutes from "./routes/interaction.routes";
 import { handlePaymentStatusWebhookStripe } from "./app/Controllers/CardDetails/Actions/handlePaymentStatusStripeWebhook";
 import downloadRouter from "./routes/download.router";
 import { expireDataSetCronJob } from "./utils/scheduledJobs/expireDataSets";
+import session from 'express-session';
 
 const version = "0.0.1";
 //*********** */
@@ -74,8 +76,6 @@ export class Server {
     this.initializePassportAndStrategies();
     this.regsiterRoutes();
     expireDataSetCronJob();
-
-    connectDatabase();
     // this.start()
     console.log(port);
     console.log(`HTTP Application server ready to be started at ${this.port}`);
@@ -97,7 +97,26 @@ export class Server {
     this.app.use(express.json({ limit: "50mb" }));
     this.app.use(express.urlencoded({ limit: "50mb", extended: true }));
     this.app.use(helmet());
-    this.app.use(cors());
+
+    const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3002";
+    this.app.use(
+      cors({
+        origin: FRONTEND_ORIGIN,
+        credentials: true,
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allowedHeaders: [
+          "Content-Type",
+          "Authorization",
+          "ngrok-skip-browser-warning",
+        ],
+      })
+    );
+    this.app.use(session({
+      secret: 'your_secret_key', // Replace with a strong secret
+      resave: false,
+      saveUninitialized: true,
+      cookie: { secure: false }
+    }));
   }
 
   regsiterRoutes() {
@@ -118,11 +137,14 @@ export class Server {
     this.app.use("/api/backend/v1/post", PostRoutes);
     this.app.use("/api/backend/v1/documents", Auth, DocumentRoutes);
     this.app.use("/api/backend/v1/interests", Auth, InterestRoutes);
-    this.app.use("/api/backend/v1/interaction", Auth, InteractionRoutes);
+    // Public for now: Coach Engh chatbot and knowledge endpoints
+    this.app.use("/api/backend/v1/interaction", InteractionRoutes);
     this.app.use("/api/backend/v1/plans", Auth, SubscriptionPlanRoutes);
     this.app.use("/api/backend/v1/user-connections", Auth, ConnectionRoutes);
     this.app.use("/api/backend/v1/payment", Auth, PaymentRoutes);
     this.app.use("/api/backend/v1/stats", StatsRoutes);
+    // Student routes must be accessible with cookie-based auth inside the route (no bearer required)
+    this.app.use("/api/backend/v1/student", StudentRoutes);
     this.app.use("/api/backend/v1/feature", Auth, FeatureRoutes);
     this.app.use("/api/backend/v1/card-details", CardDetailsRoutes);
     this.app.use("/api/backend/v1/subscriptions", Auth, SubscriptionRoutes);

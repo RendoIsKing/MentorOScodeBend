@@ -32,6 +32,13 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
     }
 
     const { perPage, page, filter, search } = postQuery;
+    // Optional toggle to include the requesting user's own posts in the feed
+    const includeSelfParam = (
+      (req.query.includeSelf as string) || ""
+    ).toString().toLowerCase();
+    const includeSelfRequested = ["true", "1", "yes"].includes(includeSelfParam);
+    // Default behavior: for FOR_YOU feed, always include self posts
+    const includeSelf = filter === PostFilterEnum.FOR_YOU ? true : includeSelfRequested;
 
     let skip =
       ((page as number) > 0 ? (page as number) - 1 : 0) * (perPage as number);
@@ -39,10 +46,12 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
     let matchStage: any = {
       _id: { $exists: true },
       type: PostType.POST,
-      user: {
-        $exists: true,
-        $ne: new Types.ObjectId(user._id),
-      },
+      user: includeSelf
+        ? { $exists: true }
+        : {
+            $exists: true,
+            $ne: new Types.ObjectId(user._id),
+          },
       deletedAt: null,
       isDeleted: false,
     };

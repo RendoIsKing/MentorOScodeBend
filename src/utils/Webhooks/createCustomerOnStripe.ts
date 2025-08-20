@@ -1,13 +1,9 @@
 import axios from "axios";
 import { User } from "../../app/Models/User";
 import { Types } from "mongoose";
-
-const POST = "post";
 const qs = require("qs");
 
-if(!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_CUSTOMER_CREATE_URL){
-    throw new Error("STRIPE_SECRET_KEY or STRIPE_CUSTOMER_CREATE_URL is Missing");
-}
+const POST = "post";
 
 export const createCustomerOnStripe = (params: {
   email: string;
@@ -15,18 +11,29 @@ export const createCustomerOnStripe = (params: {
   userId: Types.ObjectId;
 }) => {
   return new Promise((resolve, reject) => {
+    const secret = process.env.STRIPE_SECRET_KEY;
+    const url = process.env.STRIPE_CUSTOMER_CREATE_URL;
+
+    if (!secret || !url) {
+      console.error("❌ Stripe ENV missing:", {
+        STRIPE_SECRET_KEY: secret,
+        STRIPE_CUSTOMER_CREATE_URL: url,
+      });
+      return reject(new Error("STRIPE_SECRET_KEY or STRIPE_CUSTOMER_CREATE_URL is Missing"));
+    }
+
     const config = {
       method: POST,
-      url: process.env.STRIPE_CUSTOMER_CREATE_URL,
+      url,
       headers: {
-        Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+        Authorization: `Bearer ${secret}`,
       },
-
       data: qs.stringify({
         name: params.firstName,
         email: params?.email,
       }),
     };
+
     axios(config)
       .then(async (response) => {
         if (response.data.id) {
@@ -35,11 +42,10 @@ export const createCustomerOnStripe = (params: {
             stripeClientId: response.data.id,
           });
         }
-       console.log("Response From Customer creation on stripe", response);
         resolve(response);
       })
-      .catch(async (err) => {   
-        console.log("Error in customer creation on stripe", err.response?.data);  
+      .catch((err) => {
+        console.log("Stripe create error:", err.response?.data);
         reject(err.response?.data);
       });
   });
