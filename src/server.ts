@@ -38,10 +38,14 @@ import { OnlyAdmins, Auth } from "./app/Middlewares";
 import { FileEnum } from "./types/FileEnum";
 import PostRoutes from "./routes/post.routes";
 import InteractionRoutes from "./routes/interaction.routes";
+import preonboardingRoutes from "./routes/preonboarding";
+import devLoginRouter from "./routes/dev/loginAs";
+import studentSnapshotRouter from "./routes/student/snapshot";
 import { handlePaymentStatusWebhookStripe } from "./app/Controllers/CardDetails/Actions/handlePaymentStatusStripeWebhook";
 import downloadRouter from "./routes/download.router";
 import { expireDataSetCronJob } from "./utils/scheduledJobs/expireDataSets";
 import session from 'express-session';
+import { startSnapshotReconciler } from "./jobs/snapshot.reconciler";
 
 const version = "0.0.1";
 //*********** */
@@ -75,6 +79,7 @@ export class Server {
     this.registerMiddlewares();
     this.initializePassportAndStrategies();
     this.regsiterRoutes();
+    if (process.env.NODE_ENV !== 'test') startSnapshotReconciler();
     expireDataSetCronJob();
     // this.start()
     console.log(port);
@@ -139,12 +144,14 @@ export class Server {
     this.app.use("/api/backend/v1/interests", Auth, InterestRoutes);
     // Public for now: Coach Engh chatbot and knowledge endpoints
     this.app.use("/api/backend/v1/interaction", InteractionRoutes);
+    this.app.use("/api/backend/v1", devLoginRouter);
     this.app.use("/api/backend/v1/plans", Auth, SubscriptionPlanRoutes);
     this.app.use("/api/backend/v1/user-connections", Auth, ConnectionRoutes);
     this.app.use("/api/backend/v1/payment", Auth, PaymentRoutes);
     this.app.use("/api/backend/v1/stats", StatsRoutes);
     // Student routes must be accessible with cookie-based auth inside the route (no bearer required)
     this.app.use("/api/backend/v1/student", StudentRoutes);
+    this.app.use("/api/backend/v1/student", studentSnapshotRouter);
     this.app.use("/api/backend/v1/feature", Auth, FeatureRoutes);
     this.app.use("/api/backend/v1/card-details", CardDetailsRoutes);
     this.app.use("/api/backend/v1/subscriptions", Auth, SubscriptionRoutes);
@@ -153,6 +160,7 @@ export class Server {
     this.app.use("/api/backend/v1/notifications", Auth, NotificationRoutes);
     this.app.use("/api/backend/v1/more-actions", Auth, moreActionRoutes);
     this.app.use("/api/backend/v1/process-data", Auth, userDataRoutes);
+    this.app.use("/api/backend/v1/preonboarding", preonboardingRoutes);
     this.app.use("/", downloadRouter);
   }
 

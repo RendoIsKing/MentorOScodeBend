@@ -4,6 +4,14 @@ import { chatWithCoachEngh } from "../app/Controllers/Interaction/chat.controlle
 import { generateFirstPlans } from "../app/Controllers/Interaction/generateFirstPlans";
 import { decideAndApplyAction } from "../app/Controllers/Interaction/decisionEngine";
 import { Goal, TrainingPlan, NutritionPlan } from "../app/Models/PlanModels";
+import TrainingPlanVersion from "../models/TrainingPlanVersion";
+import NutritionPlanVersion from "../models/NutritionPlanVersion";
+import StudentState from "../models/StudentState";
+import ChangeEvent from "../models/ChangeEvent";
+import { nextTrainingVersion, nextNutritionVersion } from "../services/versioning/nextVersion";
+import { publish } from "../services/events/publish";
+import { patchSwapExercise, patchSetDaysPerWeek } from "../services/planRules/training";
+import { applyTrainingPatch, applyNutritionPatch } from "../services/planRules/materialize";
 import jwt from 'jsonwebtoken';
 import { Router } from 'express';
 import { UserProfile } from '../app/Models/UserProfile';
@@ -66,6 +74,68 @@ InteractionRoutes.post("/chat/engh", chatWithCoachEngh);
 InteractionRoutes.post('/chat/engh/plans/generate-first', generateFirstPlans);
 // Open endpoint publicly (no Auth) to make it easy to call from chat UI
 InteractionRoutes.post('/chat/engh/action', decideAndApplyAction);
+// Unified actions endpoint (rules engine)
+InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
+  try {
+    let userId: any = (req as any).user?._id || req.body.userId;
+    if (!userId) {
+      const cookie = req.headers?.cookie as string | undefined;
+      const match = cookie?.match(/auth_token=([^;]+)/);
+      if (match) {
+        try {
+          const token = decodeURIComponent(match[1]);
+          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const decoded: any = (await import('jsonwebtoken')).default.verify(token, secret);
+          userId = decoded?.id || decoded?._id;
+        } catch {}
+      }
+    }
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    const { type, payload } = req.body || {};
+    // Read current versions via StudentState pointers
+    const StudentState = (await import('../models/StudentState')).default;
+    const TrainingPlanVersion = (await import('../models/TrainingPlanVersion')).default;
+    const state = await StudentState.findOne({ user: userId });
+    const currentTraining = state?.currentTrainingPlanVersion ? await TrainingPlanVersion.findById(state.currentTrainingPlanVersion) : null;
+
+    if (type === 'PLAN_SWAP_EXERCISE') {
+      if (!currentTraining) return res.status(404).json({ error: 'No current training plan' });
+      const patch = patchSwapExercise(currentTraining.days as any, payload?.day || 'Mon', payload?.from, payload?.to);
+      const ret = await applyTrainingPatch(userId, currentTraining, patch);
+      return res.json({ ok: true, summary: patch.reason.summary, ...ret });
+    }
+    if (type === 'PLAN_SET_DAYS_PER_WEEK') {
+      if (!currentTraining) return res.status(404).json({ error: 'No current training plan' });
+      const patch = patchSetDaysPerWeek(currentTraining.days as any, Number(payload?.daysPerWeek || 3));
+      const ret = await applyTrainingPatch(userId, currentTraining, patch);
+      return res.json({ ok: true, summary: patch.reason.summary, ...ret });
+    }
+    if (type === 'NUTRITION_SET_CALORIES') {
+      const kcal = Number(payload?.kcal);
+      const ret = await applyNutritionPatch(userId, { kcal, reason: { summary: `Kalorier satt til ${kcal}` } } as any);
+      return res.json({ ok: true, summary: `Kalorier satt til ${kcal}`, ...ret });
+    }
+    if (type === 'WEIGHT_LOG') {
+      const { date, kg } = payload || {};
+      const { WeightEntry } = await import('../app/Models/WeightEntry');
+      await WeightEntry.updateOne({ userId, date }, { $set: { kg } }, { upsert: true });
+      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight ${kg}kg on ${date}` }); } catch {}
+      await publish({ type: 'WEIGHT_LOGGED', user: userId });
+      return res.json({ ok: true, summary: `Vekt ${kg}kg lagret` });
+    }
+    if (type === 'WEIGHT_DELETE') {
+      const { date } = payload || {};
+      const { WeightEntry } = await import('../app/Models/WeightEntry');
+      await WeightEntry.deleteOne({ userId, date });
+      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}` }); } catch {}
+      await publish({ type: 'WEIGHT_LOGGED', user: userId });
+      return res.json({ ok: true, summary: `Vekt slettet (${date})` });
+    }
+    return res.status(400).json({ error: 'Unknown action type' });
+  } catch (e) {
+    return res.status(500).json({ error: 'Action apply failed' });
+  }
+});
 // Thread persistence
 InteractionRoutes.get('/chat/engh/thread', getThread);
 InteractionRoutes.post('/chat/engh/message', appendMessage);
@@ -415,12 +485,14 @@ InteractionRoutes.post('/chat/engh/training/save', async (req, res) => {
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const sessions = Array.isArray(req.body?.sessions) ? req.body.sessions : [];
     if (!sessions.length) return res.status(400).json({ message: 'sessions required' });
-    const latest = await TrainingPlan.findOne({ userId }).sort({ version: -1 });
-    const nextVersion = (latest?.version || 0) + 1;
-    await TrainingPlan.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
-    const created = await TrainingPlan.create({ userId, version: nextVersion, isCurrent: true, sessions });
-    try { await (await import('../app/Models/PlanModels')).ChangeLog.create({ userId, area: 'training', summary: 'Edited training plan', fromVersion: latest?.version, toVersion: nextVersion }); } catch {}
-    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(created._id) }], message: 'Training plan saved' });
+    // Map sessions to versioning model shape
+    const days = sessions.map((s: any) => ({ day: s.day, focus: s.focus, exercises: (s.exercises||[]).map((e:any)=>({ name: e.name||e.exercise, sets: e.sets, reps: String(e.reps), rpe: e.rpe })) }));
+    const version = await nextTrainingVersion(userId);
+    const doc = await TrainingPlanVersion.create({ user: userId, version, source: 'action', reason: 'Saved via chat', days });
+    await StudentState.findOneAndUpdate({ user: userId }, { $set: { currentTrainingPlanVersion: doc._id } }, { upsert: true });
+    try { await ChangeEvent.create({ user: userId, type: 'PLAN_EDIT', summary: `Training v${version} saved`, refId: doc._id }); } catch {}
+    try { await publish({ type: 'PLAN_UPDATED', user: userId as any }); } catch {}
+    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(doc._id) }], message: 'Training plan saved' });
   } catch (e) {
     return res.status(500).json({ message: 'save failed' });
   }
@@ -445,12 +517,12 @@ InteractionRoutes.post('/chat/engh/nutrition/save', async (req, res) => {
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const { dailyTargets, meals, days, guidelines, sourceText } = req.body || {};
     if (!dailyTargets) return res.status(400).json({ message: 'dailyTargets required' });
-    const latest = await NutritionPlan.findOne({ userId }).sort({ version: -1 });
-    const nextVersion = (latest?.version || 0) + 1;
-    await NutritionPlan.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
-    const created = await NutritionPlan.create({ userId, version: nextVersion, isCurrent: true, dailyTargets, meals, days, guidelines, sourceText });
-    try { await (await import('../app/Models/PlanModels')).ChangeLog.create({ userId, area: 'nutrition', summary: 'Edited nutrition plan', fromVersion: latest?.version, toVersion: nextVersion }); } catch {}
-    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'nutrition', planId: String(created._id) }], message: 'Meal plan saved' });
+    const version = await nextNutritionVersion(userId as any);
+    const doc = await NutritionPlanVersion.create({ user: userId, version, source: 'action', reason: 'Saved via chat', kcal: dailyTargets.kcal, proteinGrams: dailyTargets.protein, carbsGrams: dailyTargets.carbs, fatGrams: dailyTargets.fat });
+    await StudentState.findOneAndUpdate({ user: userId }, { $set: { currentNutritionPlanVersion: doc._id } }, { upsert: true });
+    try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Nutrition v${version} saved`, refId: doc._id }); } catch {}
+    try { await publish({ type: 'NUTRITION_UPDATED', user: userId as any }); } catch {}
+    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'nutrition', planId: String(doc._id) }], message: 'Meal plan saved' });
   } catch (e) {
     return res.status(500).json({ message: 'save failed' });
   }

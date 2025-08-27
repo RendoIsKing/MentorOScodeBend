@@ -2,7 +2,10 @@ import { Router, Request, Response } from "express";
 import { WeightEntry } from "../app/Models/WeightEntry";
 import { Types } from "mongoose";
 import { TrainingPlan, NutritionPlan, Goal, ChangeLog } from "../app/Models/PlanModels";
+import ChangeEvent from "../models/ChangeEvent";
+import { publish } from "../services/events/publish";
 import jwt from 'jsonwebtoken';
+import { ExerciseProgress } from "../app/Models/ExerciseProgress";
 
 const StudentRoutes: Router = Router();
 
@@ -268,45 +271,151 @@ StudentRoutes.get('/me/snapshot', async (req: Request, res: Response) => {
   }
 });
 
-StudentRoutes.get('/:userId/exercise-progress', async (req: Request, res: Response) => {
+StudentRoutes.get('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Request, res: Response) => {
   try {
     const period = (req.query.period as Period) || '30d';
-    const exercise = (req.query.exercise as string) || 'Benkpress';
+    const exercise = (req.query.exercise as string) || '';
+    const { userId } = req.params as any;
 
-    const today = new Date();
-
-    function dailyPoints(numDays: number) {
-      return Array.from({ length: numDays }).map((_, i) => {
-        const d = new Date(today);
-        d.setDate(today.getDate() - (numDays - 1 - i));
-        return { date: d.toISOString().slice(0, 10), value: 100 + i * 1.2 };
-      });
+    if (!Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: 'Bad userId' });
     }
-
-    function weeklyPoints(numWeeks: number) {
-      return Array.from({ length: numWeeks }).map((_, i) => {
-        const d = new Date(today);
-        d.setDate(today.getDate() - (numWeeks - 1 - i) * 7);
-        return { date: d.toISOString().slice(0, 10), value: 100 + i * 2.5 };
-      });
-    }
-
-    function monthlyPoints(numMonths: number) {
-      return Array.from({ length: numMonths }).map((_, i) => {
-        const d = new Date(today.getFullYear(), today.getMonth() - (numMonths - 1 - i), 1);
-        return { date: d.toISOString().slice(0, 10), value: 100 + i * 4 };
-      });
-    }
-
-    let series;
-    if (period === '7d') series = dailyPoints(7);
-    else if (period === '30d') series = dailyPoints(30);
-    else if (period === '90d') series = weeklyPoints(12);
-    else series = monthlyPoints(today.getMonth() + 1);
-
-    res.status(200).json({ series, best: series[series.length - 1].value + 20, trend12w: '+8%', lastImprovement: '2 uker siden', exercise });
+    const days = generateDates(period);
+    const start = days[0];
+    const end = days[days.length - 1];
+    const series = await ExerciseProgress.find({
+      userId: new Types.ObjectId(userId),
+      exercise: exercise || { $exists: true },
+      date: { $gte: start, $lte: end },
+    }).select('date value -_id').sort({ date: 1 }).lean();
+    return res.status(200).json({ series, exercise });
   } catch (err) {
     res.status(500).json({ message: 'Failed to load exercise progress' });
+  }
+});
+
+// /me exercise-progress variants resolve user from cookie/JWT like snapshot
+StudentRoutes.get('/me/exercise-progress', async (req: Request, res: Response) => {
+  try {
+    // resolve user id from cookie/JWT
+    let resolvedUserId: any = (req as any)?.user?._id;
+    if (!resolvedUserId) {
+      const cookie = req.headers?.cookie as string | undefined;
+      const match = cookie?.match(/auth_token=([^;]+)/);
+      if (match) {
+        try {
+          const token = decodeURIComponent(match[1]);
+          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const decoded: any = jwt.verify(token, secret);
+          resolvedUserId = decoded?.id || decoded?._id;
+        } catch {}
+      }
+    }
+    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId)) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+    const period = (req.query.period as Period) || '30d';
+    const exercise = (req.query.exercise as string) || '';
+    const days = generateDates(period);
+    const start = days[0];
+    const end = days[days.length - 1];
+    const series = await ExerciseProgress.find({
+      userId: new Types.ObjectId(resolvedUserId),
+      exercise: exercise || { $exists: true },
+      date: { $gte: start, $lte: end },
+    }).select('date value -_id').sort({ date: 1 }).lean();
+    return res.status(200).json({ series, exercise });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to load exercise progress' });
+  }
+});
+
+StudentRoutes.post('/me/exercise-progress', async (req: Request, res: Response) => {
+  try {
+    let resolvedUserId: any = (req as any)?.user?._id;
+    if (!resolvedUserId) {
+      const cookie = req.headers?.cookie as string | undefined;
+      const match = cookie?.match(/auth_token=([^;]+)/);
+      if (match) {
+        try {
+          const token = decodeURIComponent(match[1]);
+          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const decoded: any = jwt.verify(token, secret);
+          resolvedUserId = decoded?.id || decoded?._id;
+        } catch {}
+      }
+    }
+    const { exercise, date, value } = req.body || {};
+    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId) || !exercise || !date || typeof value !== 'number') {
+      return res.status(400).json({ message: 'exercise, date, value required' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
+    await ExerciseProgress.updateOne(
+      { userId: new Types.ObjectId(resolvedUserId), exercise, date },
+      { $set: { value } },
+      { upsert: true }
+    );
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to add exercise progress' });
+  }
+});
+
+StudentRoutes.put('/me/exercise-progress', async (req: Request, res: Response) => {
+  try {
+    let resolvedUserId: any = (req as any)?.user?._id;
+    if (!resolvedUserId) {
+      const cookie = req.headers?.cookie as string | undefined;
+      const match = cookie?.match(/auth_token=([^;]+)/);
+      if (match) {
+        try {
+          const token = decodeURIComponent(match[1]);
+          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const decoded: any = jwt.verify(token, secret);
+          resolvedUserId = decoded?.id || decoded?._id;
+        } catch {}
+      }
+    }
+    const { exercise, date, value } = req.body || {};
+    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId) || !exercise || !date || typeof value !== 'number') {
+      return res.status(400).json({ message: 'exercise, date, value required' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
+    await ExerciseProgress.updateOne(
+      { userId: new Types.ObjectId(resolvedUserId), exercise, date },
+      { $set: { value } },
+      { upsert: true }
+    );
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to update exercise progress' });
+  }
+});
+
+StudentRoutes.delete('/me/exercise-progress', async (req: Request, res: Response) => {
+  try {
+    let resolvedUserId: any = (req as any)?.user?._id;
+    if (!resolvedUserId) {
+      const cookie = req.headers?.cookie as string | undefined;
+      const match = cookie?.match(/auth_token=([^;]+)/);
+      if (match) {
+        try {
+          const token = decodeURIComponent(match[1]);
+          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const decoded: any = jwt.verify(token, secret);
+          resolvedUserId = decoded?.id || decoded?._id;
+        } catch {}
+      }
+    }
+    const exercise = req.query.exercise as string | undefined;
+    const date = req.query.date as string | undefined;
+    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId) || !exercise || !date) {
+      return res.status(400).json({ message: 'exercise and date query params required' });
+    }
+    await ExerciseProgress.deleteOne({ userId: new Types.ObjectId(resolvedUserId), exercise, date });
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to delete exercise progress' });
   }
 });
 
@@ -334,6 +443,10 @@ StudentRoutes.post('/:userId/weights', async (req: Request, res: Response) => {
       { $set: { kg } },
       { upsert: true }
     );
+    try {
+      await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight ${kg}kg on ${date}` });
+      await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId) });
+    } catch {}
     return res.status(200).json({ ok: true });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to record weight' });
@@ -363,6 +476,10 @@ StudentRoutes.put('/:userId/weights', async (req: Request, res: Response) => {
       { $set: { kg } },
       { upsert: true }
     );
+    try {
+      await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight updated to ${kg}kg on ${date}` });
+      await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId) });
+    } catch {}
     return res.status(200).json({ ok: true });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to update weight' });
@@ -376,9 +493,69 @@ StudentRoutes.delete('/:userId/weights', async (req: Request, res: Response) => 
     const { userId } = req.params;
     if (!date || !Types.ObjectId.isValid(userId)) return res.status(400).json({ message: 'date query param is required' });
     await WeightEntry.deleteOne({ userId: new Types.ObjectId(userId), date });
+    try {
+      await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight entry deleted for ${date}` });
+      await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId) });
+    } catch {}
     return res.status(200).json({ ok: true });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to delete weight' });
+  }
+});
+
+// Create exercise progress entry
+StudentRoutes.post('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { exercise, date, value } = req.body || {};
+    if (!Types.ObjectId.isValid(userId) || !exercise || !date || typeof value !== 'number') {
+      return res.status(400).json({ message: 'exercise, date, value required' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
+    await ExerciseProgress.updateOne(
+      { userId: new Types.ObjectId(userId), exercise, date },
+      { $set: { value } },
+      { upsert: true }
+    );
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to add exercise progress' });
+  }
+});
+
+// Update exercise progress entry
+StudentRoutes.put('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { exercise, date, value } = req.body || {};
+    if (!Types.ObjectId.isValid(userId) || !exercise || !date || typeof value !== 'number') {
+      return res.status(400).json({ message: 'exercise, date, value required' });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
+    await ExerciseProgress.updateOne(
+      { userId: new Types.ObjectId(userId), exercise, date },
+      { $set: { value } },
+      { upsert: true }
+    );
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to update exercise progress' });
+  }
+});
+
+// Delete exercise progress entry
+StudentRoutes.delete('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const exercise = req.query.exercise as string | undefined;
+    const date = req.query.date as string | undefined;
+    if (!Types.ObjectId.isValid(userId) || !exercise || !date) {
+      return res.status(400).json({ message: 'exercise and date query params required' });
+    }
+    await ExerciseProgress.deleteOne({ userId: new Types.ObjectId(userId), exercise, date });
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to delete exercise progress' });
   }
 });
 

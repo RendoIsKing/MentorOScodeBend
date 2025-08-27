@@ -174,6 +174,16 @@ const UserSchema = new Schema(
       default: false,
     },
     otpInvalidAt: Date,
+    status: {
+      type: String,
+      enum: ["VISITOR", "LEAD", "TRIAL", "SUBSCRIBED"],
+      default: "VISITOR",
+      index: true,
+    },
+    profileId: {
+      type: Types.ObjectId,
+      ref: "Profile",
+    },
   },
   { timestamps: true }
 );
