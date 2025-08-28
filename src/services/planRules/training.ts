@@ -16,8 +16,6 @@ function nearestValidDay(requested: string, planDays: Day[]): string {
 }
 
 export function patchSetDaysPerWeek(current: Day[], daysPerWeek: number): TrainingPatch {
-  const active = current.filter(d => (d.exercises?.length ?? 0) > 0);
-  const keep = new Set(active.slice(0, Math.max(1, daysPerWeek)).map(d => d.day));
   const swaps: TrainingPatch["swaps"] = [];
   const reason: PatchReason = {
     summary: `Satt treningsfrekvens til ${daysPerWeek}/uke`,

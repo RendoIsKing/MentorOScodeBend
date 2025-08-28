@@ -6,6 +6,7 @@ import ChangeEvent from "../models/ChangeEvent";
 import { publish } from "../services/events/publish";
 import jwt from 'jsonwebtoken';
 import { ExerciseProgress } from "../app/Models/ExerciseProgress";
+import WorkoutLog from "../models/WorkoutLog";
 
 const StudentRoutes: Router = Router();
 
@@ -60,7 +61,7 @@ StudentRoutes.get('/:userId/snapshot', async (req: Request, res: Response) => {
         if (match) {
           try {
             const token = decodeURIComponent(match[1]);
-            const secret = process.env.JWT_SECRET || 'secret_secret';
+            const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
             const decoded: any = jwt.verify(token, secret);
             resolvedUserId = decoded?.id || decoded?._id;
           } catch {}
@@ -89,7 +90,7 @@ StudentRoutes.get('/:userId/snapshot', async (req: Request, res: Response) => {
       if (match) {
         try {
           const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserIdForPlans = decoded?.id || decoded?._id;
         } catch {}
@@ -177,7 +178,7 @@ StudentRoutes.get('/me/snapshot', async (req: Request, res: Response) => {
       if (match) {
         try {
           const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
         } catch {}
@@ -305,7 +306,7 @@ StudentRoutes.get('/me/exercise-progress', async (req: Request, res: Response) =
       if (match) {
         try {
           const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
         } catch {}
@@ -339,7 +340,7 @@ StudentRoutes.post('/me/exercise-progress', async (req: Request, res: Response) 
       if (match) {
         try {
           const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
         } catch {}
@@ -370,7 +371,7 @@ StudentRoutes.put('/me/exercise-progress', async (req: Request, res: Response) =
       if (match) {
         try {
           const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
         } catch {}
@@ -401,7 +402,7 @@ StudentRoutes.delete('/me/exercise-progress', async (req: Request, res: Response
       if (match) {
         try {
           const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
         } catch {}
@@ -556,6 +557,36 @@ StudentRoutes.delete('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: 
     return res.status(200).json({ ok: true });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to delete exercise progress' });
+  }
+});
+
+// Log a workout day (mark done today or specific date)
+StudentRoutes.post('/me/workouts', async (req: Request, res: Response) => {
+  try {
+    // resolve user id from cookie/JWT
+    let resolvedUserId: any = (req as any)?.user?._id;
+    if (!resolvedUserId) {
+      const cookie = req.headers?.cookie as string | undefined;
+      const match = cookie?.match(/auth_token=([^;]+)/);
+      if (match) {
+        try {
+          const token = decodeURIComponent(match[1]);
+          const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
+          const decoded: any = jwt.verify(token, secret);
+          resolvedUserId = decoded?.id || decoded?._id;
+        } catch {}
+      }
+    }
+    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId)) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+    const date = (req.body?.date as string) || new Date().toISOString().slice(0,10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
+    await WorkoutLog.updateOne({ user: new Types.ObjectId(resolvedUserId), date }, { $setOnInsert: { entries: [] } }, { upsert: true });
+    await publish({ type: 'WORKOUT_LOGGED', user: new Types.ObjectId(resolvedUserId), date });
+    return res.status(200).json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to log workout' });
   }
 });
 

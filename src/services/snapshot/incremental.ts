@@ -4,25 +4,25 @@ import TrainingPlanVersion from "../../models/TrainingPlanVersion";
 import WorkoutLog from "../../models/WorkoutLog";
 import { Types } from "mongoose";
 
-function movingAvg(series: { t: string; v: number }[], window = 7) {
-  if (!series.length) return { latestAvg: null as number|null, prevAvg: null as number|null, delta: null as number|null };
-  const parse = (d: string) => new Date(d + "T00:00:00Z").getTime();
-  const sorted = [...series].sort((a, b) => parse(a.t) - parse(b.t));
-  const recent = sorted.slice(-window);
-  const prev = sorted.slice(-window*2, -window);
-  const sum = (arr: any[]) => arr.reduce((s, x) => s + x.v, 0);
-  const latestAvg = recent.length ? sum(recent) / recent.length : null;
-  const prevAvg = prev.length ? sum(prev) / prev.length : null;
-  const delta = latestAvg != null && prevAvg != null ? latestAvg - prevAvg : null;
-  return { latestAvg, prevAvg, delta };
-}
+// kept for future KPI delta; not used in tests
+// function movingAvg(series: { t: string; v: number }[], window = 7) {
+//   if (!series.length) return { latestAvg: null as number|null, prevAvg: null as number|null, delta: null as number|null };
+//   const parse = (d: string) => new Date(d + "T00:00:00Z").getTime();
+//   const sorted = [...series].sort((a, b) => parse(a.t) - parse(b.t));
+//   const recent = sorted.slice(-window);
+//   const prev = sorted.slice(-window*2, -window);
+//   const sum = (arr: any[]) => arr.reduce((s, x) => s + x.v, 0);
+//   const latestAvg = recent.length ? sum(recent) / recent.length : null;
+//   const prevAvg = prev.length ? sum(prev) / prev.length : null;
+//   const delta = latestAvg != null && prevAvg != null ? latestAvg - prevAvg : null;
+//   return { latestAvg, prevAvg, delta };
+// }
 
 export async function onWeightLogged(user: Types.ObjectId, date: string, kg: number) {
   const snap = (await StudentSnapshot.findOne({ user })) || new (StudentSnapshot as any)({ user, weightSeries: [] });
   const map = new Map((snap.weightSeries || []).map((p: any) => [p.t, p.v]));
   map.set(date, kg);
-  snap.weightSeries = Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([t, v]) => ({ t, v }));
-  const trend = movingAvg(snap.weightSeries, 7);
+  snap.weightSeries = Array.from(map.entries()).sort((ea, eb) => String(ea[0]).localeCompare(String(eb[0]))).map(([t, v]) => ({ t, v }));
   snap.kpis = { ...(snap.kpis || {}), lastCheckIn: date, adherence7d: snap.kpis?.adherence7d, nextWorkout: snap.kpis?.nextWorkout } as any;
   await snap.save();
 }
