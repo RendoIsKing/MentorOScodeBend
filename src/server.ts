@@ -46,6 +46,10 @@ import downloadRouter from "./routes/download.router";
 import { expireDataSetCronJob } from "./utils/scheduledJobs/expireDataSets";
 import session from 'express-session';
 import { startSnapshotReconciler } from "./jobs/snapshot.reconciler";
+import { initSentry } from './observability/sentry';
+import { withRequestId, httpLogger } from './observability/logging';
+import healthRouter from './routes/health';
+import rateLimit from 'express-rate-limit';
 
 const version = "0.0.1";
 //*********** */
@@ -102,26 +106,19 @@ export class Server {
     this.app.use(express.json({ limit: "50mb" }));
     this.app.use(express.urlencoded({ limit: "50mb", extended: true }));
     this.app.use(helmet());
+    initSentry(this.app);
+    this.app.use(withRequestId as any, httpLogger as any);
 
-    const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3002";
-    this.app.use(
-      cors({
-        origin: FRONTEND_ORIGIN,
-        credentials: true,
-        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allowedHeaders: [
-          "Content-Type",
-          "Authorization",
-          "ngrok-skip-browser-warning",
-        ],
-      })
-    );
+    const ALLOW = (process.env.FRONTEND_ORIGIN || 'http://localhost:3002').split(',').map(s=>s.trim()).filter(Boolean);
+    this.app.use(cors({ origin: (origin, cb)=>(!origin || ALLOW.includes(origin)) ? cb(null,true) : cb(new Error('CORS')), credentials: true }));
+    const isProd = process.env.NODE_ENV === 'production';
     this.app.use(session({
-      secret: 'your_secret_key', // Replace with a strong secret
+      secret: process.env.SESSION_SECRET || 'dev_session_secret_change_me',
       resave: false,
-      saveUninitialized: true,
-      cookie: { secure: false }
+      saveUninitialized: false,
+      cookie: { httpOnly: true, sameSite: 'lax', secure: isProd, maxAge: 1000*60*60*24*30 }
     }));
+    this.app.use('/api/backend/', rateLimit({ windowMs: 60_000, max: 120 }));
   }
 
   regsiterRoutes() {
@@ -134,6 +131,7 @@ export class Server {
         .json({ message: `App running on version ${version}. api/backend` });
     });
     this.app.use(express.static("public"));
+    this.app.use('/api/backend', healthRouter);
     this.app.use("/api/backend/v1/auth", AuthRoutes);
     this.app.use("/api/backend/v1/profile", Auth, ProfileRoutes);
     this.app.use("/api/backend/v1/user", UserRoutes);

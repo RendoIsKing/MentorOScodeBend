@@ -445,7 +445,7 @@ StudentRoutes.post('/:userId/weights', async (req: Request, res: Response) => {
     );
     try {
       await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight ${kg}kg on ${date}` });
-      await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId) });
+      await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId), date, kg });
     } catch {}
     return res.status(200).json({ ok: true });
   } catch (err) {
@@ -478,7 +478,7 @@ StudentRoutes.put('/:userId/weights', async (req: Request, res: Response) => {
     );
     try {
       await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight updated to ${kg}kg on ${date}` });
-      await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId) });
+      await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId), date, kg });
     } catch {}
     return res.status(200).json({ ok: true });
   } catch (err) {
@@ -495,7 +495,7 @@ StudentRoutes.delete('/:userId/weights', async (req: Request, res: Response) => 
     await WeightEntry.deleteOne({ userId: new Types.ObjectId(userId), date });
     try {
       await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight entry deleted for ${date}` });
-      await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId) });
+      await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId), date });
     } catch {}
     return res.status(200).json({ ok: true });
   } catch (err) {

@@ -120,7 +120,7 @@ InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
       const { WeightEntry } = await import('../app/Models/WeightEntry');
       await WeightEntry.updateOne({ userId, date }, { $set: { kg } }, { upsert: true });
       try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight ${kg}kg on ${date}` }); } catch {}
-      await publish({ type: 'WEIGHT_LOGGED', user: userId });
+      await publish({ type: 'WEIGHT_LOGGED', user: userId, date, kg });
       return res.json({ ok: true, summary: `Vekt ${kg}kg lagret` });
     }
     if (type === 'WEIGHT_DELETE') {
