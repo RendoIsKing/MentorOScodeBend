@@ -110,7 +110,7 @@ class AuthController {
                 .json({ error: "User is deleted.Please contact admin" });
             }
             const token = generateAuthToken(user);
-            res.cookie('auth_token', token, { httpOnly: false, sameSite: 'lax', secure: false, maxAge: 1000*60*60*24*30, path: '/' });
+            res.cookie('auth_token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*24*30, path: '/' });
             return res.json({
               data: {
                 _id: user._id,
@@ -182,7 +182,7 @@ class AuthController {
             .json({ error: "User is deleted.Please contact admin" });
         }
         const token = generateAuthToken(user);
-        res.cookie('auth_token', token, { httpOnly: false, sameSite: 'lax', secure: false, maxAge: 1000*60*60*24*30, path: '/' });
+        res.cookie('auth_token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*24*30, path: '/' });
         return res.json({
           data: {
             _id: user._id,
@@ -358,7 +358,7 @@ class AuthController {
 
       const token = generateAuthToken(user as unknown as UserInterface);
       // Set cookie to support endpoints that read from cookies (student/interaction routes)
-      res.cookie('auth_token', token, { httpOnly: false, sameSite: 'lax', secure: false, maxAge: 1000*60*60*24*30, path: '/' });
+      res.cookie('auth_token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*24*30, path: '/' });
 
       return res.json({
         message: "User login successfully",

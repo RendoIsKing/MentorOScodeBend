@@ -15,5 +15,14 @@ auth.post("/validate-otp", AuthController.validateForgotPasswordOtp);
 auth.put("/reset-password", AuthController.resetPassword);
 
 auth.get("/me", Auth, AuthController.me);
+auth.post('/logout', (req, res)=>{
+  try {
+    res.cookie('auth_token', '', { maxAge: 0, path: '/', sameSite: 'lax' });
+    try { (req as any).session?.destroy?.(()=>{}); } catch {}
+    return res.json({ ok: true });
+  } catch {
+    return res.status(200).json({ ok: true });
+  }
+});
 
 export default auth;

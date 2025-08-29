@@ -1,14 +1,10 @@
 import admin from "firebase-admin";
 if (!admin.apps.length) {
+  const json = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+    ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+    : undefined;
   admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: "nextjs-fcm-demo-93638",
-      clientEmail:
-        "firebase-adminsdk-j3vdz@nextjs-fcm-demo-93638.iam.gserviceaccount.com",
-      privateKey:
-        "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCRuQOwanED4SrD\naNS7UnsxR7xe9X+h9nbOGZPL/hl8Up9q9YtOsAOqZ6NcCzZt+2guMQPxoXdaS+RK\nqyRNKuUvDWsXFyjbHKSz0IPI8s/z9iMmpwKUeLaHePgx3es1EiEpgmlIj4atxOBo\n5oPqQvqWGv7md+KKWOokhobqspassIpF5VeFlnGrwkPlmrEwe+M9Umf58dgm+JbQ\n+qrQoI1g2l4GrBehXdvgQszbN99PkcwY+XVEX0wa7XzaN8qp1FHwajQ54AJh6dID\ngp8cNMI5YUR5tgV0W78YIC5GiGDQA6oJr1o0gnNnS832SIeTyvyZWlLFxEuyDuyz\nGp7PTOc7AgMBAAECggEAMlu1oqmmFKkjlhQMMA/48rbPqiE80kPSGrdMFBrjw8rp\nvJTOZ4r8OU9HbO+TB77x6cSWkFI0ZMgFRKiQCvrf6LrCX2Bphg8H+/v7Dt6abryI\nuTrN8XEl4vszCkiel+CEBUxEBgdTi4mV46qFu9cZsfXyUMLtTtIbWDQFO+Yrm9GA\n90rgBAig+ezgbNsmAED+AH+gdZZEhoyg9TrI/THeFlgmNagEzBa7oBTf43esTZYW\nWJrpES3StkLKeJuAJc8rG1Ku6D+pLy/gQ0/wHxX0oglWjb2rH9IrY7PcqPis6pS2\njaNdiP8Z2PXJ6A+uOihkcBTU4cFSiPjuYAyT/VvpwQKBgQDC7Wpo0AkZnljub99a\nR7off5GBnowlOuMs/Xz6KVpboMkdEww1IJxZxdSfJvm2+dMvbaVwROU6GFk89B28\nSQXXcHX3SlmVyqfx9AaQqvDF5jgXe036QmBtMkmCYX4JZB3PtcUzrTcJiE2x4BWv\nDqERNJwb+CJ6X8GmN7daNgqOpwKBgQC/YQcDKHpjU7Kk1ef6dDUUS5IML+qDTY0l\nFI5wcz8DcvPnXObu2FcUEQUxUTrQeHESPVqxN0h43sxOa1MEU25YBNEggh/F2xDe\nqwR4+hqeR8o4ZeXoritM8sc0S4ZXYnmZMYfR7fe8bjvW1/d0Tko3zKE4oLXA7Z3x\npmXYPqbpTQKBgG5FBFc6qIs3irOH0eAuh1nePqAG4t0EzRLca2DRF+6RrHOoHNXJ\nFumqAjfuQoGCHjfMXTR/pPUSZRkYN+IVpRpU4kb8ZmVYeV1kYHpiWUZ6j+yosloK\nRqY/NlptcHE7k6m2+FHdgS8BToJ7c4jOS8uB6XXhDxAPL2sqRazguWQtAoGBAI19\nqdaO5bVr2wb9Uu4bXmbr3EWAY4zCGFlS0mCXA/6DzYm/aMkrT235i3JD0QzyDv7i\nN5wP+FfMuRY9SPpIyKrwnMDBE8aPSPCnVb4vguCEySBbTdhydHcGg3rJX8BZgPde\n5EC0BFXe1gToVP47J6oLcyLPxrClvQE8+c0fvP19AoGBAIYLWRvUXqSocu/E5V0s\ntiAXmw7U9u+rzdfI8UB/GCbypPmiiYx5HXS0YDiCAX1s+Ez+zM/MISzgfWOuco3Y\ns53R7iqTNgtQUOoj83ftj/IUAtN9bEXS6um/z6f1X6REGSseEcaMWk5wcibDfOm1\nEekyigPzIvcD2rMKTyWesm3q\n-----END PRIVATE KEY-----\n",
-    }),
+    credential: json ? admin.credential.cert(json) : admin.credential.applicationDefault(),
   });
 }
-
 export default admin;

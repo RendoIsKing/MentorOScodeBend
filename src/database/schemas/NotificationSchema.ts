@@ -5,11 +5,13 @@ const NotificationSchema = new Schema(
   {
     title: { type: String, required: true },
     description: { type: String, required: true },
-    sentTo: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
+    sentTo: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+      },
+    ],
 
     readAt: { type: Date, default: null },
     type: {
