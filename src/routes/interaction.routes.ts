@@ -13,7 +13,6 @@ import { publish } from "../services/events/publish";
 import { patchSwapExercise, patchSetDaysPerWeek } from "../services/planRules/training";
 import { applyTrainingPatch, applyNutritionPatch } from "../services/planRules/materialize";
 import jwt from 'jsonwebtoken';
-import { Router } from 'express';
 import { UserProfile } from '../app/Models/UserProfile';
 import { createMulterInstance } from '../app/Middlewares/fileUpload';
 import { FileEnum } from '../types/FileEnum';
@@ -314,10 +313,11 @@ InteractionRoutes.get('/debug/plans', async (req, res) => {
       } catch {}
     }
     if (!userId) return res.status(400).json({ message: 'userId not resolved from cookie' });
+    const Models = await import('../app/Models/PlanModels');
     const [tp, np, g] = await Promise.all([
-      (await import('../app/Models/PlanModels')).then(m=>m.TrainingPlan.findOne({ userId, isCurrent: true }).sort({ version:-1 }).lean()),
-      (await import('../app/Models/PlanModels')).then(m=>m.NutritionPlan.findOne({ userId, isCurrent: true }).sort({ version:-1 }).lean()),
-      (await import('../app/Models/PlanModels')).then(m=>m.Goal.findOne({ userId, isCurrent: true }).sort({ version:-1 }).lean()),
+      Models.TrainingPlan.findOne({ userId, isCurrent: true }).sort({ version:-1 }).lean(),
+      Models.NutritionPlan.findOne({ userId, isCurrent: true }).sort({ version:-1 }).lean(),
+      Models.Goal.findOne({ userId, isCurrent: true }).sort({ version:-1 }).lean(),
     ]);
     return res.json({ userId, training: tp, nutrition: np, goal: g });
   } catch (e) {
