@@ -62,4 +62,10 @@ export async function onWorkoutLogged(user: Types.ObjectId, date: string) {
   await snap.save();
 }
 
+export async function onWeightDeleted(user: Types.ObjectId, date: string) {
+  const snap = (await StudentSnapshot.findOne({ user })) || new (StudentSnapshot as any)({ user, weightSeries: [] });
+  snap.weightSeries = (snap.weightSeries || []).filter((p: any) => p.t !== date);
+  await snap.save();
+}
+
 

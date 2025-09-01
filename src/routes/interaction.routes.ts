@@ -127,7 +127,7 @@ InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
       const { WeightEntry } = await import('../app/Models/WeightEntry');
       await WeightEntry.deleteOne({ userId, date });
       try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}` }); } catch {}
-      await publish({ type: 'WEIGHT_LOGGED', user: userId });
+      await publish({ type: 'WEIGHT_DELETED', user: userId as any, date });
       return res.json({ ok: true, summary: `Vekt slettet (${date})` });
     }
     return res.status(400).json({ error: 'Unknown action type' });

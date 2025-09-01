@@ -1,13 +1,14 @@
 import { Types } from "mongoose";
 import { rebuildSnapshot } from "../snapshot/rebuildSnapshot";
-import { onWeightLogged, onWorkoutLogged, onPlanUpdated } from "../snapshot/incremental";
+import { onWeightLogged, onWorkoutLogged, onPlanUpdated, onWeightDeleted } from "../snapshot/incremental";
 import StudentState from "../../models/StudentState";
 
 type DomainEvent =
   | { type: "PLAN_UPDATED"; user: Types.ObjectId }
   | { type: "NUTRITION_UPDATED"; user: Types.ObjectId }
   | { type: "WEIGHT_LOGGED"; user: Types.ObjectId; date?: string; kg?: number }
-  | { type: "WORKOUT_LOGGED"; user: Types.ObjectId; date?: string };
+  | { type: "WORKOUT_LOGGED"; user: Types.ObjectId; date?: string }
+  | { type: "WEIGHT_DELETED"; user: Types.ObjectId; date: string };
 
 export async function publish(event: DomainEvent) {
   try {
@@ -22,6 +23,9 @@ export async function publish(event: DomainEvent) {
       break;
     case "WEIGHT_LOGGED":
       if (event.date && event.kg != null) await onWeightLogged(event.user, event.date, event.kg);
+      break;
+    case "WEIGHT_DELETED":
+      if (event.date) await onWeightDeleted(event.user, event.date);
       break;
     case "WORKOUT_LOGGED":
       if (event.date) await onWorkoutLogged(event.user, event.date);

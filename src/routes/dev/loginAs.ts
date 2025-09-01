@@ -8,7 +8,7 @@ const r = Router();
 
 r.post("/dev/login-as", async (req: any, res) => {
   try {
-    if (process.env.NODE_ENV === "production") return res.status(404).end();
+    if (process.env.DEV_LOGIN_ENABLED !== "true") return res.status(404).end();
     const { email } = req.body as { email: string };
     if (!email) return res.status(400).json({ error: "email required" });
     const user = await (User as any).findOne({ email });
@@ -24,7 +24,7 @@ r.post("/dev/login-as", async (req: any, res) => {
 // GET variant for convenience (dev only)
 r.get("/dev/login-as", async (req: any, res) => {
   try {
-    if (process.env.NODE_ENV === "production") return res.status(404).end();
+    if (process.env.DEV_LOGIN_ENABLED !== "true") return res.status(404).end();
     const email = (req.query?.email as string | undefined);
     const userName = (req.query?.userName as string | undefined);
     if (!email && !userName) return res.status(400).json({ error: "email or userName query required" });
@@ -44,7 +44,7 @@ export default r;
 // Dev-only: set current user's username
 r.post('/dev/set-username', async (req: any, res) => {
   try {
-    if (process.env.NODE_ENV === 'production') return res.status(404).end();
+    if (process.env.DEV_LOGIN_ENABLED !== "true") return res.status(404).end();
     const newUserName = req.body?.userName as string;
     if (!newUserName) return res.status(400).json({ error: 'userName required' });
     const current = req.session?.user?.id ? await (User as any).findById(req.session.user.id) : null;
@@ -62,7 +62,7 @@ r.post('/dev/set-username', async (req: any, res) => {
 // Dev-only: migrate posts from source userId to current session user
 r.post('/dev/migrate-posts', async (req: any, res) => {
   try {
-    if (process.env.NODE_ENV === 'production') return res.status(404).end();
+    if (process.env.DEV_LOGIN_ENABLED !== "true") return res.status(404).end();
     const source = req.body?.sourceUserId as string;
     if (!source || !Types.ObjectId.isValid(source)) return res.status(400).json({ error: 'valid sourceUserId required' });
     const targetId = req.session?.user?.id;
@@ -77,7 +77,7 @@ r.post('/dev/migrate-posts', async (req: any, res) => {
 // Dev-only: set password for the current session user
 r.post('/dev/set-password', async (req: any, res) => {
   try {
-    if (process.env.NODE_ENV === 'production') return res.status(404).end();
+    if (process.env.DEV_LOGIN_ENABLED !== "true") return res.status(404).end();
     const pwd = req.body?.password as string;
     if (!pwd || pwd.length < 6) return res.status(400).json({ error: 'password (>=6 chars) required' });
     const userId = req.session?.user?.id;
@@ -94,7 +94,7 @@ r.post('/dev/set-password', async (req: any, res) => {
 // GET convenience for password set (dev only)
 r.get('/dev/set-password', async (req: any, res) => {
   try {
-    if (process.env.NODE_ENV === 'production') return res.status(404).end();
+    if (process.env.DEV_LOGIN_ENABLED !== "true") return res.status(404).end();
     const pwd = req.query?.password as string | undefined;
     if (!pwd || pwd.length < 6) return res.status(400).json({ error: 'password (>=6 chars) required' });
     const userId = req.session?.user?.id;
