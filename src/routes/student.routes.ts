@@ -496,7 +496,7 @@ StudentRoutes.delete('/:userId/weights', async (req: Request, res: Response) => 
     await WeightEntry.deleteOne({ userId: new Types.ObjectId(userId), date });
     try {
       await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight entry deleted for ${date}` });
-      await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId), date });
+      await publish({ type: "WEIGHT_DELETED", user: new Types.ObjectId(userId), date });
     } catch {}
     return res.status(200).json({ ok: true });
   } catch (err) {

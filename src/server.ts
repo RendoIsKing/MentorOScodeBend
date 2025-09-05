@@ -78,6 +78,9 @@ export class Server {
     this.app = express();
     this.port = port;
 
+    // Ensure database connection established early
+    try { void connectDatabase(); } catch {}
+
     this.registerPreRoutes();
 
     this.registerMiddlewares();
@@ -106,7 +109,7 @@ export class Server {
     this.app.use(express.json({ limit: "50mb" }));
     this.app.use(express.urlencoded({ limit: "50mb", extended: true }));
     this.app.use(helmet());
-    initSentry(this.app);
+    initSentry(this.app as unknown as import('express').Application);
     this.app.use(withRequestId as any, httpLogger as any);
 
     const ALLOW = (process.env.FRONTEND_ORIGIN || 'http://localhost:3002,http://192.168.1.244:3002').split(',').map(s=>s.trim()).filter(Boolean);

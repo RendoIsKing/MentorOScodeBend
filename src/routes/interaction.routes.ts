@@ -674,25 +674,49 @@ InteractionRoutes.post('/chat/engh/goals/from-text', async (req, res) => {
       }
     }
     if (!userId) return res.status(400).json({ message: 'userId required' });
-    const text: string = req.body?.text || '';
+    const text: string = (req.body?.text || '').replace(/\r/g, '');
     const targetWeight = Number((text.match(/(\d{2,3})\s*kg/i) || [])[1]) || undefined;
-    const strength = (text.match(/(benk|squat|mark|styrke)[^\n]*/i) || [])[0] || '';
-    const horizon = Number((text.match(/(\d{1,2})\s*(?:uker|weeks)/i) || [])[1]) || 8;
-    const deficit = Number((text.match(/(\d{3,4})\s*kcal[^\n]*defisit/i) || [])[1]) || undefined;
-    const weeklyLoss = Number((text.match(/(0?\.\d|\d)\s*kg\s*per\s*uke/i) || [])[1]) || undefined;
-    const weeklyMinutes = Number((text.match(/(\d{2,3})\s*min(?:utter)?\s*per\s*uke/i) || [])[1]) || undefined;
+    const strength = (text.match(/(benk|knebøy|kneboy|mark|markløft|styrke)[^\n]*/i) || [])[0] || '';
+    const horizon = Number((text.match(/(\d{1,2})\s*(?:uker|weeks|mnd|måneder|months)/i) || [])[1]) || 8;
+    const deficit = Number((text.match(/(\d{3,4})\s*kcal[^\n]*(?:defisit|underskudd)/i) || [])[1]) || undefined;
+    const weeklyLoss = Number((text.match(/(0?\.\d|\d)\s*kg\s*(?:per\s*uke|\/?week)/i) || [])[1]) || undefined;
+    const weeklyMinutes = Number((text.match(/(\d{2,3})\s*min(?:utter)?\s*(?:per\s*uke|\/?week)/i) || [])[1]) || undefined;
     const hydration = Number((text.match(/(\d(?:\.\d)?)\s*l(?:iter)?/i) || [])[1]) || undefined;
-    function collect(section: RegExp) {
-      const m = text.split(section);
-      if (m.length < 2) return [] as string[];
-      const body = m[1].split(/\n\s*\n|Long-Term|Medium-Term|Short-Term|Additional Tips|Tips/i)[0];
-      return body.split(/\n/).map(l=>l.replace(/^[-•]\s*/, '').trim()).filter(Boolean).slice(0,8);
+
+    function collectSection(labels: string[]): string[] {
+      // Build a combined heading regex that tolerates optional colon and parentheses
+      const heading = new RegExp(`^(?:${labels.map(l=>l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join('|')})\b[^\n]*$`, 'i+m');
+      const match = text.match(heading);
+      if (!match) return [];
+      const startIdx = match.index ?? 0;
+      // Slice from the end of the matched heading line
+      const after = text.slice(startIdx + match[0].length);
+      // Stop at next heading of any known type
+      const stopper = new RegExp(`\n\s*(?=^(?:Kortsiktige mål|Kort sikt|Mellomlangsiktige mål|Mellomlang sikt|Langsiktige mål|Lang sikt|Short\s*-?\s*Term|Medium\s*-?\s*Term|Long\s*-?\s*Term|Tips(?:\s*for\s*å\s*oppnå\s*målene)?|Generelle mål)\b)`, 'i+m');
+      const body = (after.split(stopper)[0] || '').trim();
+      // Extract list items (bullets or enumerated)
+      const lines = body.split(/\n/).map(l=>l.trim()).filter(Boolean);
+      const items: string[] = [];
+      for (const l of lines) {
+        const bullet = l.replace(/^[-•]\s*/, '').trim();
+        const enumerated = l.match(/^\d+\.?\s+(.*)$/)?.[1]?.trim();
+        const candidate = (enumerated || bullet).replace(/^\*+|\*+$/g, '').trim();
+        if (candidate) items.push(candidate);
+      }
+      return items.slice(0, 12);
     }
+
+    const shortTerm = collectSection(['Kortsiktige mål', 'Kort sikt', 'Short Term', 'Short-Term']);
+    const mediumTerm = collectSection(['Mellomlangsiktige mål', 'Mellomlang sikt', 'Medium Term', 'Medium-Term']);
+    const longTerm = collectSection(['Langsiktige mål', 'Lang sikt', 'Long Term', 'Long-Term']);
+    const tipsA = collectSection(['Tips for å oppnå målene', 'Tips', 'Additional Tips']);
+    const tipsB = collectSection(['Generelle mål']);
+    const unique = (arr: string[]) => Array.from(new Set(arr.map(s=>s.trim()))).filter(Boolean);
     const plan = {
-      shortTerm: collect(/Short\s*-?\s*Term/i),
-      mediumTerm: collect(/Medium\s*-?\s*Term/i),
-      longTerm: collect(/Long\s*-?\s*Term/i),
-      tips: collect(/Additional\s*Tips|Tips/i),
+      shortTerm,
+      mediumTerm,
+      longTerm,
+      tips: unique([...(tipsA||[]), ...(tipsB||[])]),
     };
     const latest = await Goal.findOne({ userId }).sort({ version: -1 });
     const nextVersion = (latest?.version || 0) + 1;
