@@ -23,7 +23,13 @@ export const getPostsOfUserByUserName = async (req: Request, res: Response) => {
         .json({ error: "userName query parameter is required." });
     }
 
-    const user = await User.findOne({ userName });
+    // Resolve user by username (case-insensitive) or ObjectId, matching behavior of user.find endpoint
+    const escaped = String(userName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const or: any[] = [{ userName: { $regex: `^${escaped}$`, $options: 'i' } }];
+    if (Types.ObjectId.isValid(String(userName))) {
+      or.push({ _id: new Types.ObjectId(String(userName)) });
+    }
+    const user = await User.findOne({ $or: or });
 
     if (!user) {
       return res.status(404).json({ error: "User not found." });

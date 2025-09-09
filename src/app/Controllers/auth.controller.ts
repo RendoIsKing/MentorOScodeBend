@@ -212,7 +212,17 @@ class AuthController {
         return res.status(400).json({ errors });
       }
 
+      // If password change requested, require and verify currentPassword
       if (updateData.password) {
+        const currentPassword = (req.body as any)?.currentPassword as string | undefined;
+        if (!currentPassword) {
+          return res.status(400).json({ error: { message: "CURRENT_PASSWORD_REQUIRED" } });
+        }
+        // Fetch fresh user to compare hash
+        const dbUser = await User.findById(user.id).select("password");
+        if (!dbUser || !dbUser.password || !compareSync(currentPassword, dbUser.password)) {
+          return res.status(400).json({ error: { message: "CURRENT_PASSWORD_INVALID" } });
+        }
         const salt = genSaltSync(10);
         updateData.password = hashSync(updateData.password, salt);
         // Do not log sensitive data
