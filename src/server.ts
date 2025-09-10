@@ -112,8 +112,16 @@ export class Server {
     initSentry(this.app as unknown as import('express').Application);
     this.app.use(withRequestId as any, httpLogger as any);
 
-    const ALLOW = (process.env.FRONTEND_ORIGIN || 'http://localhost:3002,http://192.168.1.244:3002').split(',').map(s=>s.trim()).filter(Boolean);
-    this.app.use(cors({ origin: (origin, cb)=>(!origin || ALLOW.includes(origin)) ? cb(null,true) : cb(new Error('CORS')), credentials: true }));
+    const ALLOW = (process.env.FRONTEND_ORIGIN || 'http://localhost:3002,http://192.168.1.244:3002')
+      .split(',')
+      .map(s=>s.trim())
+      .filter(Boolean);
+    console.log('[CORS] Allowed origins:', ALLOW);
+    this.app.use(cors({ origin: (origin, cb)=>{
+      if (!origin) return cb(null, true);
+      if (ALLOW.includes(origin)) return cb(null, true);
+      return cb(new Error('CORS'));
+    }, credentials: true }));
     const isProd = process.env.NODE_ENV === 'production';
     this.app.use(session({
       secret: process.env.SESSION_SECRET || 'dev_session_secret_change_me',
