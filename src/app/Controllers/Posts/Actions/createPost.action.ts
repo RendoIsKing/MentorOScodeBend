@@ -98,7 +98,7 @@ export const createPostAction = async (
       accessibleTo: accessibleFeatures,
     });
 
-    return res.json({ data: post });
+    return res.status(201).json({ postId: String(post._id), data: post });
   } catch (error) {
     console.log("Error while posting content", error);
     return res.status(500).json({ error: { message: "Something went wrong" } });

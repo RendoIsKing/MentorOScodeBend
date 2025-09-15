@@ -4,6 +4,7 @@ export interface ITrainingSession {
   day: string; // e.g., Mon/Tue or YYYY-MM-DD
   focus: string; // e.g., Push / Pull / Legs
   exercises: { name: string; sets: number; reps: number; load?: number }[];
+  notes?: string[]; // free-form per-day notes (cardio/mobility instructions)
 }
 
 export interface ITrainingPlan {
@@ -28,6 +29,7 @@ export const TrainingPlanSchema = new Schema<ITrainingPlan>({
       exercises: [
         { name: String, sets: Number, reps: Number, load: Number }
       ],
+      notes: { type: [String], default: [] },
     },
   ],
   sourceText: { type: String },

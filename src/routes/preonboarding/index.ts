@@ -6,6 +6,7 @@ import { generateDeterministicPreview } from "../../services/preview/generatePla
 import TrainingPlanVersion from "../../models/TrainingPlanVersion";
 import NutritionPlanVersion from "../../models/NutritionPlanVersion";
 import StudentState from "../../models/StudentState";
+import StudentSnapshot from "../../models/StudentSnapshot";
 import { publish } from "../../services/events/publish";
 import ChangeEvent from "../../models/ChangeEvent";
 
@@ -122,10 +123,25 @@ r.post("/convert", async (req: any, res) => {
       const tp = await TrainingPlanVersion.create({ user: userId, version: 1, source: "preview", reason: "Initialized from preview", days: preview.trainingWeek as any });
       const np = await NutritionPlanVersion.create({ user: userId, version: 1, source: "preview", reason: "Initialized from preview", kcal: preview.nutrition.kcal, proteinGrams: preview.nutrition.proteinGrams, carbsGrams: preview.nutrition.carbsGrams, fatGrams: preview.nutrition.fatGrams });
       await StudentState.findOneAndUpdate({ user: userId }, { $set: { currentTrainingPlanVersion: tp._id, currentNutritionPlanVersion: np._id } }, { upsert: true });
+      // Build initial snapshot (idempotent: keep one per user)
+      const daysPerWeek = Array.isArray((tp as any)?.days) ? ((tp as any).days.filter((d:any)=> (d.exercises||[]).length > 0).length || (tp as any).days.length || 0) : 0;
+      const snapshot = await StudentSnapshot.findOneAndUpdate(
+        { user: userId },
+        {
+          $setOnInsert: {
+            weightSeries: [],
+            trainingPlanSummary: { daysPerWeek },
+            nutritionSummary: { kcal: (np as any)?.kcal, protein: (np as any)?.proteinGrams, carbs: (np as any)?.carbsGrams, fat: (np as any)?.fatGrams },
+            kpis: { adherence7d: 0 },
+          },
+        },
+        { new: true, upsert: true }
+      );
       try { await ChangeEvent.create({ user: userId, type: "PLAN_EDIT", summary: "Initialized from preview", refId: tp._id }); } catch {}
       try { await ChangeEvent.create({ user: userId, type: "NUTRITION_EDIT", summary: "Initialized from preview", refId: np._id }); } catch {}
       await publish({ type: "PLAN_UPDATED", user: userId });
       await publish({ type: "NUTRITION_UPDATED", user: userId });
+      return res.status(200).json({ ok: true, activated: true, snapshotId: String(snapshot?._id || "") });
     }
   } catch {}
   res.json({ ok: true, activated: true });

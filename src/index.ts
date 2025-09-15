@@ -1,4 +1,5 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
+try { console.log('[BOOT:index] .env path =', require('path').resolve(__dirname, '..', '.env'), 'DEV_LOGIN_ENABLED =', process.env.DEV_LOGIN_ENABLED); } catch {}
 import { Server } from "./server";
 import { connectDatabase } from "./utils/dbConnection";
 

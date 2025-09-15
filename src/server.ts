@@ -40,6 +40,7 @@ import PostRoutes from "./routes/post.routes";
 import InteractionRoutes from "./routes/interaction.routes";
 import preonboardingRoutes from "./routes/preonboarding";
 import devLoginRouter from "./routes/dev/loginAs";
+import devBootstrap from "./routes/dev.bootstrap";
 import studentSnapshotRouter from "./routes/student/snapshot";
 import { handlePaymentStatusWebhookStripe } from "./app/Controllers/CardDetails/Actions/handlePaymentStatusStripeWebhook";
 import downloadRouter from "./routes/download.router";
@@ -50,6 +51,7 @@ import { initSentry } from './observability/sentry';
 import { withRequestId, httpLogger } from './observability/logging';
 import healthRouter from './routes/health';
 import rateLimit from 'express-rate-limit';
+import { ensureIndexes } from './utils/ensureIndexes';
 
 const version = "0.0.1";
 //*********** */
@@ -81,11 +83,16 @@ export class Server {
     // Ensure database connection established early
     try { void connectDatabase(); } catch {}
 
+    // Log dev login flag at boot for clarity
+    try { console.log('[BOOT] DEV_LOGIN_ENABLED =', process.env.DEV_LOGIN_ENABLED); } catch {}
+
     this.registerPreRoutes();
 
     this.registerMiddlewares();
     this.initializePassportAndStrategies();
     this.regsiterRoutes();
+    // Ensure indexes in background (non-blocking)
+    ensureIndexes().catch(()=>{});
     if (process.env.NODE_ENV !== 'test') startSnapshotReconciler();
     expireDataSetCronJob();
     // this.start()
@@ -117,11 +124,17 @@ export class Server {
       .map(s=>s.trim())
       .filter(Boolean);
     console.log('[CORS] Allowed origins:', ALLOW);
-    this.app.use(cors({ origin: (origin, cb)=>{
-      if (!origin) return cb(null, true);
-      if (ALLOW.includes(origin)) return cb(null, true);
-      return cb(new Error('CORS'));
-    }, credentials: true }));
+    const devOpenCors = process.env.DEV_LOGIN_ENABLED === 'true' && process.env.NODE_ENV !== 'production';
+    if (devOpenCors) {
+      // In dev, accept any origin and send credentials for convenience
+      this.app.use(cors({ origin: true, credentials: true }));
+    } else {
+      this.app.use(cors({ origin: (origin, cb)=>{
+        if (!origin) return cb(null, true);
+        if (ALLOW.includes(origin)) return cb(null, true);
+        return cb(new Error('CORS'));
+      }, credentials: true }));
+    }
     const isProd = process.env.NODE_ENV === 'production';
     this.app.use(session({
       secret: process.env.SESSION_SECRET || 'dev_session_secret_change_me',
@@ -129,6 +142,9 @@ export class Server {
       saveUninitialized: false,
       cookie: { httpOnly: true, sameSite: 'lax', secure: isProd, maxAge: 1000*60*60*24*30 }
     }));
+    if (isProd && process.env.DEV_LOGIN_ENABLED === 'true') {
+      console.warn('[WARN] DEV_LOGIN_ENABLED=true in production – dev routes should be disabled');
+    }
     this.app.use('/api/backend/', rateLimit({ windowMs: 60_000, max: 120 }));
   }
 
@@ -153,7 +169,14 @@ export class Server {
     this.app.use("/api/backend/v1/interests", Auth, InterestRoutes);
     // Public for now: Coach Engh chatbot and knowledge endpoints
     this.app.use("/api/backend/v1/interaction", InteractionRoutes);
-    this.app.use("/api/backend/v1", devLoginRouter);
+    const devOn = (String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase() === 'true') || (process.env.NODE_ENV !== 'production');
+    if (devOn) {
+      try { console.log('[DEV] Enabling /api/backend/v1/dev/* routes'); } catch {}
+      this.app.use("/api/backend/v1", devLoginRouter);
+      this.app.use("/api/backend/v1", devBootstrap);
+    } else {
+      try { console.log('[DEV] Dev routes disabled'); } catch {}
+    }
     this.app.use("/api/backend/v1/plans", Auth, SubscriptionPlanRoutes);
     this.app.use("/api/backend/v1/user-connections", Auth, ConnectionRoutes);
     this.app.use("/api/backend/v1/payment", Auth, PaymentRoutes);

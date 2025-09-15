@@ -74,9 +74,18 @@ InteractionRoutes.post('/chat/engh/plans/generate-first', generateFirstPlans);
 // Open endpoint publicly (no Auth) to make it easy to call from chat UI
 InteractionRoutes.post('/chat/engh/action', decideAndApplyAction);
 // Unified actions endpoint (rules engine)
+type ActionBody = { type: string; payload?: any; userId?: string };
+function validateActionBody(body: any, userId: string): { ok: true; data: ActionBody } | { ok: false; error: any }{
+  const allowed = ['PLAN_SWAP_EXERCISE','PLAN_SET_DAYS_PER_WEEK','NUTRITION_SET_CALORIES','WEIGHT_LOG','WEIGHT_DELETE'];
+  const type = String((body||{}).type || '');
+  if (!allowed.includes(type)) return { ok: false, error: { message: 'invalid type' } } as const;
+  const payload = (body||{}).payload;
+  if (payload != null && typeof payload !== 'object') return { ok: false, error: { message: 'payload must be object' } } as const;
+  return { ok: true, data: { type, payload, userId } } as const;
+}
 InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
   try {
-    let userId: any = (req as any).user?._id || req.body.userId;
+    let userId: any = (req as any).user?._id || req.body.userId || (req as any).session?.user?.id;
     if (!userId) {
       const cookie = req.headers?.cookie as string | undefined;
       const match = cookie?.match(/auth_token=([^;]+)/);
@@ -89,8 +98,32 @@ InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
         } catch {}
       }
     }
+    if (!userId) {
+      // Dev fallback: if running with dev routes enabled and no session cookie was forwarded
+      try {
+        const enabled = String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase();
+        if (enabled === 'true' || (process.env.NODE_ENV !== 'production')) {
+          const { User } = await import('../app/Models/User');
+          const demo = await (User as any).findOne({ email: 'demo@mentoros.app' }).lean();
+          if (demo?._id) userId = String(demo._id);
+        }
+      } catch {}
+    }
     if (!userId) return res.status(400).json({ error: 'userId required' });
-    const { type, payload } = req.body || {};
+    const validated = validateActionBody(req.body, typeof userId==='string'?userId: String(userId||''));
+    if (!validated.ok) return res.status(400).json({ error: 'Invalid payload', details: validated.error });
+    const { type, payload } = validated.data as any;
+
+    // Safety rails
+    const MIN_KCAL = 1200;
+    const MAX_KCAL = 5000;
+    const MAX_VOL_JUMP = 0.20; // 20%
+
+    if (type === 'NUTRITION_SET_CALORIES') {
+      const kcal = Number(payload?.kcal);
+      if (!Number.isFinite(kcal)) return res.status(400).json({ error: 'kcal required' });
+      if (kcal < MIN_KCAL || kcal > MAX_KCAL) return res.status(422).json({ error: `kcal must be between ${MIN_KCAL} and ${MAX_KCAL}` });
+    }
     // Read current versions via StudentState pointers
     const StudentState = (await import('../models/StudentState')).default;
     const TrainingPlanVersion = (await import('../models/TrainingPlanVersion')).default;
@@ -105,20 +138,128 @@ InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
     }
     if (type === 'PLAN_SET_DAYS_PER_WEEK') {
       if (!currentTraining) return res.status(404).json({ error: 'No current training plan' });
-      const patch = patchSetDaysPerWeek(currentTraining.days as any, Number(payload?.daysPerWeek || 3));
+      const nextDays = Number(payload?.daysPerWeek || 3);
+      if (!Number.isFinite(nextDays) || nextDays < 1 || nextDays > 7) return res.status(422).json({ error: 'daysPerWeek must be 1–7' });
+      try {
+        const currentDays = Array.isArray((currentTraining as any).days)
+          ? ((currentTraining as any).days.filter((d:any)=> (d.exercises||[]).length>0).length || (currentTraining as any).days.length || 0)
+          : 0;
+        if (currentDays && nextDays > Math.ceil(currentDays * (1 + MAX_VOL_JUMP))) {
+          return res.status(422).json({ error: 'volume jump >20% blocked. Increase gradually.' });
+        }
+      } catch {}
+      const patch = patchSetDaysPerWeek(currentTraining.days as any, nextDays);
       const ret = await applyTrainingPatch(userId, currentTraining, patch);
       return res.json({ ok: true, summary: patch.reason.summary, ...ret });
     }
     if (type === 'NUTRITION_SET_CALORIES') {
       const kcal = Number(payload?.kcal);
       const ret = await applyNutritionPatch(userId, { kcal, reason: { summary: `Kalorier satt til ${kcal}` } } as any);
+      try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Satte kalorier: ${kcal} kcal` }); } catch {}
       return res.json({ ok: true, summary: `Kalorier satt til ${kcal}`, ...ret });
     }
     if (type === 'WEIGHT_LOG') {
       const { date, kg } = payload || {};
       const { WeightEntry } = await import('../app/Models/WeightEntry');
       await WeightEntry.updateOne({ userId, date }, { $set: { kg } }, { upsert: true });
-      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight ${kg}kg on ${date}` }); } catch {}
+      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})` }); } catch {}
+      await publish({ type: 'WEIGHT_LOGGED', user: userId, date, kg });
+      return res.json({ ok: true, summary: `Vekt ${kg}kg lagret` });
+    }
+    if (type === 'WEIGHT_DELETE') {
+      const { date } = payload || {};
+      const { WeightEntry } = await import('../app/Models/WeightEntry');
+      await WeightEntry.deleteOne({ userId, date });
+      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}` }); } catch {}
+      await publish({ type: 'WEIGHT_DELETED', user: userId as any, date });
+      return res.json({ ok: true, summary: `Vekt slettet (${date})` });
+    }
+    return res.status(400).json({ error: 'Unknown action type' });
+  } catch (e) {
+    return res.status(500).json({ error: 'Action apply failed' });
+  }
+});
+
+// Alias without the extra "/interaction" segment so final path is
+// /api/backend/v1/interaction/actions/apply (expected by FE/tests)
+InteractionRoutes.post('/actions/apply', async (req, res) => {
+  try {
+    let userId: any = (req as any).user?._id || req.body.userId;
+    if (!userId) {
+      const cookie = req.headers?.cookie as string | undefined;
+      const match = cookie?.match(/auth_token=([^;]+)/);
+      if (match) {
+        try {
+          const token = decodeURIComponent(match[1]);
+          const secret = process.env.JWT_SECRET || 'secret_secret';
+          const decoded: any = (await import('jsonwebtoken')).default.verify(token, secret);
+          userId = decoded?.id || decoded?._id;
+        } catch {}
+      }
+    }
+    if (!userId) {
+      // Dev fallback: if running with dev routes enabled and no session cookie was forwarded
+      try {
+        const enabled = String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase();
+        if (enabled === 'true' || (process.env.NODE_ENV !== 'production')) {
+          const { User } = await import('../app/Models/User');
+          const demo = await (User as any).findOne({ email: 'demo@mentoros.app' }).lean();
+          if (demo?._id) userId = String(demo._id);
+        }
+      } catch {}
+    }
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    const validated = validateActionBody(req.body, typeof userId==='string'?userId: String(userId||''));
+    if (!validated.ok) return res.status(400).json({ error: 'Invalid payload', details: validated.error });
+    const { type, payload } = validated.data as any;
+
+    const MIN_KCAL = 1200;
+    const MAX_KCAL = 5000;
+    const MAX_VOL_JUMP = 0.20;
+
+    if (type === 'NUTRITION_SET_CALORIES') {
+      const kcal = Number(payload?.kcal);
+      if (!Number.isFinite(kcal)) return res.status(400).json({ error: 'kcal required' });
+      if (kcal < MIN_KCAL || kcal > MAX_KCAL) return res.status(422).json({ error: `kcal must be between ${MIN_KCAL} and ${MAX_KCAL}` });
+    }
+    const StudentState = (await import('../models/StudentState')).default;
+    const TrainingPlanVersion = (await import('../models/TrainingPlanVersion')).default;
+    const state = await StudentState.findOne({ user: userId });
+    const currentTraining = state?.currentTrainingPlanVersion ? await TrainingPlanVersion.findById(state.currentTrainingPlanVersion) : null;
+
+    if (type === 'PLAN_SWAP_EXERCISE') {
+      if (!currentTraining) return res.status(404).json({ error: 'No current training plan' });
+      const patch = patchSwapExercise(currentTraining.days as any, payload?.day || 'Mon', payload?.from, payload?.to);
+      const ret = await applyTrainingPatch(userId, currentTraining, patch);
+      return res.json({ ok: true, summary: patch.reason.summary, ...ret });
+    }
+    if (type === 'PLAN_SET_DAYS_PER_WEEK') {
+      if (!currentTraining) return res.status(404).json({ error: 'No current training plan' });
+      const nextDays = Number(payload?.daysPerWeek || 3);
+      if (!Number.isFinite(nextDays) || nextDays < 1 || nextDays > 7) return res.status(422).json({ error: 'daysPerWeek must be 1–7' });
+      try {
+        const currentDays = Array.isArray((currentTraining as any).days)
+          ? ((currentTraining as any).days.filter((d:any)=> (d.exercises||[]).length>0).length || (currentTraining as any).days.length || 0)
+          : 0;
+        if (currentDays && nextDays > Math.ceil(currentDays * (1 + MAX_VOL_JUMP))) {
+          return res.status(422).json({ error: 'volume jump >20% blocked. Increase gradually.' });
+        }
+      } catch {}
+      const patch = patchSetDaysPerWeek(currentTraining.days as any, nextDays);
+      const ret = await applyTrainingPatch(userId, currentTraining, patch);
+      return res.json({ ok: true, summary: patch.reason.summary, ...ret });
+    }
+    if (type === 'NUTRITION_SET_CALORIES') {
+      const kcal = Number(payload?.kcal);
+      const ret = await applyNutritionPatch(userId, { kcal, reason: { summary: `Kalorier satt til ${kcal}` } } as any);
+      try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Satte kalorier: ${kcal} kcal` }); } catch {}
+      return res.json({ ok: true, summary: `Kalorier satt til ${kcal}`, ...ret });
+    }
+    if (type === 'WEIGHT_LOG') {
+      const { date, kg } = payload || {};
+      const { WeightEntry } = await import('../app/Models/WeightEntry');
+      await WeightEntry.updateOne({ userId, date }, { $set: { kg } }, { upsert: true });
+      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})` }); } catch {}
       await publish({ type: 'WEIGHT_LOGGED', user: userId, date, kg });
       return res.json({ ok: true, summary: `Vekt ${kg}kg lagret` });
     }
@@ -425,28 +566,155 @@ InteractionRoutes.post('/chat/engh/training/from-text', async (req, res) => {
           if (!banned.test(nm) && nm.length > 2) results.push({ name: nm, sets: 3, reps: 8 });
         }
       }
-      if (results.length === 0) {
-        return [
-          { name: 'Benkpress', sets: 3, reps: 8 },
-          { name: 'Knebøy', sets: 3, reps: 8 },
-          { name: 'Roing', sets: 3, reps: 10 },
-        ];
-      }
+      // If no structured strength exercises were parsed, return empty list
+      // (e.g., cardio or mobility days should not be populated with defaults)
       return results.slice(0, 8);
     }
 
-    // Build sessions either by explicit Dag-splitting or a single fallback session
-    const sourceBlocks = (blocks.length ? blocks : [rawText]).slice(0, 7);
-    const sessions = sourceBlocks.map((block, i) => ({
-      day: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][i % 7],
-      focus: pickFocus[i % pickFocus.length],
-      exercises: extractExercises(block),
-    })).filter(s => (s.exercises?.length || 0) > 0);
+    // Prefer splitting by explicit Norwegian weekday headers if present
+    const normalized = rawText.replace(/\r/g, '');
+    const lineSplit = normalized.split(/\n/);
+    type DayBlock = { dayName: string; header: string; lines: string[] };
+    const dayBlocks: DayBlock[] = [];
+    let current: DayBlock | null = null;
+    function normalizeAscii(s: string): string {
+      return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    }
+    function detectHeader(line: string): { dayName: string; header: string } | null {
+      const trimmed = (line || '').trim().replace(/^[#*>-]\s*/, '');
+      if (!trimmed) return null;
+      const parts = trimmed.split(':');
+      const head = parts[0].trim();
+      const headAscii = normalizeAscii(head.toLowerCase());
+      const map: Record<string, string> = {
+        mandag: 'Mandag', tirsdag: 'Tirsdag', onsdag: 'Onsdag', torsdag: 'Torsdag', fredag: 'Fredag', lordag: 'Lørdag', sondag: 'Søndag',
+        monday: 'Monday', tuesday: 'Tuesday', wednesday: 'Wednesday', thursday: 'Thursday', friday: 'Friday', saturday: 'Saturday', sunday: 'Sunday',
+      };
+      for (const key of Object.keys(map)) {
+        if (headAscii.startsWith(key)) {
+          return { dayName: map[key], header: trimmed };
+        }
+      }
+      return null;
+    }
+    for (const rawLine of lineSplit) {
+      const h = detectHeader(rawLine);
+      if (h) {
+        if (current) dayBlocks.push(current);
+        current = { dayName: h.dayName, header: h.header, lines: [] };
+      } else if (current) {
+        current.lines.push(rawLine);
+      }
+    }
+    if (current) dayBlocks.push(current);
+
+    // Fallback: block-based regex capture across the whole text
+    if (dayBlocks.length < 2) {
+      const re = new RegExp(
+        String.raw`(^\s*(?:[#*>-]\s*)?(Mandag|Tirsdag|Onsdag|Torsdag|Fredag|L(?:ø|o)rdag|S(?:ø|o)ndag|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*:?.*$)([\s\S]*?)(?=^\s*(?:[#*>-]\s*)?(?:Mandag|Tirsdag|Onsdag|Torsdag|Fredag|L(?:ø|o)rdag|S(?:ø|o)ndag|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*:?.*$|$)`,
+        'gmi'
+      );
+      const blocksRx: DayBlock[] = [];
+      let mm: RegExpExecArray | null;
+      while ((mm = re.exec(normalized)) != null) {
+        const dayName = mm[2];
+        const header = mm[1].trim();
+        const body = (mm[3] || '').split(/\n/);
+        blocksRx.push({ dayName, header, lines: body });
+      }
+      if (blocksRx.length >= 2) {
+        dayBlocks.length = 0;
+        dayBlocks.push(...blocksRx);
+      }
+    }
+
+    // Last-resort fallback: direct index scanning for weekday words (Nor/Eng)
+    if (dayBlocks.length < 2) {
+      const candidates = [
+        'Mandag','Tirsdag','Onsdag','Torsdag','Fredag','Lørdag','Søndag',
+        'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday',
+      ];
+      type Pos = { idx:number; label:string };
+      const found: Pos[] = [];
+      const lower = normalized.toLowerCase();
+      for (const label of candidates) {
+        const key = label.toLowerCase().replace('ø','o');
+        // search for both exact and ascii-folded
+        let i = 0; let last = -1;
+        while ((i = lower.indexOf(key, last+1)) !== -1) {
+          // ensure word boundary
+          const before = i>0 ? lower[i-1] : '\n';
+          const okBoundary = /[^a-zæøå]/i.test(before);
+          if (okBoundary) found.push({ idx: i, label });
+          last = i;
+        }
+      }
+      found.sort((a,b)=> a.idx - b.idx);
+      // merge consecutive duplicates and build blocks
+      const unique: Pos[] = [];
+      for (const p of found) {
+        if (!unique.length || p.idx - unique[unique.length-1].idx > 3) unique.push(p);
+      }
+      if (unique.length >= 2) {
+        dayBlocks.length = 0;
+        for (let i=0;i<unique.length;i++){
+          const start = unique[i].idx;
+          const end = i+1<unique.length ? unique[i+1].idx : normalized.length;
+          const slice = normalized.slice(start, end).split(/\n/);
+          dayBlocks.push({ dayName: unique[i].label, header: slice[0] || unique[i].label, lines: slice.slice(1) });
+        }
+      }
+    }
+
+    function mapDayNameToCode(name: string): string {
+      const n = name.toLowerCase();
+      if (n.startsWith('man') || n.startsWith('mon')) return 'Mon';
+      if (n.startsWith('tir') || n.startsWith('tue')) return 'Tue';
+      if (n.startsWith('ons') || n.startsWith('wed')) return 'Wed';
+      if (n.startsWith('tor') || n.startsWith('thu')) return 'Thu';
+      if (n.startsWith('fre') || n.startsWith('fri')) return 'Fri';
+      if (n.startsWith('lør') || n.startsWith('lor') || n.startsWith('sat')) return 'Sat';
+      if (n.startsWith('søn') || n.startsWith('son') || n.startsWith('sun')) return 'Sun';
+      return 'Mon';
+    }
+
+    // Build sessions from weekday splits, otherwise fall back to Dag-splits or single block
+    let sessions = (dayBlocks.length ? dayBlocks : [] as DayBlock[])
+      .map((db) => {
+        // Extract simple focus from header after ':' if present
+        const afterColon = db.header.split(':').slice(1).join(':').trim();
+        const focus = afterColon || pickFocus[0];
+        const bodyWithoutHeader = db.lines.join('\n');
+        // Collect per-day notes (non-strength lines)
+        const notes = db.lines
+          .map(l => String(l || '').trim())
+          .filter(Boolean)
+          .filter(l => !/(\d{1,2})\s*(?:sett|set|x|×)/i.test(l))
+          .filter(l => !/^\d+\./.test(l));
+        return {
+          day: mapDayNameToCode(db.dayName),
+          focus,
+          exercises: extractExercises(bodyWithoutHeader),
+          notes,
+        };
+      });
+
+    if (!sessions.length) {
+      const sourceBlocks = (blocks.length ? blocks : [rawText]).slice(0, 7);
+      sessions = sourceBlocks
+        .map((block, i) => ({
+          day: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][i % 7],
+          focus: pickFocus[i % pickFocus.length],
+          exercises: extractExercises(block),
+          notes: [],
+        }));
+    }
     if (sessions.length === 0) {
       sessions.push({
         day: 'Mon',
         focus: pickFocus[0],
         exercises: extractExercises(rawText),
+        notes: [],
       });
     }
     // Extract high-level guidelines from the text
