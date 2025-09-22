@@ -1,0 +1,94 @@
+import { Router } from 'express';
+import type { Request, Response } from 'express';
+import { ChatThread, ChatMessage } from '../models/chat';
+import { sseAddClient, sseRemoveClient, ssePush } from '../lib/sseHub';
+
+const r = Router();
+
+function me(req: Request) {
+  // @ts-ignore
+  return req.user?._id?.toString?.();
+}
+
+r.post('/threads', async (req, res) => {
+  const myId = me(req);
+  if (!myId) return res.status(401).json({ error: 'unauthorized' });
+  const { userId } = req.body || {};
+  if (!userId || userId === myId) return res.status(400).json({ error: 'bad userId' });
+  const pair = [myId, userId].sort();
+  let thread = await ChatThread.findOne({ participants: { $all: pair, $size: 2 } });
+  if (!thread) {
+    thread = await ChatThread.create({ participants: pair, lastMessageAt: new Date(), unread: new Map([[userId, 0],[myId,0]]) });
+  }
+  res.json({ threadId: thread._id.toString() });
+});
+
+r.get('/threads', async (req, res) => {
+  const myId = me(req);
+  if (!myId) return res.status(401).json({ error: 'unauthorized' });
+  const threads = await ChatThread.find({ participants: myId }).sort({ lastMessageAt: -1 }).lean();
+  res.json({ threads: threads.map(t=>({ id: t._id.toString(), lastMessageAt: t.lastMessageAt, lastMessageText: t.lastMessageText || '', unread: (t.unread?.get(myId) ?? 0), participants: t.participants.map(String) })) });
+});
+
+r.get('/threads/:id/messages', async (req, res) => {
+  const myId = me(req);
+  if (!myId) return res.status(401).json({ error: 'unauthorized' });
+  const { id } = req.params;
+  const { cursor, limit = 30 } = req.query as any;
+  const q: any = { thread: id };
+  if (cursor) q._id = { $lt: cursor };
+  const messages = await ChatMessage.find(q).sort({ _id: -1 }).limit(Number(limit)).lean();
+  res.json({ messages: messages.reverse().map(m=>({ id: m._id.toString(), text: m.text, sender: m.sender.toString(), createdAt: m.createdAt })), nextCursor: messages.length ? messages[0]._id.toString() : null });
+});
+
+r.post('/threads/:id/messages', async (req, res) => {
+  const myId = me(req);
+  if (!myId) return res.status(401).json({ error: 'unauthorized' });
+  const { id } = req.params;
+  const { text } = req.body || {};
+  if (!text || !text.trim()) return res.status(400).json({ error: 'empty' });
+  const thread = await ChatThread.findById(id);
+  if (!thread) return res.status(404).json({ error: 'not found' });
+  if (!thread.participants.map(String).includes(myId)) return res.status(403).json({ error: 'forbidden' });
+  const msg = await ChatMessage.create({ thread: thread._id, sender: myId, text: text.trim(), readBy: [myId] });
+  thread.lastMessageAt = new Date();
+  thread.lastMessageText = msg.text;
+  for (const p of thread.participants.map(String)) {
+    thread.unread.set(p, p === myId ? 0 : (thread.unread.get(p) ?? 0) + 1);
+  }
+  await thread.save();
+  for (const p of thread.participants.map(String)) {
+    ssePush(p, 'chat:message', { threadId: thread._id.toString(), message: { id: msg._id.toString(), text: msg.text, sender: myId, createdAt: msg.createdAt } });
+    ssePush(p, 'chat:thread', { id: thread._id.toString(), lastMessageAt: thread.lastMessageAt, lastMessageText: thread.lastMessageText, unread: thread.unread.get(p) ?? 0 });
+  }
+  res.json({ ok: true, id: msg._id.toString() });
+});
+
+r.post('/threads/:id/read', async (req, res) => {
+  const myId = me(req);
+  if (!myId) return res.status(401).json({ error: 'unauthorized' });
+  const { id } = req.params;
+  const thread = await ChatThread.findById(id);
+  if (!thread) return res.status(404).json({ error: 'not found' });
+  if (!thread.participants.map(String).includes(myId)) return res.status(403).json({ error: 'forbidden' });
+  await ChatMessage.updateMany({ thread: id, sender: { $ne: myId } }, { $addToSet: { readBy: myId } });
+  thread.unread.set(myId, 0);
+  await thread.save();
+  ssePush(myId, 'chat:thread', { id: thread._id.toString(), lastMessageAt: thread.lastMessageAt, lastMessageText: thread.lastMessageText, unread: 0 });
+  res.json({ ok: true });
+});
+
+r.get('/sse', (req: any, res: Response) => {
+  const myId = me(req);
+  if (!myId) return res.status(401).end();
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+  // @ts-ignore
+  res.flushHeaders?.();
+  res.write(':\n\n');
+  sseAddClient(myId, res);
+  req.on('close', () => { sseRemoveClient(myId, res); try{ res.end(); }catch{} });
+});
+
+export default r;
+
+

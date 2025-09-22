@@ -190,7 +190,15 @@ const UserSchema = new Schema(
 
 UserSchema.pre("save", async function (next) {
   try {
-    this.completePhoneNumber = `${this.dialCode}--${this.phoneNumber}`;
+    const dial = (this as any).dialCode;
+    const phone = (this as any).phoneNumber;
+    if (dial && phone) {
+      (this as any).completePhoneNumber = `${dial}--${phone}`;
+    } else {
+      // Avoid setting a duplicate placeholder value that could violate a unique index
+      (this as any).completePhoneNumber = undefined as any;
+    }
+    next();
   } catch (error) {
     next(error);
   }
@@ -200,15 +208,16 @@ UserSchema.pre("findOneAndUpdate", function (next) {
   const update = this.getUpdate();
   if (update) {
     const updateDoc = update as { [key: string]: any };
-    const dialCode = updateDoc.dialCode || updateDoc.$set?.dialCode;
-    const phoneNumber = updateDoc.phoneNumber || updateDoc.$set?.phoneNumber;
-    if (dialCode || phoneNumber) {
-      if (!updateDoc.$set) {
-        updateDoc.$set = {};
+    const dialCode = updateDoc.dialCode ?? updateDoc.$set?.dialCode;
+    const phoneNumber = updateDoc.phoneNumber ?? updateDoc.$set?.phoneNumber;
+    if (dialCode !== undefined || phoneNumber !== undefined) {
+      if (!updateDoc.$set) updateDoc.$set = {};
+      if (dialCode && phoneNumber) {
+        updateDoc.$set.completePhoneNumber = `${dialCode}--${phoneNumber}`;
+      } else {
+        // If one is missing, clear the computed field to avoid duplicate placeholders
+        updateDoc.$set.completePhoneNumber = undefined;
       }
-      updateDoc.$set.completePhoneNumber = `${dialCode || ""}--${
-        phoneNumber || ""
-      }`;
     }
   }
 

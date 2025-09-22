@@ -22,7 +22,7 @@ export const getThread = async (req: Request, res: Response) => {
   try {
     const userId = resolveUserId(req);
     if (!userId) return res.status(400).json({ message: 'userId required' });
-    const partner = 'coach-engh';
+    const partner = (req as any).params?.partner || 'coach-engh';
     const thread = await ChatThread.findOneAndUpdate(
       { userId, partner },
       { $setOnInsert: { userId: new Types.ObjectId(userId), partner } },
@@ -39,7 +39,7 @@ export const appendMessage = async (req: Request, res: Response) => {
   try {
     const userId = resolveUserId(req);
     if (!userId) return res.status(400).json({ message: 'userId required' });
-    const partner = 'coach-engh';
+    const partner = (req as any).params?.partner || 'coach-engh';
     const { sender, text } = req.body || {};
     if (!sender || !text) return res.status(400).json({ message: 'sender and text required' });
     const thread = await ChatThread.findOneAndUpdate(
@@ -58,7 +58,7 @@ export const clearThread = async (req: Request, res: Response) => {
   try {
     const userId = resolveUserId(req);
     if (!userId) return res.status(400).json({ message: 'userId required' });
-    const partner = 'coach-engh';
+    const partner = (req as any).params?.partner || 'coach-engh';
     const thread = await ChatThread.findOne({ userId, partner });
     if (thread) {
       await ChatMessage.deleteMany({ threadId: thread._id });

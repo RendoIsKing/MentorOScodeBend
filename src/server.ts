@@ -44,6 +44,10 @@ import devBootstrap from "./routes/dev.bootstrap";
 import studentSnapshotRouter from "./routes/student/snapshot";
 import { handlePaymentStatusWebhookStripe } from "./app/Controllers/CardDetails/Actions/handlePaymentStatusStripeWebhook";
 import downloadRouter from "./routes/download.router";
+import chatRoutes from './routes/chat';
+import conversationsRoutes from './routes/conversations';
+import chatStream from './routes/chat.stream';
+import devSeed from './routes/dev.seed';
 import { expireDataSetCronJob } from "./utils/scheduledJobs/expireDataSets";
 import session from 'express-session';
 import { startSnapshotReconciler } from "./jobs/snapshot.reconciler";
@@ -193,6 +197,10 @@ export class Server {
     this.app.use("/api/backend/v1/more-actions", Auth, moreActionRoutes);
     this.app.use("/api/backend/v1/process-data", Auth, userDataRoutes);
     this.app.use("/api/backend/v1/preonboarding", preonboardingRoutes);
+    this.app.use('/api/backend/v1/chat', chatRoutes);
+    this.app.use('/api/backend/v1/chat', conversationsRoutes);
+    this.app.use('/api/backend/v1', chatStream);
+    this.app.use('/api/backend/v1', devSeed);
     this.app.use("/", downloadRouter);
   }
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { InteractionController } from "../app/Controllers/Interaction";
-import { chatWithCoachEngh } from "../app/Controllers/Interaction/chat.controller";
+import { chatWithCoachEngh, chatWithCoachMajen } from "../app/Controllers/Interaction/chat.controller";
 import { generateFirstPlans } from "../app/Controllers/Interaction/generateFirstPlans";
 import { decideAndApplyAction } from "../app/Controllers/Interaction/decisionEngine";
 import { Goal, TrainingPlan, NutritionPlan } from "../app/Models/PlanModels";
@@ -70,6 +70,8 @@ InteractionRoutes.post("/log-view", Auth, InteractionController.logView);
 
 // New route for Coach Engh chat
 InteractionRoutes.post("/chat/engh", chatWithCoachEngh);
+// Coach Majen avatar chat (mirror of Engh path shape)
+InteractionRoutes.post("/chat/majen", Auth, chatWithCoachMajen);
 InteractionRoutes.post('/chat/engh/plans/generate-first', generateFirstPlans);
 // Open endpoint publicly (no Auth) to make it easy to call from chat UI
 InteractionRoutes.post('/chat/engh/action', decideAndApplyAction);
@@ -276,10 +278,11 @@ InteractionRoutes.post('/actions/apply', async (req, res) => {
     return res.status(500).json({ error: 'Action apply failed' });
   }
 });
-// Thread persistence
-InteractionRoutes.get('/chat/engh/thread', getThread);
-InteractionRoutes.post('/chat/engh/message', appendMessage);
-InteractionRoutes.post('/chat/engh/clear', clearThread);
+// Thread persistence (parameterized partner)
+InteractionRoutes.get('/chat/:partner/thread', Auth, getThread);
+InteractionRoutes.get('/chat/:partner/messages', Auth, getThread);
+InteractionRoutes.post('/chat/:partner/message', Auth, appendMessage);
+InteractionRoutes.post('/chat/:partner/clear', Auth, clearThread);
 
 // Get current goal for user
 InteractionRoutes.get('/chat/engh/goals/current', async (req, res) => {

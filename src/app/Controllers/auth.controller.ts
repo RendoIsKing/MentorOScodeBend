@@ -252,7 +252,7 @@ class AuthController {
 
   static userLogin = async (req: Request, res: Response): Promise<Response> => {
     try {
-      const { email, username, phoneNumber, password, dialCode } = req.body;
+      const { email, username, phoneNumber, password, dialCode } = req.body || {};
 
       // Branch A: Phone-only initiation (no password) → generate OTP (signup/OTP login flow)
       if (!password && (phoneNumber || email || username)) {
@@ -272,21 +272,19 @@ class AuthController {
           dial = String(dialCode || '').replace(/^\+/, '').replace(/\s+/g, '');
           num = String(phoneNumber || '').replace(/\s+/g, '');
         }
+        if (!dial || !num) {
+          return res.status(422).json({ message: 'dialCode and phoneNumber are required' });
+        }
 
-        if (dial && num) {
-          // Find or create user by phone
-          const threePartRegex = new RegExp(`^[A-Za-z]{2}--${dial.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}--${num.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, 'i');
-          let user = await User.findOne({
-            isDeleted: false,
-            $or: [
-              { completePhoneNumber: `${dial}--${num}` },
-              { completePhoneNumber: { $regex: threePartRegex } },
-              { $and: [{ dialCode: dial }, { phoneNumber: num }] },
-            ],
-          });
-
-          if (!user) {
-            user = await User.create({
+        // Find or create user by phone with atomic upsert
+        const orQuery: any[] = [
+          { completePhoneNumber: `${dial}--${num}` },
+          { $and: [{ dialCode: dial }, { phoneNumber: num }] },
+        ];
+        const user = await User.findOneAndUpdate(
+          { isDeleted: false, $or: orQuery },
+          {
+            $setOnInsert: {
               firstName: '',
               lastName: '',
               email: email || undefined,
@@ -295,28 +293,26 @@ class AuthController {
               role: RolesEnum.USER,
               isActive: true,
               isVerified: false,
-            } as any);
-          }
+            },
+          },
+          { upsert: true, new: true }
+        );
 
-          const otp = otpGenerator();
-          const otpInvalidAt = addMinutes(new Date(), 10);
-          user.otp = String(otp);
-          // @ts-ignore
-          user.otpInvalidAt = otpInvalidAt;
-          await user.save();
+        const otp = otpGenerator();
+        const otpInvalidAt = addMinutes(new Date(), 10);
+        await User.findByIdAndUpdate(user._id, { otp: String(otp), otpInvalidAt });
 
-          // Send OTP (dev: also return it in response for easy verification)
-          try {
-            await sendMessage(`${dial}--${num}`, `Your OTP is: ${otp}`);
-          } catch (e) {
-            // ignore SMS errors in dev
-          }
-
-          return res.status(200).json({
-            data: { _id: user._id, dialCode: dial, phoneNumber: num, otp },
-            message: 'OTP sent successfully',
-          });
+        // Send OTP (dev: also return it in response for easy verification)
+        try {
+          await sendMessage(`${dial}--${num}`, `Your OTP is: ${otp}`);
+        } catch (e) {
+          // ignore SMS errors in dev
         }
+
+        return res.status(200).json({
+          data: { _id: user._id, dialCode: dial, phoneNumber: num, otp },
+          message: 'OTP sent successfully',
+        });
       }
 
       // Accept both formats: "<dialCode>--<number>" and "<country>--<dialCode>--<number>"
@@ -382,7 +378,10 @@ class AuthController {
         },
       });
     } catch (error) {
-      return res.status(500).json({ message: "Something went wrong" });
+      const msg = (error as any)?.message || String(error);
+      console.error('[auth:user-login] failed', msg);
+      // Always return the error message during debugging so we can see the exact cause
+      return res.status(500).json({ message: msg });
     }
   };
 

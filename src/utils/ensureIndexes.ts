@@ -4,7 +4,40 @@ export async function ensureIndexes(): Promise<void> {
     const [{ User }] = await Promise.all([
       import('../app/Models/User'),
     ]);
-    try { await (User as any).collection.createIndex({ email: 1 }, { unique: true }); } catch {}
+    try {
+      const coll = (User as any).collection;
+      // Inspect existing indexes
+      let indexes: any[] = [];
+      try { indexes = await coll.indexes(); } catch {}
+      const emailIdx = indexes.find((i: any) => i?.name === 'email_1');
+      // If an email unique index exists without partial filter, drop it to avoid null duplicates
+      if (emailIdx && !emailIdx?.partialFilterExpression) {
+        try { await coll.dropIndex('email_1'); } catch {}
+      }
+      // Create partial unique index so only real strings are enforced
+      try {
+        await coll.createIndex(
+          { email: 1 },
+          { unique: true, partialFilterExpression: { email: { $exists: true, $type: 'string' } } }
+        );
+      } catch {}
+    } catch {}
+    // Ensure unique phone identity only when values exist to avoid partial duplicates
+    try {
+      await (User as any).collection.createIndex(
+        { completePhoneNumber: 1 },
+        { unique: true, partialFilterExpression: { completePhoneNumber: { $exists: true, $type: 'string' } } }
+      );
+    } catch {}
+    try {
+      await (User as any).collection.createIndex(
+        { dialCode: 1, phoneNumber: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { dialCode: { $exists: true, $type: 'string' }, phoneNumber: { $exists: true, $type: 'string' } },
+        }
+      );
+    } catch {}
   } catch {}
 
   try {
