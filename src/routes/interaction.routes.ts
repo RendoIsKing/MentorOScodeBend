@@ -71,7 +71,7 @@ InteractionRoutes.post("/log-view", Auth, InteractionController.logView);
 // New route for Coach Engh chat
 InteractionRoutes.post("/chat/engh", chatWithCoachEngh);
 // Coach Majen avatar chat (mirror of Engh path shape)
-InteractionRoutes.post("/chat/majen", Auth, chatWithCoachMajen);
+InteractionRoutes.post("/chat/majen", chatWithCoachMajen);
 InteractionRoutes.post('/chat/engh/plans/generate-first', generateFirstPlans);
 // Open endpoint publicly (no Auth) to make it easy to call from chat UI
 InteractionRoutes.post('/chat/engh/action', decideAndApplyAction);
@@ -280,9 +280,10 @@ InteractionRoutes.post('/actions/apply', async (req, res) => {
 });
 // Thread persistence (parameterized partner)
 InteractionRoutes.get('/chat/:partner/thread', Auth, getThread);
-InteractionRoutes.get('/chat/:partner/messages', Auth, getThread);
-InteractionRoutes.post('/chat/:partner/message', Auth, appendMessage);
-InteractionRoutes.post('/chat/:partner/clear', Auth, clearThread);
+// Make thread persistence usable from public avatar chat pages
+InteractionRoutes.get('/chat/:partner/messages', getThread);
+InteractionRoutes.post('/chat/:partner/message', appendMessage);
+InteractionRoutes.post('/chat/:partner/clear', clearThread);
 
 // Get current goal for user
 InteractionRoutes.get('/chat/engh/goals/current', async (req, res) => {
@@ -681,7 +682,7 @@ InteractionRoutes.post('/chat/engh/training/from-text', async (req, res) => {
       return 'Mon';
     }
 
-    // Build sessions from weekday splits, otherwise fall back to Dag-splits or single block
+    // Build sessions from weekday splits; otherwise fall back to Dag-splits or single block
     let sessions = (dayBlocks.length ? dayBlocks : [] as DayBlock[])
       .map((db) => {
         // Extract simple focus from header after ':' if present
@@ -733,7 +734,9 @@ InteractionRoutes.post('/chat/engh/training/from-text', async (req, res) => {
     const created = await TrainingPlan.create({ userId, version: nextVersion, isCurrent: true, sessions, sourceText: rawText, guidelines: guidelineLines });
     return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(created._id) }], message: 'Training plan imported to Assets' });
   } catch (e) {
-    return res.status(500).json({ message: 'import failed' });
+    console.error('[nutrition/from-text] failed', e);
+    const msg = typeof (e as any)?.message === 'string' ? (e as any).message : 'unknown';
+    return res.status(500).json({ message: 'import failed', error: msg });
   }
 });
 
@@ -861,62 +864,190 @@ InteractionRoutes.post('/chat/engh/nutrition/from-text', async (req, res) => {
       .replace(/\n\s*---+\s*\n/g, '\n')
       .replace(/^\s*#\s*$/gm, '')
       .replace(/\*\*/g, ''); // strip bold markers so labels match
+    // First pass: simple day + "- Meal: item" parser (matches your sample exactly)
+    const weekdayLabels = ['Mandag','Tirsdag','Onsdag','Torsdag','Fredag','Lørdag','Søndag','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+    const weekdayRe = new RegExp(`^\s*(?:#{0,6}\s*)?(?:${weekdayLabels.join('|')})\s*$`, 'i');
+    const mealLineRe = /^\s*-\s*(Frokost|Lunsj|Middag|Snack|Breakfast|Lunch|Dinner)\s*:\s*(.+)\s*$/i;
+    const canon = (n: string) => (/^Breakfast$/i.test(n) ? 'Frokost' : /^Lunch$/i.test(n) ? 'Lunsj' : /^Dinner$/i.test(n) ? 'Middag' : n);
+    const daysParsed: { label:string; meals:{ name:string; items:string[] }[] }[] = [];
+    (function trySimpleScan(){
+      const lines = normalized.split(/\n/);
+      let currentDay: string | null = null;
+      const map: Record<string, { name:string; items:string[] }[]> = {};
+      for (const raw of lines) {
+        const line = String(raw||'').trim();
+        if (!line) continue;
+        if (weekdayRe.test(line)) { currentDay = line.replace(/^#+\s*/, ''); if (!map[currentDay]) map[currentDay] = []; continue; }
+        const mm = line.match(mealLineRe);
+        if (mm && currentDay) {
+          const label = canon(mm[1]);
+          const content = mm[2].trim();
+          if (content) {
+            let entry = map[currentDay].find(m=>m.name.toLowerCase()===label.toLowerCase());
+            if (!entry) { entry = { name: label, items: [] }; map[currentDay].push(entry); }
+            entry.items.push(content);
+          }
+        }
+      }
+      const keys = Object.keys(map);
+      // Only adopt this pass if at least one meal was actually captured
+      const hasAnyMeals = keys.some(k => (map[k] || []).length > 0);
+      if (keys.length && hasAnyMeals) {
+        daysParsed.length = 0;
+        for (const k of keys) daysParsed.push({ label: k, meals: map[k] });
+      }
+    })();
+
     // Support markdown headings like "#### Day 1" or plain "Day 1"
     const daySplits = normalized.split(/\n\s*#{0,6}\s*(?:Dag|Day)\s*(\d+)\b[^\n]*\n/i);
-    // Support Norwegian and English meal names
-    function labelPattern(name:string){
-      return new RegExp(`(?:\\*\\*)?${name}(?:\\*\\*)?\\s*:?`, 'i');
+    // Meal parsing helpers
+    const mealHeaderOnlyRe = /^(?:\s*#{0,6}\s*)?\s*(?:[-•]\s*)?(?:\*\*\s*)?(Frokost|Lunsj|Middag|Snack|Breakfast|Lunch|Dinner)(?:\s*\*\*)?\s*:?\s*$/i;
+    const mealHeaderWithContentRe = /^(?:\s*#{0,6}\s*)?\s*(?:[-•]\s*)?(?:\*\*\s*)?(Frokost|Lunsj|Middag|Snack|Breakfast|Lunch|Dinner)(?:\s*\*\*)?\s*:?\s*(.+)$/i;
+    const dayHeaderRe = /^\s*#{0,6}\s*(?:Dag\s*\d+|Day\s*\d+|Mandag|Tirsdag|Onsdag|Torsdag|Fredag|L(?:ø|o)rdag|S(?:ø|o)ndag)\b.*$/i;
+    function parseMealsFromBlock(block: string): { name: string; items: string[] }[] {
+      const lines = String(block).split(/\n/);
+      const result: { name: string; items: string[] }[] = [];
+      let current: string | null = null;
+      let buf: string[] = [];
+      let preHeaderBuf: string[] = [];
+      let seenHeader = false;
+      const commit = () => { if (current && buf.length) { result.push({ name: current, items: [...buf] }); } buf = []; };
+      for (let raw of lines) {
+        const rawStr = String(raw || '');
+        const line = rawStr.replace(/^\s*[-•]\s*/, '').trim();
+        if (!line) continue;
+        if (/^\s*#{1,6}\s/.test(rawStr)) { // generic markdown heading like ### Matplan
+          // Treat as a separator within the day: end any current meal and continue
+          commit();
+          current = null;
+          continue;
+        }
+        if (dayHeaderRe.test(line)) { commit(); current = null; continue; }
+        const hc = line.match(mealHeaderWithContentRe);
+        if (hc) { // header and content on same line
+          if (!seenHeader && preHeaderBuf.length && !result.some(m=>/^Frokost$/i.test(m.name))) {
+            result.push({ name: 'Frokost', items: [...preHeaderBuf] });
+            preHeaderBuf = [];
+          }
+          seenHeader = true;
+          commit();
+          current = canon(hc[1]);
+          const firstItem = hc[2].replace(/^\*\*\s*|\s*\*\*$/g, '').trim();
+          if (firstItem) buf.push(firstItem);
+          continue;
+        }
+        const ho = line.match(mealHeaderOnlyRe);
+        if (ho) {
+          if (!seenHeader && preHeaderBuf.length && !result.some(m=>/^Frokost$/i.test(m.name))) {
+            result.push({ name: 'Frokost', items: [...preHeaderBuf] });
+            preHeaderBuf = [];
+          }
+          seenHeader = true;
+          commit(); current = canon(ho[1]); continue; }
+        if (!current) {
+          // Only treat pre-header content as Frokost if it looks like likely food items
+          const isBullet = /^\s*(?:[-•*–]\s*|\d+\.\s*)/.test(rawStr);
+          if (!isBullet) continue; // skip non-bullets until a meal header
+          if (!seenHeader) {
+            const looksFood = /(,|\d)|\b(havre|havregryn|grøt|grot|egg|yoghurt|brød|brod|knekkebrød|knekkebrod|ost|skyr|smoothie|bær|baer|frukt|banan|korn|gryn)\b/i.test(line);
+            if (looksFood) preHeaderBuf.push(line);
+          }
+          continue;
+        }
+        // Strip leftover bold markers
+        const cleaned = line.replace(/^\*\*\s*|\s*\*\*$/g, '');
+        if (cleaned) buf.push(cleaned);
+      }
+      commit();
+      if (!seenHeader && preHeaderBuf.length && !result.some(m=>/^Frokost$/i.test(m.name))) {
+        result.push({ name: 'Frokost', items: [...preHeaderBuf] });
+      }
+      // Ensure unique meal names preserve first occurrence order
+      const seen = new Set<string>();
+      let out = result.filter(m => (seen.has(m.name) ? false : (seen.add(m.name), true)));
+      // Final fallback: if no explicit Frokost was captured, scan lines to collect it
+      if (!out.some(m => /^Frokost$/i.test(m.name))) {
+        const reHeader = /^(?:\s*#{0,6}\s*)?\s*(?:[-•]\s*)?(?:\*\*\s*)?(Frokost)(?:\s*\*\*)?\s*:?\s*(.*)$/i;
+        let foundIdx = -1; let first = '';
+        for (let i=0; i<lines.length; i++) {
+          const rawStr = String(lines[i] || '');
+          const line = rawStr.replace(/^\s*[-•]\s*/, '').trim();
+          const m = line.match(reHeader);
+          if (m) { foundIdx = i; first = (m[2] || '').trim(); break; }
+        }
+        if (foundIdx >= 0) {
+          const items: string[] = [];
+          if (first) items.push(first);
+          for (let j = foundIdx + 1; j < lines.length; j++) {
+            const rawStr = String(lines[j] || '');
+            const asLine = rawStr.replace(/^\s*[-•]\s*/, '').trim();
+            if (!asLine) continue;
+            if (dayHeaderRe.test(asLine)) break;
+            if (mealHeaderOnlyRe.test(asLine) || mealHeaderWithContentRe.test(asLine)) break;
+            const cleaned = asLine.replace(/^\*\*\s*|\s*\*\*$/g, '');
+            items.push(cleaned);
+          }
+          if (items.length) out = [{ name: 'Frokost', items }, ...out];
+        }
+      }
+      return out;
     }
-    const mealNames: {label:string; pattern:RegExp}[] = [
-      { label: 'Frokost', pattern: labelPattern('Frokost') },
-      { label: 'Lunsj', pattern: labelPattern('Lunsj') },
-      { label: 'Middag', pattern: labelPattern('Middag') },
-      { label: 'Snack', pattern: labelPattern('Snack') },
-      { label: 'Breakfast', pattern: labelPattern('Breakfast') },
-      { label: 'Lunch', pattern: labelPattern('Lunch') },
-      { label: 'Dinner', pattern: labelPattern('Dinner') },
-    ];
     const meals: { name:string; items:string[] }[] = [];
-    const daysParsed: { label:string; meals:{ name:string; items:string[] }[] }[] = [];
     if (daySplits.length > 1) {
+      const parsedByIndex: { label:string; meals:{ name:string; items:string[] }[] }[] = [];
       for (let i=1; i<daySplits.length; i+=2) {
         const label = `Dag ${daySplits[i]}`;
         const block = (daySplits[i+1] || '').split(/\n\s*#?\s*(?:Dag|Day)\s*\d+[^\n]*\n/i)[0];
-        const dayMeals: { name:string; items:string[] }[] = [];
-        for (const def of mealNames) {
-          const parts = block.split(def.pattern);
-          if (parts.length > 1) {
-            const stopAtNext = /\n\s*(?=#+)|\n\s*(?:Dag|Day)\s*\d+\b|\n\s*(?:\*\*\s*)?(?:Frokost|Lunsj|Middag|Snack|Breakfast|Lunch|Dinner)(?:\*\*)?\s*:/i;
-            const after = parts[1].split(stopAtNext)[0] || '';
-            const items = after.split(/\n/)
-              .map(l=>l.replace(/^[-•]\s*/, '').trim())
-              .filter(Boolean)
-              .filter(l=>l !== '**' && l !== '*');
-            if (items.length) dayMeals.push({ name: def.label, items });
-          }
-        }
-        if (dayMeals.length) daysParsed.push({ label, meals: dayMeals });
+        const dayMeals = parseMealsFromBlock(block);
+        if (dayMeals.length) parsedByIndex.push({ label, meals: dayMeals });
+      }
+      if (parsedByIndex.length) {
+        daysParsed.length = 0;
+        daysParsed.push(...parsedByIndex);
       }
     } else {
-      // single generic block → collect meals without day labels
-      for (const def of mealNames) {
-        const parts = text.split(def.pattern);
-        if (parts.length > 1) {
-          const stopAtNext = /\n\s*(?=#+)|\n\s*(?:Dag|Day)\s*\d+\b|\n\s*(?:\*\*\s*)?(?:Frokost|Lunsj|Middag|Snack|Breakfast|Lunch|Dinner)(?:\*\*)?\s*:/i;
-          const after = parts[1].split(stopAtNext)[0] || '';
-          const items = after.split(/\n/)
-            .map(l=>l.replace(/^[-•]\s*/, '').trim())
-            .filter(Boolean)
-            .filter(l=>l !== '**' && l !== '*');
-          if (items.length) meals.push({ name: def.label, items });
+      // Try splitting by Norwegian weekday headings (Mandag, Tirsdag, ...)
+      const weekRe = /^\s*#{0,6}\s*(Mandag|Tirsdag|Onsdag|Torsdag|Fredag|L(?:ø|o)rdag|S(?:ø|o)ndag)\s*:?.*$/gmi;
+      type DayPos = { idx:number; label:string; header:string };
+      const positions: DayPos[] = [];
+      let mm: RegExpExecArray | null;
+      while ((mm = weekRe.exec(normalized)) !== null) {
+        positions.push({ idx: mm.index ?? 0, label: mm[1], header: mm[0] });
+      }
+      if (positions.length) {
+        const parsedByWeek: { label:string; meals:{ name:string; items:string[] }[] }[] = [];
+        for (let i=0; i<positions.length; i++) {
+          const start = positions[i].idx + positions[i].header.length;
+          const end = i+1 < positions.length ? positions[i+1].idx : normalized.length;
+          const body = normalized.slice(start, end);
+          const dayMeals = parseMealsFromBlock(body);
+          if (dayMeals.length) parsedByWeek.push({ label: positions[i].label, meals: dayMeals });
+        }
+        if (parsedByWeek.length) {
+          if (!daysParsed.length || daysParsed.every(d => (d.meals||[]).length === 0)) {
+            daysParsed.length = 0;
+            daysParsed.push(...parsedByWeek);
+          }
         }
       }
+      // single generic block → collect meals without day labels
+      meals.push(...parseMealsFromBlock(text));
     }
     // Extract global guidelines (outside day sections) so they don't get merged into any day's Snack
     const guidelines = normalized.split(/\n/)
       .map(l=>l.trim())
-      .filter(l=>/^[-•]\s/.test(l) && /(Hydrering|Justering|Variasjon|Forberedelse|General\s*Tips|Generelle\s*Tips)/i.test(l))
+      .filter(l=>/^[-•]\s/.test(l) && /(Hydrering|Husk|Juster|Justering|Variasjon|Varier|Forberedelse|General\s*Tips|Generelle\s*Tips|Hvis du har)/i.test(l))
       .map(l=>l.replace(/^[-•]\s*/, ''));
+
+    // If no explicit day sections were found but a single-day meal list exists,
+    // duplicate that template across all 7 days so the UI shows a full week.
+    if (!daysParsed.length && meals.length) {
+      const cloneMeals = (arr: { name: string; items: string[] }[]) => arr.map(m => ({ name: m.name, items: [...m.items] }));
+      const labels = ['Mandag','Tirsdag','Onsdag','Torsdag','Fredag','Lørdag','Søndag'];
+      for (const label of labels) {
+        daysParsed.push({ label, meals: cloneMeals(meals) });
+      }
+    }
 
     const latest = await NutritionPlan.findOne({ userId }).sort({ version: -1 });
     const nextVersion = (latest?.version || 0) + 1;
@@ -924,6 +1055,7 @@ InteractionRoutes.post('/chat/engh/nutrition/from-text', async (req, res) => {
     const created = await NutritionPlan.create({ userId, version: nextVersion, isCurrent: true, dailyTargets: { kcal, protein, carbs, fat }, notes: '', sourceText: text, meals: meals.length?meals:undefined, guidelines, days: daysParsed.length?daysParsed:undefined });
     return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'nutrition', planId: String(created._id) }], message: 'Meal plan imported to Assets' });
   } catch (e) {
+    console.error('[nutrition/from-text] failed', e);
     return res.status(500).json({ message: 'import failed' });
   }
 });
