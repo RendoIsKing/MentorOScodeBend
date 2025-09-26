@@ -510,7 +510,8 @@ InteractionRoutes.post('/chat/engh/training/from-text', async (req, res) => {
         const hasNumbers = /(\d{1,2})\s*(?:sett|set|x|×)/i.test(cur) || /(\d{1,2})\s*(?:reps|repetisjoner)/i.test(cur);
         const nextHasNumbers = /(\d{1,2})\s*(?:sett|set|x|×)/i.test(next) || /(\d{1,2})\s*(?:reps|repetisjoner)/i.test(next);
         const curLooksLikeName = /(^\d+\.|^[-•])?\s*[A-Za-zÆØÅæøå0-9/(),\.\-\s]+$/.test(cur) && !hasNumbers;
-        if (curLooksLikeName && nextHasNumbers) {
+        const nextIsEnumeratedOrBullet = /^\s*\d+\./.test(next) || /^\s*[-•]/.test(next);
+        if (curLooksLikeName && nextHasNumbers && !nextIsEnumeratedOrBullet) {
           lines.push(`${cur} — ${next}`);
           i++; // skip next
         } else {
@@ -531,20 +532,20 @@ InteractionRoutes.post('/chat/engh/training/from-text', async (req, res) => {
         if (!nameCandidate || /Dag\s*\d+:/i.test(nameCandidate)) continue;
         let sets: number | undefined;
         let reps: number | undefined;
-        // try same merged line first
-        let sameLine = l;
-        const mSame = sameLine.match(/(\d{1,2})\s*(?:sett|set)[^\d]*(\d{1,2})/) || sameLine.match(/(\d{1,2})\s*[x×]\s*(\d{1,2})/);
+        // try same merged line first (supports formats like "3x8" or "3 sett x 8 reps")
+        const mSame = l.match(/(\d{1,2})\s*(?:sett|set)[^\d]*(\d{1,2})/i) || l.match(/(\d{1,2})\s*[x×]\s*(\d{1,2})/i);
         if (mSame) { sets = Number(mSame[1]); reps = Number(mSame[2]); }
-        // search forward until next enumerated or blank
+        // search forward within a small lookahead window until next enumerated item
         for (let j=i+1; (!sets || !reps) && j<lines.length && !/^\s*\d+\./.test(lines[j]); j++) {
           const t = lines[j];
           if (banned.test(t)) continue;
-          const m = t.match(/(\d{1,2})\s*(?:sett|set)[^\d]*(\d{1,2})/) || t.match(/(\d{1,2})\s*[x×]\s*(\d{1,2})/);
+          const m = t.match(/(\d{1,2})\s*(?:sett|set)[^\d]*(\d{1,2})/i) || t.match(/(\d{1,2})\s*[x×]\s*(\d{1,2})/i);
           if (m) { sets = Number(m[1]); reps = Number(m[2]); break; }
           const hold = t.match(/(\d{1,2})\s*(?:sett|set)[^\d]*hold/i);
           if (hold) { sets = Number(hold[1]); reps = 10; break; }
         }
         results.push({ name: nameCandidate, sets: sets || 3, reps: reps || 8 });
+        if (results.length >= 8) break; // cap hard at 8 to avoid overfilling
       }
       if (results.length) return results.slice(0, 8);
       for (const l of lines) {
