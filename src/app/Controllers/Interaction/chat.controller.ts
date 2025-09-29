@@ -27,6 +27,15 @@ const COACH_ENGH_SYSTEM_PROMPT = `
 You are Coach Engh, a world-class mental sharpness coach.
 You are direct, warm, and always goal-oriented.
 Start every chat by asking key questions to personalize your guidance.
+
+When creating training plans, ALWAYS follow this exact format:
+- Use Norwegian weekdays (Mandag, Tirsdag, Onsdag, Torsdag, Fredag, Lørdag, Søndag) instead of "Dag 1", "Dag 2", etc.
+- End each day's workout with a motivational message, like:
+  "Det var det for dagen, stå på! Husk målene du har satt deg og kjemp for å oppnå dem - dette får du til!"
+  "Bra jobba! Hver dag du trener er en dag nærmere målet ditt. Kom igjen!"
+  "Stå på! Disiplin gir deg frihet, og hver økt bygger styrken din. Du klarer dette!"
+  "Ikke gi opp nå! Små steg hver dag gir store resultater. Jeg tror på deg!"
+  "Kjemp på! Denne økten gjør deg sterkere både fysisk og mentalt. Gi alt du har!"
 `;
 
 export const chatWithCoachEngh = async (req: Request, res: Response) => {
@@ -71,6 +80,13 @@ export const chatWithCoachEngh = async (req: Request, res: Response) => {
       temperature: 0.7,
     });
     const reply = response.choices?.[0]?.message?.content || "";
+    
+    // Check if this is a plan proposal (updated to handle Norwegian weekdays and motivational endings)
+    const isPlanProposal = /^(Ny|Endring på)\s.+\n\s*##Type:\s*(Treningsplan|Kostholdsplan|Mål)\s*\n\s*Plan:\s*(.+)$/im.test(reply);
+    if (isPlanProposal) {
+      return res.json({ reply, type: "plan_proposal" });
+    }
+    
     return res.json({ reply });
   } catch (err) {
     console.error("coach-engh chat error", err);
@@ -83,7 +99,23 @@ export const chatWithCoachEngh = async (req: Request, res: Response) => {
 const COACH_MAJEN_SYSTEM_PROMPT = `
 You are Coach Majen, a pragmatic, encouraging strength and conditioning coach.
 You keep answers short, concrete, and always include 1–2 specific next steps.
-Speak like a friendly Scandinavian coach.`;
+Speak like a friendly Scandinavian coach.
+
+When creating training plans, ALWAYS follow this exact format:
+- Use Norwegian weekdays (Mandag, Tirsdag, Onsdag, Torsdag, Fredag, Lørdag, Søndag) instead of "Dag 1", "Dag 2", etc.
+- End each day's workout with a motivational message from Majen, like:
+  "Det var det for dagen, stå på! Husk målene du har satt deg og kjemp for å oppnå dem - dette får du til!"
+  "Bra jobba! Hver dag du trener er en dag nærmere målet ditt. Kom igjen!"
+  "Stå på! Disiplin gir deg frihet, og hver økt bygger styrken din. Du klarer dette!"
+  "Ikke gi opp nå! Små steg hver dag gir store resultater. Jeg tror på deg!"
+  "Kjemp på! Denne økten gjør deg sterkere både fysisk og mentalt. Gi alt du har!"
+
+Examples of correct daily format:
+Mandag: Bryst og Triceps
+1. Benkpress: 4 sett x 6-8 reps
+2. Skråbenk med manualer: 3 sett x 8-10 reps
+3. Dips: 3 sett x 6-8 reps
+- Det var det for dagen, stå på! Husk målene du har satt deg og kjemp for å oppnå dem - dette får du til!`;
 
 export const chatWithCoachMajen = async (req: Request, res: Response) => {
   try {
@@ -119,6 +151,13 @@ export const chatWithCoachMajen = async (req: Request, res: Response) => {
       temperature: 0.6,
     });
     const reply = response.choices?.[0]?.message?.content || '';
+    
+    // Check if this is a plan proposal (updated to handle Norwegian weekdays and motivational endings)
+    const isPlanProposal = /^(Ny|Endring på)\s.+\n\s*##Type:\s*(Treningsplan|Kostholdsplan|Mål)\s*\n\s*Plan:\s*(.+)$/im.test(reply);
+    if (isPlanProposal) {
+      return res.json({ reply, type: "plan_proposal" });
+    }
+    
     return res.json({ reply });
   } catch (e) {
     console.error('[chatWithCoachMajen] fail', e);

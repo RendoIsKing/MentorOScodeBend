@@ -278,6 +278,69 @@ InteractionRoutes.post('/actions/apply', async (req, res) => {
     return res.status(500).json({ error: 'Action apply failed' });
   }
 });
+
+  // Apply a plan change proposed by AI (text plan with strict header)
+  // Body: { text: string, userId?: string }
+  InteractionRoutes.post('/actions/applyPlanChange', async (req, res) => {
+    try {
+      const text: string = String((req.body||{}).text || '').trim();
+      if (!text) return res.status(400).json({ ok:false, error: 'text_required' });
+
+      // Basic validation per spec
+      // Header lines: ^(Ny|Endring på) ...\n##Type: (Treningsplan|Kostholdsplan|Mål)\nPlan: ...
+      const headerRe = /^(Ny|Endring på)\s.+\n\s*##Type:\s*(Treningsplan|Kostholdsplan|Mål)\s*\n\s*Plan:\s*(.+)$/im;
+      const m = text.match(headerRe);
+      if (!m) return res.status(422).json({ ok:false, error:'invalid_header' });
+      const type = (m[2]||'').trim();
+
+      // Require all weekdays listed at least once (Norwegian names) - now properly supports the new format
+      const days = ['Mandag','Tirsdag','Onsdag','Torsdag','Fredag','Lørdag','Søndag'];
+      const missing = days.filter(d=> !new RegExp(`^\s*${d}\s*:`, 'im').test(text));
+      if (missing.length) return res.status(422).json({ ok:false, error:'missing_days', missing });
+
+      // Decide underlying importer based on type
+      const api = type.toLowerCase();
+      const userId = (req as any)?.user?._id || req.body?.userId || undefined;
+
+      // Reuse existing from-text endpoints for materialization
+      if (api.includes('trenings')) {
+        try {
+          const { default: fetch } = await import('node-fetch');
+          const base = process.env.API_BASE_INTERNAL || `http://localhost:${process.env.PORT || 3006}`;
+          const r = await fetch(`${base}/api/backend/v1/interaction/chat/engh/training/from-text`, { method:'POST', headers:{ 'Content-Type':'application/json', cookie: req.headers.cookie||'' }, body: JSON.stringify({ text, userId }) as any } as any);
+          const j = await r.json().catch(()=>({}));
+          if (!j?.actions?.length) return res.status(500).json({ ok:false, error:'apply_failed' });
+          return res.json({ ok:true, type:'Treningsplan', summary: j?.summary || 'Training plan applied' });
+        } catch {
+          return res.status(500).json({ ok:false, error:'apply_failed' });
+        }
+      }
+      if (api.includes('kostholds')) {
+        try {
+          const { default: fetch } = await import('node-fetch');
+          const base = process.env.API_BASE_INTERNAL || `http://localhost:${process.env.PORT || 3006}`;
+          const r = await fetch(`${base}/api/backend/v1/interaction/chat/engh/nutrition/from-text`, { method:'POST', headers:{ 'Content-Type':'application/json', cookie: req.headers.cookie||'' }, body: JSON.stringify({ text, userId }) as any } as any);
+          const j = await r.json().catch(()=>({}));
+          if (!j?.actions?.length) return res.status(500).json({ ok:false, error:'apply_failed' });
+          return res.json({ ok:true, type:'Kostholdsplan', summary: j?.summary || 'Nutrition plan applied' });
+        } catch { return res.status(500).json({ ok:false, error:'apply_failed' }); }
+      }
+      if (api.includes('mål') || api.includes('mal')) {
+        try {
+          const { default: fetch } = await import('node-fetch');
+          const base = process.env.API_BASE_INTERNAL || `http://localhost:${process.env.PORT || 3006}`;
+          const r = await fetch(`${base}/api/backend/v1/interaction/chat/engh/goals/from-text`, { method:'POST', headers:{ 'Content-Type':'application/json', cookie: req.headers.cookie||'' }, body: JSON.stringify({ text, userId }) as any } as any);
+          const j = await r.json().catch(()=>({}));
+          if (!j?.actions?.length) return res.status(500).json({ ok:false, error:'apply_failed' });
+          return res.json({ ok:true, type:'Mål', summary: j?.summary || 'Goals applied' });
+        } catch { return res.status(500).json({ ok:false, error:'apply_failed' }); }
+      }
+
+      return res.status(422).json({ ok:false, error:'unknown_type', type });
+    } catch {
+      return res.status(500).json({ ok:false, error:'server_error' });
+    }
+  });
 // Thread persistence (parameterized partner)
 InteractionRoutes.get('/chat/:partner/thread', Auth, getThread);
 // Make thread persistence usable from public avatar chat pages
@@ -303,9 +366,9 @@ InteractionRoutes.get('/chat/engh/goals/current', async (req, res) => {
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const goal = await Goal.findOne({ userId, isCurrent: true }).sort({ version: -1 }).lean();
     if (!goal) return res.status(404).json({ message: 'not found' });
-    res.json({ data: goal });
+    return res.json({ data: goal });
   } catch (e) {
-    res.status(500).json({ message: 'goal fetch failed' });
+    return res.status(500).json({ message: 'goal fetch failed' });
   }
 });
 
@@ -327,9 +390,9 @@ InteractionRoutes.get('/chat/engh/training/current', async (req, res) => {
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const plan = await TrainingPlan.findOne({ userId, isCurrent: true }).sort({ version: -1 }).lean();
     if (!plan) return res.status(404).json({ message: 'not found' });
-    res.json({ data: plan });
+    return res.json({ data: plan });
   } catch (e) {
-    res.status(500).json({ message: 'training fetch failed' });
+    return res.status(500).json({ message: 'training fetch failed' });
   }
 });
 
@@ -351,9 +414,9 @@ InteractionRoutes.get('/chat/engh/nutrition/current', async (req, res) => {
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const plan = await NutritionPlan.findOne({ userId, isCurrent: true }).sort({ version: -1 }).lean();
     if (!plan) return res.status(404).json({ message: 'not found' });
-    res.json({ data: plan });
+    return res.json({ data: plan });
   } catch (e) {
-    res.status(500).json({ message: 'nutrition fetch failed' });
+    return res.status(500).json({ message: 'nutrition fetch failed' });
   }
 });
 
@@ -369,9 +432,9 @@ InteractionRoutes.post('/chat/engh/knowledge/upload', knowledgeUpload.single('fi
       mimeType: file.mimetype,
       sizeBytes: file.size,
     });
-    res.json({ data: doc });
+    return res.json({ data: doc });
   } catch (e) {
-    res.status(500).json({ message: 'upload failed' });
+    return res.status(500).json({ message: 'upload failed' });
   }
 });
 
@@ -381,9 +444,9 @@ InteractionRoutes.post('/chat/engh/knowledge/text', async (req, res) => {
     const { text, title } = req.body || {};
     if (!text) return res.status(400).json({ message: 'text is required' });
     const doc = await CoachKnowledge.create({ coachId: (req as any).user?._id || undefined, title, text });
-    res.json({ data: doc });
+    return res.json({ data: doc });
   } catch (e) {
-    res.status(500).json({ message: 'save failed' });
+    return res.status(500).json({ message: 'save failed' });
   }
 });
 
@@ -410,9 +473,9 @@ InteractionRoutes.post('/chat/engh/profile', async (req, res) => {
       { $set: payload, $setOnInsert: { userId } },
       { new: true, upsert: true }
     );
-    res.json({ data: doc });
+    return res.json({ data: doc });
   } catch (e) {
-    res.status(500).json({ message: 'profile save failed' });
+    return res.status(500).json({ message: 'profile save failed' });
   }
 });
 
@@ -435,9 +498,9 @@ InteractionRoutes.get('/chat/engh/profile', async (req, res) => {
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const doc = await UserProfile.findOne({ userId });
     if (!doc) return res.status(404).json({ message: 'not found' });
-    res.json({ data: doc });
+    return res.json({ data: doc });
   } catch (e) {
-    res.status(500).json({ message: 'profile fetch failed' });
+    return res.status(500).json({ message: 'profile fetch failed' });
   }
 });
 
@@ -790,7 +853,7 @@ InteractionRoutes.post('/chat/engh/nutrition/save', async (req, res) => {
       }
     }
     if (!userId) return res.status(400).json({ message: 'userId required' });
-    const { dailyTargets, meals, days, guidelines, sourceText } = req.body || {};
+    const { dailyTargets } = req.body || {};
     if (!dailyTargets) return res.status(400).json({ message: 'dailyTargets required' });
     const version = await nextNutritionVersion(userId as any);
     const doc = await NutritionPlanVersion.create({ user: userId, version, source: 'action', reason: 'Saved via chat', kcal: dailyTargets.kcal, proteinGrams: dailyTargets.protein, carbsGrams: dailyTargets.carbs, fatGrams: dailyTargets.fat });
@@ -808,9 +871,9 @@ InteractionRoutes.get('/plans/share/training/:id', async (req, res) => {
   try {
     const plan = await TrainingPlan.findById(req.params.id).lean();
     if (!plan) return res.status(404).json({ message: 'not found' });
-    res.json({ plan });
+    return res.json({ plan });
   } catch {
-    res.status(500).json({ message: 'share failed' });
+    return res.status(500).json({ message: 'share failed' });
   }
 });
 
@@ -818,9 +881,9 @@ InteractionRoutes.get('/plans/share/nutrition/:id', async (req, res) => {
   try {
     const plan = await NutritionPlan.findById(req.params.id).lean();
     if (!plan) return res.status(404).json({ message: 'not found' });
-    res.json({ plan });
+    return res.json({ plan });
   } catch {
-    res.status(500).json({ message: 'share failed' });
+    return res.status(500).json({ message: 'share failed' });
   }
 });
 // Create nutrition plan from free-form text
