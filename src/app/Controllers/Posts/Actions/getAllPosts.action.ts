@@ -56,6 +56,11 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
       isDeleted: false,
     };
 
+    if (filter === PostFilterEnum.ALL) {
+      // Public feed: only PUBLIC posts from anyone (optionally exclude own)
+      matchStage.privacy = 'public';
+    }
+
     if (filter === PostFilterEnum.FOLLOWING) {
       const userConnections = await userConnection.find(
         { owner: user.id },
@@ -65,6 +70,8 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
       const followedUserIds = userConnections.map((conn) => conn.followingTo);
 
       matchStage.user = { $in: followedUserIds };
+      // Followers feed: allow PUBLIC and FOLLOWERS visibility
+      matchStage.privacy = { $in: ['public','followers'] } as any;
     }
 
     if (filter === PostFilterEnum.SUBSCRIBED) {
@@ -83,6 +90,8 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
       const subscribedUserIds = subscriptionPlans.map((plan) => plan.userId);
 
       matchStage.user = { $in: subscribedUserIds };
+      // Subscribed feed: allow PUBLIC and SUBSCRIBER visibility
+      matchStage.privacy = { $in: ['public','subscriber'] } as any;
     }
     // else if (filter === PostFilterEnum.FOR_YOU) {
     // }

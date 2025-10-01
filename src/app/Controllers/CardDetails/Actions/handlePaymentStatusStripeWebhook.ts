@@ -4,6 +4,7 @@ import { Transaction } from "../../../Models/Transaction";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import stripeInstance from "../../../../utils/stripe";
 import { Subscription } from "../../../Models/Subscription";
+import * as Sentry from '@sentry/node';
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
 
 export const handlePaymentStatusWebhookStripe = async (
@@ -35,6 +36,7 @@ export const handlePaymentStatusWebhookStripe = async (
     console.log(`⚠️  Webhook signature verification failed.`, err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
+  try { Sentry.addBreadcrumb({ category: 'stripe', message: 'webhook', data: { type: event?.type } }); } catch {}
   switch (event.type) {
     case "customer.subscription.created":
     case "customer.subscription.trial_will_end":
@@ -86,7 +88,13 @@ const handleSubscriptionEvent = async (event: any) => {
       return;
     }
 
-    console.log("Subscription Updated:", updatedSubscription);
+    try {
+      // Mark user as subscribed and persist entitlement flag for access guard
+      await User.updateOne({ _id: updatedSubscription.userId }, { $set: { status: 'SUBSCRIBED' } });
+    } catch (e) {
+      console.log('user entitlement update failed');
+    }
+    console.log("Subscription Updated:", { id: updatedSubscription._id, status: updatedSubscription.status });
   } catch (error) {
     console.error("Error handling subscription event:", error);
   }
@@ -99,9 +107,9 @@ const handlePaymentIntentCreated = async (event: any) => {
 
 const handlePaymentSuccess = async (event: any) => {
   const paymentIntent = event.data.object;
-  const user = await User.findOne({ stripeCustomerId: paymentIntent.customer });
+  const user = await User.findOne({ stripeClientId: paymentIntent.customer });
   if (!user) {
-    console.error("User not found for customer ID:", paymentIntent.customer);
+    console.error("User not found for customer ID:", typeof paymentIntent.customer === 'string' ? paymentIntent.customer.slice(-6) : 'unknown');
     return;
   }
   console.log("paymentIntentpaymentIntent In webhook-->>", paymentIntent);
@@ -122,9 +130,9 @@ const handlePaymentSuccess = async (event: any) => {
 
 const handlePaymentFailed = async (event: any) => {
   const paymentIntent = event.data.object;
-  const user = await User.findOne({ stripeCustomerId: paymentIntent.customer });
+  const user = await User.findOne({ stripeClientId: paymentIntent.customer });
   if (!user) {
-    console.error("User not found for customer ID:", paymentIntent.customer);
+    console.error("User not found for customer ID:", typeof paymentIntent.customer === 'string' ? paymentIntent.customer.slice(-6) : 'unknown');
     return;
   }
 

@@ -5,6 +5,9 @@ export interface ChangeEvent {
   type: "PLAN_EDIT" | "NUTRITION_EDIT" | "WEIGHT_LOG" | "WORKOUT_LOG";
   summary: string; rationale?: string;
   refId?: Types.ObjectId;
+  actor?: Types.ObjectId | string;
+  before?: any;
+  after?: any;
   createdAt: Date; updatedAt: Date;
 }
 
@@ -13,7 +16,10 @@ const ChangeEventSchema = new Schema<ChangeEvent>({
   type: { type: String, enum: ["PLAN_EDIT","NUTRITION_EDIT","WEIGHT_LOG","WORKOUT_LOG"], required: true },
   summary: { type: String, required: true },
   rationale: String,
-  refId: { type: Schema.Types.ObjectId }
+  refId: { type: Schema.Types.ObjectId },
+  actor: { type: Schema.Types.Mixed },
+  before: { type: Schema.Types.Mixed },
+  after: { type: Schema.Types.Mixed }
 }, { timestamps: true });
 
 ChangeEventSchema.index({ user: 1, createdAt: -1 });

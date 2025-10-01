@@ -3,6 +3,7 @@ import { User } from "../../app/Models/User";
 import { Post } from "../../app/Models/Post";
 import { Types } from "mongoose";
 import { genSaltSync, hashSync } from 'bcryptjs';
+import { generateAuthToken } from '../../utils/jwt';
 
 const r = Router();
 
@@ -13,10 +14,19 @@ r.post("/dev/login-as", async (req: any, res) => {
     if (!devOn) return res.status(404).json({ error: 'DEV_LOGIN_DISABLED', value: process.env.DEV_LOGIN_ENABLED });
     const { email } = req.body as { email: string };
     if (!email) return res.status(400).json({ error: "email required" });
-    const user = await (User as any).findOne({ email });
+    let user = await (User as any).findOne({ email });
     if (!user) return res.status(404).json({ error: "user not found" });
+    // Ensure dev user can pass Auth checks
+    if (user.isDeleted || !user.isActive || !user.isVerified) {
+      await (User as any).updateOne({ _id: user._id }, { $set: { isDeleted: false, isActive: true, isVerified: true } });
+      user = await (User as any).findById(user._id);
+    }
     req.session = req.session || {};
     req.session.user = { id: user._id.toString() };
+    try {
+      const token = generateAuthToken(user as any);
+      res.cookie('auth_token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*24*30, path: '/' });
+    } catch {}
     return res.json({ ok: true, userId: user._id.toString() });
   } catch (e) {
     return res.status(500).json({ error: "login failed" });
@@ -35,8 +45,16 @@ r.get("/dev/login-as", async (req: any, res) => {
     let user = email ? await (User as any).findOne({ email }) : null;
     if (!user && userName) user = await (User as any).findOne({ userName });
     if (!user) return res.status(404).json({ error: "user not found" });
+    if (user.isDeleted || !user.isActive || !user.isVerified) {
+      await (User as any).updateOne({ _id: user._id }, { $set: { isDeleted: false, isActive: true, isVerified: true } });
+      user = await (User as any).findById(user._id);
+    }
     req.session = req.session || {};
     req.session.user = { id: user._id.toString() };
+    try {
+      const token = generateAuthToken(user as any);
+      res.cookie('auth_token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*24*30, path: '/' });
+    } catch {}
     return res.json({ ok: true, userId: user._id.toString() });
   } catch (e) {
     return res.status(500).json({ error: "login failed" });

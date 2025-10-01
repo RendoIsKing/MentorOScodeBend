@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { z } from 'zod';
 import { OpenAI } from "openai";
 import { UserProfile } from "../../Models/UserProfile";
 import { Types } from "mongoose";
@@ -40,7 +41,13 @@ When creating training plans, ALWAYS follow this exact format:
 
 export const chatWithCoachEngh = async (req: Request, res: Response) => {
   try {
-    const { message, history } = req.body || {};
+    const Body = z.object({
+      message: z.string().trim().min(1).max(2000).optional(),
+      history: z.array(z.object({ role: z.string(), content: z.string() })).optional(),
+    });
+    const parsed = Body.safeParse(req.body || {});
+    if (!parsed.success) return res.status(422).json({ error: 'validation_failed', details: parsed.error.flatten() });
+    const { message, history } = parsed.data as any;
 
     // If userId cookie is available, try to load profile context
     let profileContext = '';
@@ -119,7 +126,13 @@ Mandag: Bryst og Triceps
 
 export const chatWithCoachMajen = async (req: Request, res: Response) => {
   try {
-    const { message, history } = (req.body || {}) as any;
+    const Body = z.object({
+      message: z.string().trim().min(1).max(2000).optional(),
+      history: z.array(z.object({ role: z.string(), content: z.string() })).optional(),
+    });
+    const parsed = Body.safeParse(req.body || {});
+    if (!parsed.success) return res.status(422).json({ error: 'validation_failed', details: parsed.error.flatten() });
+    const { message, history } = parsed.data as any;
     let profileContext = '';
     try {
       const uid = (req as any)?.user?._id;

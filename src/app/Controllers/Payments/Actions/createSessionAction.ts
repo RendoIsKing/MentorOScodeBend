@@ -29,22 +29,14 @@ export const createSessionAction = async (
       data.clientStripeId = customer.id;
     }
 
-    createPaymentIntent(data)
-      .then(async (response: any) => {
-        let sessionObject = {
-          clientSecret: response.client_secret,
-          status: response.status,
-          sessionId: response.id,
-        };
-        return res.json({ data: sessionObject });
-      })
-      .catch((error) => {
-        return res
-          .status(400)
-          .json({ data: { message: "Error in creating intent", error } });
-      });
-
-    return res.json({});
+    const response: any = await createPaymentIntent(data);
+    const sessionObject = {
+      clientSecret: response?.client_secret ?? null,
+      status: response?.status ?? null,
+      sessionId: response?.id ?? null,
+      type: response?.object || 'setup_intent',
+    };
+    return res.json({ data: sessionObject });
   } catch (error) {
     return res.status(500).json({
       error: {

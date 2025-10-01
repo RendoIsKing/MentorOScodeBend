@@ -1,8 +1,12 @@
 import { Request, Response } from 'express';
+import { z } from 'zod';
 import { Types } from 'mongoose';
 import jwt from 'jsonwebtoken';
-import { TrainingPlan, NutritionPlan, Goal, ChangeLog } from '../../Models/PlanModels';
+import { TrainingPlan, NutritionPlan, Goal } from '../../Models/PlanModels';
+import ChangeEvent from '../../../models/ChangeEvent';
+import { publish } from '../../../services/events/publish';
 import { UserProfile } from '../../Models/UserProfile';
+import * as Sentry from '@sentry/node';
 
 function toTitle(str: string) {
   return str
@@ -26,7 +30,10 @@ export const decideAndApplyAction = async (req: Request, res: Response) => {
         } catch {}
       }
     }
-    const message = String(req.body?.message || '');
+    const MessageSchema = z.object({ message: z.string().trim().min(1).max(2000) });
+    const parsed = MessageSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(422).json({ message: 'validation_failed', details: parsed.error.flatten() });
+    const message = String(parsed.data.message || '');
     if (!userId || !Types.ObjectId.isValid(userId)) {
       return res.status(400).json({ message: 'userId required' });
     }
@@ -35,6 +42,7 @@ export const decideAndApplyAction = async (req: Request, res: Response) => {
 
     // Heuristic: user states training availability (e.g., "kan trene 4 ganger i uken")
     const avail = lower.match(/trene\s+(\d)\s+(?:ganger|dager)/);
+    try { Sentry.addBreadcrumb({ category: 'plan', message: 'decideAndApplyAction', data: { userId: String(userId), message: message.slice(0,200) } }); } catch {}
     if (avail) {
       const days = Number(avail[1]);
       const focuses = ['Overkropp','Underkropp','Fullkropp','Push','Pull','Legs'];
@@ -51,7 +59,8 @@ export const decideAndApplyAction = async (req: Request, res: Response) => {
       const nextVersion = (current?.version || 0) + 1;
       await TrainingPlan.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
       const created = await TrainingPlan.create({ userId, version: nextVersion, isCurrent: true, sessions });
-      await ChangeLog.create({ userId, area: 'training', summary: `Generert plan for ${days} dager/uke`, fromVersion: current?.version, toVersion: nextVersion });
+      try { await ChangeEvent.create({ user: userId as any, type: 'PLAN_EDIT', summary: `Generated plan for ${days} days/week`, actor: (req as any)?.user?._id, before: { fromVersion: current?.version }, after: { toVersion: nextVersion } }); } catch {}
+      try { await publish({ type: 'PLAN_UPDATED', user: userId as any }); } catch {}
       return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(created._id) }], summary: `Ny treningsplan (${days} dager/uke) er lagt til Assets` });
     }
 
@@ -86,7 +95,8 @@ export const decideAndApplyAction = async (req: Request, res: Response) => {
       const nextVersion = (current?.version || 0) + 1;
       await TrainingPlan.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
       const created = await TrainingPlan.create({ userId, version: nextVersion, isCurrent: true, sessions });
-      await ChangeLog.create({ userId, area: 'training', summary: 'Generert ny treningsplan', fromVersion: current?.version, toVersion: nextVersion });
+      try { await ChangeEvent.create({ user: userId as any, type: 'PLAN_EDIT', summary: 'Generated new training plan', actor: (req as any)?.user?._id, before: { fromVersion: current?.version }, after: { toVersion: nextVersion } }); } catch {}
+      try { await publish({ type: 'PLAN_UPDATED', user: userId as any }); } catch {}
       return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(created._id) }], summary: 'Ny treningsplan er lagt til Assets' });
     }
     if ((/\blag\b|\bny\b/).test(lower) && /(kostholdsplan|måltidsplan|meal)/.test(lower)) {
@@ -100,7 +110,8 @@ export const decideAndApplyAction = async (req: Request, res: Response) => {
       const nextVersion = (current?.version || 0) + 1;
       await NutritionPlan.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
       const created = await NutritionPlan.create({ userId, version: nextVersion, isCurrent: true, dailyTargets: { kcal, protein, carbs, fat }, notes: profile?.nutritionPreferences || '' });
-      await ChangeLog.create({ userId, area: 'nutrition', summary: 'Generert ny kostholdsplan', fromVersion: current?.version, toVersion: nextVersion });
+      try { await ChangeEvent.create({ user: userId as any, type: 'NUTRITION_EDIT', summary: 'Generated new nutrition plan', actor: (req as any)?.user?._id, before: { fromVersion: current?.version }, after: { toVersion: nextVersion } }); } catch {}
+      try { await publish({ type: 'NUTRITION_UPDATED', user: userId as any }); } catch {}
       return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'nutrition', planId: String(created._id) }], summary: 'Ny kostholdsplan er lagt til Assets' });
     }
 
@@ -122,7 +133,8 @@ export const decideAndApplyAction = async (req: Request, res: Response) => {
       }));
       await TrainingPlan.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
       const created = await TrainingPlan.create({ userId, version: nextVersion, isCurrent: true, sessions });
-      await ChangeLog.create({ userId, area: 'training', summary: `Byttet ${oldName} til ${newName}`, fromVersion: current.version, toVersion: nextVersion });
+      try { await ChangeEvent.create({ user: userId as any, type: 'PLAN_EDIT', summary: `Swapped ${oldName} to ${newName}`, actor: (req as any)?.user?._id, before: { fromVersion: current.version }, after: { toVersion: nextVersion } }); } catch {}
+      try { await publish({ type: 'PLAN_UPDATED', user: userId as any }); } catch {}
       return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(created._id) }], summary: `Byttet ${oldName} til ${newName}` });
     }
 
@@ -139,7 +151,8 @@ export const decideAndApplyAction = async (req: Request, res: Response) => {
       const fat = Math.round((kcal * ratio.f) / 9);
       await NutritionPlan.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
       const created = await NutritionPlan.create({ userId, version: nextVersion, isCurrent: true, dailyTargets: { kcal, protein, carbs, fat }, notes: current?.notes || '' });
-      await ChangeLog.create({ userId, area: 'nutrition', summary: `Satte kalorier til ${kcal}`, fromVersion: current?.version, toVersion: nextVersion });
+      try { await ChangeEvent.create({ user: userId as any, type: 'NUTRITION_EDIT', summary: `Set calories to ${kcal}`, actor: (req as any)?.user?._id, before: { fromVersion: current?.version }, after: { toVersion: nextVersion, kcal } }); } catch {}
+      try { await publish({ type: 'NUTRITION_UPDATED', user: userId as any }); } catch {}
       return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'nutrition', planId: String(created._id) }], summary: `Kalorier satt til ${kcal}` });
     }
 
@@ -151,7 +164,7 @@ export const decideAndApplyAction = async (req: Request, res: Response) => {
       const nextVersion = (current?.version || 0) + 1;
       await Goal.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
       const created = await Goal.create({ userId, version: nextVersion, isCurrent: true, targetWeightKg: target, strengthTargets: current?.strengthTargets || '', horizonWeeks: current?.horizonWeeks || 8 });
-      await ChangeLog.create({ userId, area: 'goal', summary: `Oppdatert vektmål til ${target}kg`, fromVersion: current?.version, toVersion: nextVersion });
+      try { await ChangeEvent.create({ user: userId as any, type: 'PLAN_EDIT', summary: `Updated target weight to ${target}kg`, actor: (req as any)?.user?._id, before: { fromVersion: current?.version }, after: { toVersion: nextVersion, target } }); } catch {}
       return res.json({ actions: [{ type: 'GOAL_SET', goalId: String(created._id) }], summary: `Vektmål oppdatert til ${target}kg` });
     }
 

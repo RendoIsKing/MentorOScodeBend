@@ -1,0 +1,37 @@
+version: '3.9'
+services:
+  mongo:
+    image: mongo:6
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+  backend:
+    build: .
+    command: npm run dev
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/mentoros
+      - PORT=3006
+      - SENTRY_DSN=${SENTRY_DSN}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - STRIPE_CURRENCY=${STRIPE_CURRENCY}
+    depends_on:
+      - mongo
+    ports:
+      - "3006:3006"
+  frontend:
+    build: ../frontend
+    command: npm run dev
+    environment:
+      - NEXT_PUBLIC_API_SERVER=http://backend:3006/api/backend
+      - SENTRY_DSN=${SENTRY_DSN}
+    depends_on:
+      - backend
+    ports:
+      - "3002:3002"
+volumes:
+  mongo_data:
+
+

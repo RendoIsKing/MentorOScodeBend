@@ -2,6 +2,8 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { ChatThread, ChatMessage } from '../models/chat';
 import { sseAddClient, sseRemoveClient, ssePush } from '../lib/sseHub';
+import { Auth as ensureAuth } from '../app/Middlewares';
+import { perUserIpLimiter } from '../app/Middlewares/rateLimiters';
 
 const r = Router();
 
@@ -10,7 +12,7 @@ function me(req: Request) {
   return req.user?._id?.toString?.();
 }
 
-r.post('/threads', async (req, res) => {
+r.post('/threads', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { userId } = req.body || {};
@@ -23,14 +25,14 @@ r.post('/threads', async (req, res) => {
   res.json({ threadId: thread._id.toString() });
 });
 
-r.get('/threads', async (req, res) => {
+r.get('/threads', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const threads = await ChatThread.find({ participants: myId }).sort({ lastMessageAt: -1 }).lean();
   res.json({ threads: threads.map(t=>({ id: t._id.toString(), lastMessageAt: t.lastMessageAt, lastMessageText: t.lastMessageText || '', unread: (t.unread?.get(myId) ?? 0), participants: t.participants.map(String) })) });
 });
 
-r.get('/threads/:id/messages', async (req, res) => {
+r.get('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { id } = req.params;
@@ -41,7 +43,7 @@ r.get('/threads/:id/messages', async (req, res) => {
   res.json({ messages: messages.reverse().map(m=>({ id: m._id.toString(), text: m.text, sender: m.sender.toString(), createdAt: m.createdAt })), nextCursor: messages.length ? messages[0]._id.toString() : null });
 });
 
-r.post('/threads/:id/messages', async (req, res) => {
+r.post('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { id } = req.params;
@@ -64,7 +66,7 @@ r.post('/threads/:id/messages', async (req, res) => {
   res.json({ ok: true, id: msg._id.toString() });
 });
 
-r.post('/threads/:id/read', async (req, res) => {
+r.post('/threads/:id/read', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { id } = req.params;
@@ -78,7 +80,7 @@ r.post('/threads/:id/read', async (req, res) => {
   res.json({ ok: true });
 });
 
-r.get('/sse', (req: any, res: Response) => {
+r.get('/sse', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 30 }), (req: any, res: Response) => {
   const myId = me(req);
   if (!myId) return res.status(401).end();
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });

@@ -1,7 +1,10 @@
 import { Router, Request, Response } from "express";
+import { z } from 'zod';
+import { Auth as ensureAuth } from '../app/Middlewares';
+import { perUserIpLimiter } from '../app/Middlewares/rateLimiters';
 import { WeightEntry } from "../app/Models/WeightEntry";
 import { Types } from "mongoose";
-import { TrainingPlan, NutritionPlan, Goal, ChangeLog } from "../app/Models/PlanModels";
+import { TrainingPlan, NutritionPlan, Goal } from "../app/Models/PlanModels";
 import ChangeEvent from "../models/ChangeEvent";
 import { publish } from "../services/events/publish";
 import jwt from 'jsonwebtoken';
@@ -9,6 +12,34 @@ import { ExerciseProgress } from "../app/Models/ExerciseProgress";
 import WorkoutLog from "../models/WorkoutLog";
 
 const StudentRoutes: Router = Router();
+// Recent changes endpoint
+StudentRoutes.get('/:userId/changes', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params as any;
+    const limRaw = (req.query.limit as string) || '10';
+    const limit = Math.max(1, Math.min(50, Number(limRaw) || 10));
+    if (!Types.ObjectId.isValid(userId)) return res.status(400).json({ message: 'Bad userId' });
+    const items = await ChangeEvent.find({ user: new Types.ObjectId(userId) }).sort({ createdAt: -1 }).limit(limit).lean();
+    return res.json({ items: items.map((c:any)=>({
+      id: String(c._id),
+      date: c.createdAt,
+      type: c.type,
+      summary: c.summary,
+      rationale: c.rationale,
+      actor: c.actor ? String(c.actor) : undefined,
+      before: c.before,
+      after: c.after,
+    })) });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to load changes' });
+  }
+});
+
+// Zod schemas for validation
+const NonEmptyString = z.string().trim().min(1);
+const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const WeightLogSchema = z.object({ date: IsoDate, kg: z.number().min(30).max(400) });
+const ExerciseProgressSchema = z.object({ exercise: NonEmptyString, date: IsoDate, value: z.number() });
 
 type Period = '7d' | '30d' | '90d' | 'ytd';
 
@@ -44,7 +75,7 @@ function generateDates(period: Period): string[] {
   });
 }
 
-StudentRoutes.get('/:userId/snapshot', async (req: Request, res: Response) => {
+StudentRoutes.get('/:userId/snapshot', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
   try {
     let { userId } = req.params as any;
     const period = (req.query.period as Period) || '30d';
@@ -103,7 +134,7 @@ StudentRoutes.get('/:userId/snapshot', async (req: Request, res: Response) => {
       ? await NutritionPlan.findOne({ userId: resolvedUserIdForPlans, isCurrent: true }).sort({ version: -1 }).lean()
       : null;
     const changes = resolvedUserIdForPlans && Types.ObjectId.isValid(resolvedUserIdForPlans)
-      ? await ChangeLog.find({ userId: resolvedUserIdForPlans }).sort({ createdAt: -1 }).limit(10).lean()
+      ? await ChangeEvent.find({ user: new Types.ObjectId(resolvedUserIdForPlans) }).sort({ createdAt: -1 }).limit(10).lean()
       : [];
 
     const trainingSessions = (currentTraining?.sessions || []).map((s:any, idx:number)=>({
@@ -168,7 +199,7 @@ StudentRoutes.get('/:userId/snapshot', async (req: Request, res: Response) => {
 });
 
 // Convenience route: resolve userId from cookie/JWT and return snapshot
-StudentRoutes.get('/me/snapshot', async (req: Request, res: Response) => {
+StudentRoutes.get('/me/snapshot', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
   try {
     // Resolve user id
     let resolvedUserId: any = (req as any)?.user?._id;
@@ -213,7 +244,7 @@ StudentRoutes.get('/me/snapshot', async (req: Request, res: Response) => {
     const currentNutrition = await NutritionPlan.findOne({ userId: resolvedUserId, isCurrent: true })
       .sort({ version: -1 })
       .lean();
-    const changes = await ChangeLog.find({ userId: resolvedUserId }).sort({ createdAt: -1 }).limit(10).lean();
+    const changes = await ChangeEvent.find({ user: new Types.ObjectId(resolvedUserId) }).sort({ createdAt: -1 }).limit(10).lean();
     const trainingSessions = (currentTraining?.sessions || []).map((s: any, idx: number) => ({
       id: String(currentTraining?._id),
       index: idx,
@@ -241,7 +272,7 @@ StudentRoutes.get('/me/snapshot', async (req: Request, res: Response) => {
             },
           ]
         : [],
-      planChanges: changes.map((c: any) => ({ id: String(c._id), date: c.createdAt, author: 'coach-engh', area: c.area, summary: c.summary })),
+      planChanges: changes.map((c: any) => ({ id: String(c._id), date: c.createdAt, author: String(c.actor || 'coach-engh'), area: c.type.includes('NUTRITION') ? 'nutrition' : (c.type.includes('PLAN') ? 'training' : 'other'), summary: c.summary })),
       glance: {
         nextSession: { date: today.toISOString(), focus: 'Pull — rygg/biceps' },
         adherence7d: 0.86,
@@ -272,7 +303,7 @@ StudentRoutes.get('/me/snapshot', async (req: Request, res: Response) => {
   }
 });
 
-StudentRoutes.get('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Request, res: Response) => {
+StudentRoutes.get('/:userId([0-9a-fA-F]{24})/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
   try {
     const period = (req.query.period as Period) || '30d';
     const exercise = (req.query.exercise as string) || '';
@@ -296,7 +327,7 @@ StudentRoutes.get('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Req
 });
 
 // /me exercise-progress variants resolve user from cookie/JWT like snapshot
-StudentRoutes.get('/me/exercise-progress', async (req: Request, res: Response) => {
+StudentRoutes.get('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
   try {
     // resolve user id from cookie/JWT
     let resolvedUserId: any = (req as any)?.user?._id;
@@ -331,7 +362,7 @@ StudentRoutes.get('/me/exercise-progress', async (req: Request, res: Response) =
   }
 });
 
-StudentRoutes.post('/me/exercise-progress', async (req: Request, res: Response) => {
+StudentRoutes.post('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
   try {
     let resolvedUserId: any = (req as any)?.user?._id;
     if (!resolvedUserId) {
@@ -346,11 +377,12 @@ StudentRoutes.post('/me/exercise-progress', async (req: Request, res: Response) 
         } catch {}
       }
     }
-    const { exercise, date, value } = req.body || {};
-    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId) || !exercise || !date || typeof value !== 'number') {
-      return res.status(400).json({ message: 'exercise, date, value required' });
+    const parsed = ExerciseProgressSchema.safeParse(req.body || {});
+    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId)) {
+      return res.status(401).json({ message: 'Unauthorized' });
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
+    if (!parsed.success) return res.status(422).json({ message: 'validation_failed', details: parsed.error.flatten() });
+    const { exercise, date, value } = parsed.data;
     await ExerciseProgress.updateOne(
       { userId: new Types.ObjectId(resolvedUserId), exercise, date },
       { $set: { value } },
@@ -362,7 +394,7 @@ StudentRoutes.post('/me/exercise-progress', async (req: Request, res: Response) 
   }
 });
 
-StudentRoutes.put('/me/exercise-progress', async (req: Request, res: Response) => {
+StudentRoutes.put('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
   try {
     let resolvedUserId: any = (req as any)?.user?._id;
     if (!resolvedUserId) {
@@ -377,11 +409,12 @@ StudentRoutes.put('/me/exercise-progress', async (req: Request, res: Response) =
         } catch {}
       }
     }
-    const { exercise, date, value } = req.body || {};
-    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId) || !exercise || !date || typeof value !== 'number') {
-      return res.status(400).json({ message: 'exercise, date, value required' });
+    const parsed = ExerciseProgressSchema.safeParse(req.body || {});
+    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId)) {
+      return res.status(401).json({ message: 'Unauthorized' });
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
+    if (!parsed.success) return res.status(422).json({ message: 'validation_failed', details: parsed.error.flatten() });
+    const { exercise, date, value } = parsed.data;
     await ExerciseProgress.updateOne(
       { userId: new Types.ObjectId(resolvedUserId), exercise, date },
       { $set: { value } },
@@ -393,7 +426,7 @@ StudentRoutes.put('/me/exercise-progress', async (req: Request, res: Response) =
   }
 });
 
-StudentRoutes.delete('/me/exercise-progress', async (req: Request, res: Response) => {
+StudentRoutes.delete('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
   try {
     let resolvedUserId: any = (req as any)?.user?._id;
     if (!resolvedUserId) {
@@ -421,23 +454,17 @@ StudentRoutes.delete('/me/exercise-progress', async (req: Request, res: Response
 });
 
 // Minimal weight check-in endpoint (placeholder for real persistence)
-StudentRoutes.post('/:userId/weights', async (req: Request, res: Response) => {
+StudentRoutes.post('/:userId/weights', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
   try {
-    const { date, kg } = req.body || {};
     const { userId } = req.params;
-    if (!date || typeof kg !== 'number' || !Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ message: 'date and kg are required' });
-    }
-    // basic validation: ISO date not in future, kg sane
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
-    }
+    const parsed = WeightLogSchema.safeParse(req.body || {});
+    if (!Types.ObjectId.isValid(userId)) return res.status(400).json({ message: 'Bad userId' });
+    if (!parsed.success) return res.status(422).json({ message: 'validation_failed', details: parsed.error.flatten() });
+    const { date, kg } = parsed.data;
+    // basic validation: ISO date not in future
     const todayIso = new Date().toISOString().slice(0,10);
     if (date > todayIso) {
       return res.status(400).json({ message: 'date cannot be in the future' });
-    }
-    if (kg < 30 || kg > 400) {
-      return res.status(400).json({ message: 'kg must be between 30 and 400' });
     }
     await WeightEntry.updateOne(
       { userId: new Types.ObjectId(userId), date },
@@ -445,7 +472,7 @@ StudentRoutes.post('/:userId/weights', async (req: Request, res: Response) => {
       { upsert: true }
     );
     try {
-      await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight ${kg}kg on ${date}` });
+      await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight ${kg}kg on ${date}` , actor: (req as any)?.user?._id, after: { date, kg } });
       await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId), date, kg });
     } catch {}
     return res.status(200).json({ ok: true });
@@ -455,22 +482,16 @@ StudentRoutes.post('/:userId/weights', async (req: Request, res: Response) => {
 });
 
 // Update a weight entry (upsert) for a given date
-StudentRoutes.put('/:userId/weights', async (req: Request, res: Response) => {
+StudentRoutes.put('/:userId/weights', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
   try {
-    const { date, kg } = req.body || {};
     const { userId } = req.params;
-    if (!date || typeof kg !== 'number' || !Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ message: 'date and kg are required' });
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
-    }
+    const parsed = WeightLogSchema.safeParse(req.body || {});
+    if (!Types.ObjectId.isValid(userId)) return res.status(400).json({ message: 'Bad userId' });
+    if (!parsed.success) return res.status(422).json({ message: 'validation_failed', details: parsed.error.flatten() });
+    const { date, kg } = parsed.data;
     const todayIso = new Date().toISOString().slice(0,10);
     if (date > todayIso) {
       return res.status(400).json({ message: 'date cannot be in the future' });
-    }
-    if (kg < 30 || kg > 400) {
-      return res.status(400).json({ message: 'kg must be between 30 and 400' });
     }
     await WeightEntry.updateOne(
       { userId: new Types.ObjectId(userId), date },
@@ -478,7 +499,7 @@ StudentRoutes.put('/:userId/weights', async (req: Request, res: Response) => {
       { upsert: true }
     );
     try {
-      await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight updated to ${kg}kg on ${date}` });
+      await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight updated to ${kg}kg on ${date}`, actor: (req as any)?.user?._id, after: { date, kg } });
       await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId), date, kg });
     } catch {}
     return res.status(200).json({ ok: true });
@@ -488,7 +509,7 @@ StudentRoutes.put('/:userId/weights', async (req: Request, res: Response) => {
 });
 
 // Delete a weight entry by date
-StudentRoutes.delete('/:userId/weights', async (req: Request, res: Response) => {
+StudentRoutes.delete('/:userId/weights', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
   try {
     const date = req.query.date as string | undefined;
     const { userId } = req.params;

@@ -35,6 +35,7 @@ import {
 
 import { local, jwt } from "./utils/strategies";
 import { OnlyAdmins, Auth } from "./app/Middlewares";
+import { requireEntitlement } from './app/Middlewares/requireEntitlement';
 import { FileEnum } from "./types/FileEnum";
 import PostRoutes from "./routes/post.routes";
 import InteractionRoutes from "./routes/interaction.routes";
@@ -188,13 +189,13 @@ export class Server {
     // Student routes must be accessible with cookie-based auth inside the route (no bearer required)
     this.app.use("/api/backend/v1/student", StudentRoutes);
     this.app.use("/api/backend/v1/student", studentSnapshotRouter);
-    this.app.use("/api/backend/v1/feature", Auth, FeatureRoutes);
+    this.app.use("/api/backend/v1/feature", Auth, requireEntitlement as any, FeatureRoutes);
     this.app.use("/api/backend/v1/card-details", CardDetailsRoutes);
     this.app.use("/api/backend/v1/subscriptions", Auth, SubscriptionRoutes);
     this.app.use("/api/backend/v1/support", Auth, SupportRoutes);
     this.app.use("/api/backend/v1/transactions", Auth, TransactionRoutes);
     this.app.use("/api/backend/v1/notifications", Auth, NotificationRoutes);
-    this.app.use("/api/backend/v1/more-actions", Auth, moreActionRoutes);
+    this.app.use("/api/backend/v1/more-actions", Auth, requireEntitlement as any, moreActionRoutes);
     this.app.use("/api/backend/v1/process-data", Auth, userDataRoutes);
     this.app.use("/api/backend/v1/preonboarding", preonboardingRoutes);
     this.app.use('/api/backend/v1/chat', chatRoutes);

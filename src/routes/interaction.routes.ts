@@ -1,4 +1,7 @@
 import { Router } from "express";
+import { z } from 'zod';
+import { Auth as ensureAuth } from "../app/Middlewares";
+import { perUserIpLimiter } from "../app/Middlewares/rateLimiters";
 import { InteractionController } from "../app/Controllers/Interaction";
 import { chatWithCoachEngh, chatWithCoachMajen } from "../app/Controllers/Interaction/chat.controller";
 import { generateFirstPlans } from "../app/Controllers/Interaction/generateFirstPlans";
@@ -69,23 +72,24 @@ InteractionRoutes.post(
 InteractionRoutes.post("/log-view", Auth, InteractionController.logView);
 
 // New route for Coach Engh chat
-InteractionRoutes.post("/chat/engh", chatWithCoachEngh);
+InteractionRoutes.post("/chat/engh", ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), chatWithCoachEngh);
 // Coach Majen avatar chat (mirror of Engh path shape)
-InteractionRoutes.post("/chat/majen", chatWithCoachMajen);
-InteractionRoutes.post('/chat/engh/plans/generate-first', generateFirstPlans);
+InteractionRoutes.post("/chat/majen", ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), chatWithCoachMajen);
+InteractionRoutes.post('/chat/engh/plans/generate-first', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 20 }), generateFirstPlans);
 // Open endpoint publicly (no Auth) to make it easy to call from chat UI
-InteractionRoutes.post('/chat/engh/action', decideAndApplyAction);
+InteractionRoutes.post('/chat/engh/action', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 30 }), decideAndApplyAction);
 // Unified actions endpoint (rules engine)
-type ActionBody = { type: string; payload?: any; userId?: string };
+const ActionSchema = z.object({
+  type: z.enum(['PLAN_SWAP_EXERCISE','PLAN_SET_DAYS_PER_WEEK','NUTRITION_SET_CALORIES','WEIGHT_LOG','WEIGHT_DELETE']),
+  payload: z.any().optional(),
+});
+type ActionBody = z.infer<typeof ActionSchema> & { userId?: string };
 function validateActionBody(body: any, userId: string): { ok: true; data: ActionBody } | { ok: false; error: any }{
-  const allowed = ['PLAN_SWAP_EXERCISE','PLAN_SET_DAYS_PER_WEEK','NUTRITION_SET_CALORIES','WEIGHT_LOG','WEIGHT_DELETE'];
-  const type = String((body||{}).type || '');
-  if (!allowed.includes(type)) return { ok: false, error: { message: 'invalid type' } } as const;
-  const payload = (body||{}).payload;
-  if (payload != null && typeof payload !== 'object') return { ok: false, error: { message: 'payload must be object' } } as const;
-  return { ok: true, data: { type, payload, userId } } as const;
+  const parsed = ActionSchema.safeParse(body);
+  if (!parsed.success) return { ok: false, error: parsed.error.flatten() } as const;
+  return { ok: true, data: { ...parsed.data, userId } } as const;
 }
-InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
+InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
   try {
     let userId: any = (req as any).user?._id || req.body.userId || (req as any).session?.user?.id;
     if (!userId) {
@@ -113,7 +117,7 @@ InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
     }
     if (!userId) return res.status(400).json({ error: 'userId required' });
     const validated = validateActionBody(req.body, typeof userId==='string'?userId: String(userId||''));
-    if (!validated.ok) return res.status(400).json({ error: 'Invalid payload', details: validated.error });
+    if (!validated.ok) return res.status(422).json({ error: 'validation_failed', details: validated.error });
     const { type, payload } = validated.data as any;
 
     // Safety rails
@@ -157,14 +161,14 @@ InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
     if (type === 'NUTRITION_SET_CALORIES') {
       const kcal = Number(payload?.kcal);
       const ret = await applyNutritionPatch(userId, { kcal, reason: { summary: `Kalorier satt til ${kcal}` } } as any);
-      try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Satte kalorier: ${kcal} kcal` }); } catch {}
+      try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Satte kalorier: ${kcal} kcal`, actor: (req as any)?.user?._id, before: { current: state?.currentNutritionPlanVersion }, after: { kcal } }); } catch {}
       return res.json({ ok: true, summary: `Kalorier satt til ${kcal}`, ...ret });
     }
     if (type === 'WEIGHT_LOG') {
       const { date, kg } = payload || {};
       const { WeightEntry } = await import('../app/Models/WeightEntry');
       await WeightEntry.updateOne({ userId, date }, { $set: { kg } }, { upsert: true });
-      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})` }); } catch {}
+      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})`, actor: (req as any)?.user?._id, after: { date, kg } }); } catch {}
       await publish({ type: 'WEIGHT_LOGGED', user: userId, date, kg });
       return res.json({ ok: true, summary: `Vekt ${kg}kg lagret` });
     }
@@ -172,7 +176,7 @@ InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
       const { date } = payload || {};
       const { WeightEntry } = await import('../app/Models/WeightEntry');
       await WeightEntry.deleteOne({ userId, date });
-      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}` }); } catch {}
+      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}`, actor: (req as any)?.user?._id, before: { date } }); } catch {}
       await publish({ type: 'WEIGHT_DELETED', user: userId as any, date });
       return res.json({ ok: true, summary: `Vekt slettet (${date})` });
     }
@@ -184,7 +188,7 @@ InteractionRoutes.post('/interaction/actions/apply', async (req, res) => {
 
 // Alias without the extra "/interaction" segment so final path is
 // /api/backend/v1/interaction/actions/apply (expected by FE/tests)
-InteractionRoutes.post('/actions/apply', async (req, res) => {
+InteractionRoutes.post('/actions/apply', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
   try {
     let userId: any = (req as any).user?._id || req.body.userId;
     if (!userId) {
@@ -212,7 +216,7 @@ InteractionRoutes.post('/actions/apply', async (req, res) => {
     }
     if (!userId) return res.status(400).json({ error: 'userId required' });
     const validated = validateActionBody(req.body, typeof userId==='string'?userId: String(userId||''));
-    if (!validated.ok) return res.status(400).json({ error: 'Invalid payload', details: validated.error });
+    if (!validated.ok) return res.status(422).json({ error: 'validation_failed', details: validated.error });
     const { type, payload } = validated.data as any;
 
     const MIN_KCAL = 1200;
@@ -254,14 +258,14 @@ InteractionRoutes.post('/actions/apply', async (req, res) => {
     if (type === 'NUTRITION_SET_CALORIES') {
       const kcal = Number(payload?.kcal);
       const ret = await applyNutritionPatch(userId, { kcal, reason: { summary: `Kalorier satt til ${kcal}` } } as any);
-      try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Satte kalorier: ${kcal} kcal` }); } catch {}
+      try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Satte kalorier: ${kcal} kcal`, actor: (req as any)?.user?._id, before: { current: state?.currentNutritionPlanVersion }, after: { kcal } }); } catch {}
       return res.json({ ok: true, summary: `Kalorier satt til ${kcal}`, ...ret });
     }
     if (type === 'WEIGHT_LOG') {
       const { date, kg } = payload || {};
       const { WeightEntry } = await import('../app/Models/WeightEntry');
       await WeightEntry.updateOne({ userId, date }, { $set: { kg } }, { upsert: true });
-      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})` }); } catch {}
+      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})`, actor: (req as any)?.user?._id, after: { date, kg } }); } catch {}
       await publish({ type: 'WEIGHT_LOGGED', user: userId, date, kg });
       return res.json({ ok: true, summary: `Vekt ${kg}kg lagret` });
     }
@@ -269,7 +273,7 @@ InteractionRoutes.post('/actions/apply', async (req, res) => {
       const { date } = payload || {};
       const { WeightEntry } = await import('../app/Models/WeightEntry');
       await WeightEntry.deleteOne({ userId, date });
-      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}` }); } catch {}
+      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}`, actor: (req as any)?.user?._id, before: { date } }); } catch {}
       await publish({ type: 'WEIGHT_DELETED', user: userId as any, date });
       return res.json({ ok: true, summary: `Vekt slettet (${date})` });
     }
@@ -281,7 +285,7 @@ InteractionRoutes.post('/actions/apply', async (req, res) => {
 
   // Apply a plan change proposed by AI (text plan with strict header)
   // Body: { text: string, userId?: string }
-  InteractionRoutes.post('/actions/applyPlanChange', async (req, res) => {
+InteractionRoutes.post('/actions/applyPlanChange', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 20 }), async (req, res) => {
     try {
       const text: string = String((req.body||{}).text || '').trim();
       if (!text) return res.status(400).json({ ok:false, error: 'text_required' });
@@ -344,12 +348,12 @@ InteractionRoutes.post('/actions/apply', async (req, res) => {
 // Thread persistence (parameterized partner)
 InteractionRoutes.get('/chat/:partner/thread', Auth, getThread);
 // Make thread persistence usable from public avatar chat pages
-InteractionRoutes.get('/chat/:partner/messages', getThread);
-InteractionRoutes.post('/chat/:partner/message', appendMessage);
-InteractionRoutes.post('/chat/:partner/clear', clearThread);
+InteractionRoutes.get('/chat/:partner/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), getThread);
+InteractionRoutes.post('/chat/:partner/message', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), appendMessage);
+InteractionRoutes.post('/chat/:partner/clear', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 20 }), clearThread);
 
 // Get current goal for user
-InteractionRoutes.get('/chat/engh/goals/current', async (req, res) => {
+InteractionRoutes.get('/chat/engh/goals/current', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   try {
     const userId = (req as any).user?._id || (req.query.userId as string) || ((): string | undefined => {
       const cookie = req.headers?.cookie as string | undefined;
@@ -373,7 +377,7 @@ InteractionRoutes.get('/chat/engh/goals/current', async (req, res) => {
 });
 
 // Get current training plan for user (mirrors goals/current behavior)
-InteractionRoutes.get('/chat/engh/training/current', async (req, res) => {
+InteractionRoutes.get('/chat/engh/training/current', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   try {
     const userId = (req as any).user?._id || (req.query.userId as string) || ((): string | undefined => {
       const cookie = req.headers?.cookie as string | undefined;
@@ -397,7 +401,7 @@ InteractionRoutes.get('/chat/engh/training/current', async (req, res) => {
 });
 
 // Get current nutrition plan for user
-InteractionRoutes.get('/chat/engh/nutrition/current', async (req, res) => {
+InteractionRoutes.get('/chat/engh/nutrition/current', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   try {
     const userId = (req as any).user?._id || (req.query.userId as string) || ((): string | undefined => {
       const cookie = req.headers?.cookie as string | undefined;
@@ -421,7 +425,7 @@ InteractionRoutes.get('/chat/engh/nutrition/current', async (req, res) => {
 });
 
 // Upload coach knowledge files (for now, tied to Coach Engh; later use coachId param)
-InteractionRoutes.post('/chat/engh/knowledge/upload', knowledgeUpload.single('file'), async (req, res) => {
+InteractionRoutes.post('/chat/engh/knowledge/upload', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 10 }), knowledgeUpload.single('file'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ message: 'file is required' });
@@ -439,7 +443,7 @@ InteractionRoutes.post('/chat/engh/knowledge/upload', knowledgeUpload.single('fi
 });
 
 // Save free-form text knowledge
-InteractionRoutes.post('/chat/engh/knowledge/text', async (req, res) => {
+InteractionRoutes.post('/chat/engh/knowledge/text', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 30 }), async (req, res) => {
   try {
     const { text, title } = req.body || {};
     if (!text) return res.status(400).json({ message: 'text is required' });
@@ -451,7 +455,7 @@ InteractionRoutes.post('/chat/engh/knowledge/text', async (req, res) => {
 });
 
 // First-time profile save/update
-InteractionRoutes.post('/chat/engh/profile', async (req, res) => {
+InteractionRoutes.post('/chat/engh/profile', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 30 }), async (req, res) => {
   try {
     let userId = (req as any).user?._id || req.body.userId;
     if (!userId) {
@@ -480,7 +484,7 @@ InteractionRoutes.post('/chat/engh/profile', async (req, res) => {
 });
 
 // Get profile (for onboarding check)
-InteractionRoutes.get('/chat/engh/profile', async (req, res) => {
+InteractionRoutes.get('/chat/engh/profile', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   try {
     let userId = (req as any).user?._id || (req.query.userId as string);
     if (!userId) {
