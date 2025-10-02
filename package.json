@@ -12,7 +12,8 @@
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
-    "webhook:simulate": "node scripts/stripe-webhook-sim.js"
+    "webhook:simulate": "node scripts/stripe-webhook-sim.js",
+    "dev:insert-sub": "node scripts/dev-insert-sub.js"
   },
   "author": "",
   "license": "ISC",

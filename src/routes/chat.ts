@@ -4,6 +4,7 @@ import { ChatThread, ChatMessage } from '../models/chat';
 import { sseAddClient, sseRemoveClient, ssePush } from '../lib/sseHub';
 import { Auth as ensureAuth } from '../app/Middlewares';
 import { perUserIpLimiter } from '../app/Middlewares/rateLimiters';
+import { chatMessageSchema } from '../app/Validation/schemas';
 
 const r = Router();
 
@@ -12,7 +13,7 @@ function me(req: Request) {
   return req.user?._id?.toString?.();
 }
 
-r.post('/threads', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
+r.post('/threads', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }), async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { userId } = req.body || {};
@@ -32,10 +33,13 @@ r.get('/threads', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 1
   res.json({ threads: threads.map(t=>({ id: t._id.toString(), lastMessageAt: t.lastMessageAt, lastMessageText: t.lastMessageText || '', unread: (t.unread?.get(myId) ?? 0), participants: t.participants.map(String) })) });
 });
 
-r.get('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
+r.get('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }), async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { id } = req.params;
+  const thread = await ChatThread.findById(id).lean();
+  if (!thread) return res.status(404).json({ error: 'not found' });
+  if (!thread.participants.map(String).includes(myId)) return res.status(403).json({ error: 'forbidden' });
   const { cursor, limit = 30 } = req.query as any;
   const q: any = { thread: id };
   if (cursor) q._id = { $lt: cursor };
@@ -47,8 +51,9 @@ r.post('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { id } = req.params;
-  const { text } = req.body || {};
-  if (!text || !text.trim()) return res.status(400).json({ error: 'empty' });
+  const parsed = chatMessageSchema.safeParse({ text: (req.body||{}).text });
+  if (!parsed.success) return res.status(422).json({ error: 'validation_failed', details: parsed.error.flatten() });
+  const text = parsed.data.text;
   const thread = await ChatThread.findById(id);
   if (!thread) return res.status(404).json({ error: 'not found' });
   if (!thread.participants.map(String).includes(myId)) return res.status(403).json({ error: 'forbidden' });

@@ -32,8 +32,8 @@ async function main() {
     created: Math.floor(Date.now() / 1000),
     data: {
       object: {
-        object: eventType === 'customer.subscription.updated' ? 'subscription' : 'checkout.session',
-        id: 'obj_test_' + Date.now(),
+        object: eventType.startsWith('customer.subscription') ? 'subscription' : 'checkout.session',
+        id: process.env.TEST_STRIPE_SUB_ID || ('sub_test_' + Date.now()),
         status: 'active',
         customer: 'cus_test_123',
         subscription: 'sub_test_123',

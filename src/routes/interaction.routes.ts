@@ -543,7 +543,7 @@ InteractionRoutes.get('/debug/plans', async (req, res) => {
 });
 
 // Create training plan from free-form text sent by the assistant (quick import)
-InteractionRoutes.post('/chat/engh/training/from-text', async (req, res) => {
+InteractionRoutes.post('/chat/engh/training/from-text', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
     let userId: any = (req as any).user?._id || req.body.userId;
     if (!userId) {
@@ -814,7 +814,7 @@ InteractionRoutes.post('/chat/engh/training/from-text', async (req, res) => {
 });
 
 // Save training plan (create new version)
-InteractionRoutes.post('/chat/engh/training/save', async (req, res) => {
+InteractionRoutes.post('/chat/engh/training/save', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
     let userId: any = (req as any).user?._id || req.body.userId;
     if (!userId) {
@@ -837,7 +837,7 @@ InteractionRoutes.post('/chat/engh/training/save', async (req, res) => {
     const version = await nextTrainingVersion(userId);
     const doc = await TrainingPlanVersion.create({ user: userId, version, source: 'action', reason: 'Saved via chat', days });
     await StudentState.findOneAndUpdate({ user: userId }, { $set: { currentTrainingPlanVersion: doc._id } }, { upsert: true });
-    try { await ChangeEvent.create({ user: userId, type: 'PLAN_EDIT', summary: `Training v${version} saved`, refId: doc._id }); } catch {}
+    try { await ChangeEvent.create({ user: userId, type: 'PLAN_EDIT', summary: `Training v${version} saved`, refId: doc._id, actor: (req as any)?.user?._id, after: { version } }); } catch {}
     try { await publish({ type: 'PLAN_UPDATED', user: userId as any }); } catch {}
     return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(doc._id) }], message: 'Training plan saved' });
   } catch (e) {
@@ -846,7 +846,7 @@ InteractionRoutes.post('/chat/engh/training/save', async (req, res) => {
 });
 
 // Save nutrition plan (create new version)
-InteractionRoutes.post('/chat/engh/nutrition/save', async (req, res) => {
+InteractionRoutes.post('/chat/engh/nutrition/save', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
     let userId: any = (req as any).user?._id || req.body.userId;
     if (!userId) {
@@ -867,7 +867,7 @@ InteractionRoutes.post('/chat/engh/nutrition/save', async (req, res) => {
     const version = await nextNutritionVersion(userId as any);
     const doc = await NutritionPlanVersion.create({ user: userId, version, source: 'action', reason: 'Saved via chat', kcal: dailyTargets.kcal, proteinGrams: dailyTargets.protein, carbsGrams: dailyTargets.carbs, fatGrams: dailyTargets.fat });
     await StudentState.findOneAndUpdate({ user: userId }, { $set: { currentNutritionPlanVersion: doc._id } }, { upsert: true });
-    try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Nutrition v${version} saved`, refId: doc._id }); } catch {}
+    try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Nutrition v${version} saved`, refId: doc._id, actor: (req as any)?.user?._id, after: { version } }); } catch {}
     try { await publish({ type: 'NUTRITION_UPDATED', user: userId as any }); } catch {}
     return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'nutrition', planId: String(doc._id) }], message: 'Meal plan saved' });
   } catch (e) {
@@ -896,7 +896,7 @@ InteractionRoutes.get('/plans/share/nutrition/:id', async (req, res) => {
   }
 });
 // Create nutrition plan from free-form text
-InteractionRoutes.post('/chat/engh/nutrition/from-text', async (req, res) => {
+InteractionRoutes.post('/chat/engh/nutrition/from-text', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
     let userId: any = (req as any).user?._id || req.body.userId;
     if (!userId) {
@@ -1134,7 +1134,7 @@ InteractionRoutes.post('/chat/engh/nutrition/from-text', async (req, res) => {
 });
 
 // Create simple goal from free-form text
-InteractionRoutes.post('/chat/engh/goals/from-text', async (req, res) => {
+InteractionRoutes.post('/chat/engh/goals/from-text', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
     let userId: any = (req as any).user?._id || req.body.userId;
     if (!userId) {
