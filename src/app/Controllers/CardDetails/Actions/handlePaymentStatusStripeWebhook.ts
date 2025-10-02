@@ -4,6 +4,7 @@ import { Transaction } from "../../../Models/Transaction";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import stripeInstance from "../../../../utils/stripe";
 import { Subscription } from "../../../Models/Subscription";
+import { Types } from 'mongoose';
 import * as Sentry from '@sentry/node';
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
 
@@ -66,7 +67,7 @@ const handleSubscriptionEvent = async (event: any) => {
   console.log("Handling subscription event:", subscriptionData);
 
   try {
-    const updatedSubscription = await Subscription.findOneAndUpdate(
+    let updatedSubscription = await Subscription.findOneAndUpdate(
       {
         StripeSubscriptionId: subscriptionData.id,
         status: SubscriptionStatusEnum.INACTIVE,
@@ -81,11 +82,37 @@ const handleSubscriptionEvent = async (event: any) => {
     );
 
     if (!updatedSubscription) {
-      console.error(
-        "Inactive subscription not found for subscription ID:",
-        subscriptionData.id
+      // Fallback: upsert by user (metadata.userId or stripe customer -> User)
+      let userId: any;
+      const metaUserId = (subscriptionData?.metadata && (subscriptionData.metadata.userId || subscriptionData.metadata.userid)) || undefined;
+      if (metaUserId) userId = metaUserId;
+      if (!userId && subscriptionData?.customer) {
+        try {
+          const user = await User.findOne({ stripeClientId: subscriptionData.customer }).lean();
+          if (user?._id) userId = String(user._id);
+        } catch {}
+      }
+      if (!userId) {
+        console.error('Unable to resolve user for subscription', typeof subscriptionData.customer === 'string' ? subscriptionData.customer.slice(-6) : 'unknown');
+        return;
+      }
+      const priceId = (()=>{
+        try { return subscriptionData?.items?.data?.[0]?.price?.id || ''; } catch { return ''; }
+      })();
+      updatedSubscription = await Subscription.findOneAndUpdate(
+        { StripeSubscriptionId: subscriptionData.id },
+        {
+          userId: new Types.ObjectId(userId),
+          planId: new Types.ObjectId(),
+          StripeSubscriptionId: subscriptionData.id,
+          StripePriceId: priceId || 'price_unknown',
+          status: SubscriptionStatusEnum.ACTIVE,
+          startDate: new Date(subscriptionData.start_date * 1000),
+          endDate: new Date(subscriptionData.current_period_end * 1000),
+          stripeSubscriptionObject: JSON.stringify(subscriptionData),
+        },
+        { upsert: true, new: true }
       );
-      return;
     }
 
     try {
