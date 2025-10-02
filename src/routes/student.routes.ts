@@ -35,6 +35,32 @@ StudentRoutes.get('/:userId/changes', ensureAuth as any, perUserIpLimiter({ wind
   }
 });
 
+// Resolve current user's changes via cookie/JWT for convenience
+StudentRoutes.get('/me/changes', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
+  try {
+    let resolvedUserId: any = (req as any)?.user?._id;
+    if (!resolvedUserId) {
+      const cookie = req.headers?.cookie as string | undefined;
+      const match = cookie?.match(/auth_token=([^;]+)/);
+      if (match) {
+        try {
+          const token = decodeURIComponent(match[1]);
+          const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
+          const decoded: any = jwt.verify(token, secret);
+          resolvedUserId = decoded?.id || decoded?._id;
+        } catch {}
+      }
+    }
+    const limRaw = (req.query.limit as string) || '10';
+    const limit = Math.max(1, Math.min(50, Number(limRaw) || 10));
+    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId)) return res.status(401).json({ message: 'Unauthorized' });
+    const items = await ChangeEvent.find({ user: new Types.ObjectId(resolvedUserId) }).sort({ createdAt: -1 }).limit(limit).lean();
+    return res.json({ items: items.map((c:any)=>({ id: String(c._id), date: c.createdAt, type: c.type, summary: c.summary, rationale: c.rationale, actor: c.actor ? String(c.actor) : undefined, before: c.before, after: c.after })) });
+  } catch {
+    return res.status(500).json({ message: 'Failed to load changes' });
+  }
+});
+
 // Zod schemas for validation
 const NonEmptyString = z.string().trim().min(1);
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);

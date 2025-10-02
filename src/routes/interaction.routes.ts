@@ -1198,6 +1198,10 @@ InteractionRoutes.post('/chat/engh/goals/from-text', ensureAuth as any, perUserI
     const nextVersion = (latest?.version || 0) + 1;
     await Goal.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
     const created = await Goal.create({ userId, version: nextVersion, isCurrent: true, targetWeightKg: targetWeight, strengthTargets: strength, horizonWeeks: horizon, sourceText: text, caloriesDailyDeficit: deficit, weeklyWeightLossKg: weeklyLoss, weeklyExerciseMinutes: weeklyMinutes, hydrationLiters: hydration, plan });
+    try {
+      await ChangeEvent.create({ user: userId, type: 'PLAN_EDIT', summary: 'Goal imported from text', actor: (req as any)?.user?._id, after: { goalId: created._id, version: nextVersion } });
+      await publish({ type: 'GOAL_UPDATED', user: userId as any });
+    } catch {}
     return res.json({ actions: [{ type: 'GOAL_SET', goalId: String(created._id) }], message: 'Goal imported to Assets' });
   } catch (e) {
     return res.status(500).json({ message: 'import failed' });
