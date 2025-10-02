@@ -10,10 +10,12 @@ export const createSessionAction = async (
 ): Promise<Response> => {
   try {
     const user = req.user as UserInterface;
+    const idempotencyKey = (req.headers['idempotency-key'] as string) || undefined;
     let data = {
       amount: 0,
       userId: user.id,
       clientStripeId: user.stripeClientId,
+      idempotencyKey,
     };
 
     if (!user.stripeClientId) {
@@ -29,7 +31,7 @@ export const createSessionAction = async (
       data.clientStripeId = customer.id;
     }
 
-    const response: any = await createPaymentIntent(data);
+    const response: any = await createPaymentIntent(data as any);
     const sessionObject = {
       clientSecret: response?.client_secret ?? null,
       status: response?.status ?? null,

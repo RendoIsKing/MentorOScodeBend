@@ -8,17 +8,22 @@ const createPaymentIntent = async (params: {
   amount: number;
   userId: Types.ObjectId;
   clientStripeId: string;
+  idempotencyKey?: string;
 }) => {
   try {
     if (!process.env.STRIPE_CURRENCY) {
       throw new Error("STRIPE_CURRENCY is mising");
     }
     if (params.amount === 0) {
-      let intentInstance = await stripeInstance.setupIntents.create({
-        usage: "off_session",
-        payment_method_types: ["card"],
-        customer: params.clientStripeId,
-      });
+      let intentInstance = await stripeInstance.setupIntents.create(
+        {
+          usage: "off_session",
+          payment_method_types: ["card"],
+          customer: params.clientStripeId,
+          metadata: { userId: String(params.userId) },
+        },
+        params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined as any
+      );
 
       await Transaction.create({
         userId: params.userId,
@@ -31,11 +36,16 @@ const createPaymentIntent = async (params: {
 
       return intentInstance;
     } else {
-      let paymentInstanceIntent = await stripeInstance.paymentIntents.create({
-        amount: params.amount,
-        currency: `${process.env.STRIPE_CURRENCY}`,
-        automatic_payment_methods: { enabled: true },
-      });
+      let paymentInstanceIntent = await stripeInstance.paymentIntents.create(
+        {
+          amount: params.amount,
+          currency: `${process.env.STRIPE_CURRENCY}`,
+          automatic_payment_methods: { enabled: true },
+          customer: params.clientStripeId,
+          metadata: { userId: String(params.userId) },
+        },
+        params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined as any
+      );
 
       await Transaction.create({
         userId: params.userId,
