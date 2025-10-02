@@ -4,3 +4,4 @@ node_modules
 public/category-data
 public/profile-image
 dist
+*.zip
