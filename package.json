@@ -11,7 +11,8 @@
     "start": "node ./dist",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
-    "test:cov": "jest --coverage"
+    "test:cov": "jest --coverage",
+    "webhook:simulate": "node scripts/stripe-webhook-sim.js"
   },
   "author": "",
   "license": "ISC",

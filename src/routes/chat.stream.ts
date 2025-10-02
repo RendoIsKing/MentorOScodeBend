@@ -5,7 +5,7 @@ import { perUserIpLimiter } from '../app/Middlewares/rateLimiters';
 
 const r = Router();
 
-r.get('/events/stream', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 30 }), (req: any, res) => {
+r.get('/events/stream', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_SSE_PER_MIN || 30) }), (req: any, res) => {
   const me = String(req?.user?._id || '');
   if (!me) return res.status(401).end();
 

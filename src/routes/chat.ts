@@ -43,7 +43,7 @@ r.get('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 6
   res.json({ messages: messages.reverse().map(m=>({ id: m._id.toString(), text: m.text, sender: m.sender.toString(), createdAt: m.createdAt })), nextCursor: messages.length ? messages[0]._id.toString() : null });
 });
 
-r.post('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
+r.post('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }), async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { id } = req.params;
@@ -66,7 +66,7 @@ r.post('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 
   res.json({ ok: true, id: msg._id.toString() });
 });
 
-r.post('/threads/:id/read', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
+r.post('/threads/:id/read', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }), async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { id } = req.params;
@@ -80,7 +80,7 @@ r.post('/threads/:id/read', ensureAuth as any, perUserIpLimiter({ windowMs: 60_0
   res.json({ ok: true });
 });
 
-r.get('/sse', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 30 }), (req: any, res: Response) => {
+r.get('/sse', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_SSE_PER_MIN || 30) }), (req: any, res: Response) => {
   const myId = me(req);
   if (!myId) return res.status(401).end();
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });

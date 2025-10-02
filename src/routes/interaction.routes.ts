@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from 'zod';
+import { ActionSchema, type ActionBody, DaysPerWeekSchema, NutritionCaloriesSchema, SwapExerciseSchema, WeightDeleteSchema, WeightLogSchema } from '../app/Validation/schemas';
 import { Auth as ensureAuth } from "../app/Middlewares";
 import { perUserIpLimiter } from "../app/Middlewares/rateLimiters";
 import { InteractionController } from "../app/Controllers/Interaction";
@@ -79,17 +80,12 @@ InteractionRoutes.post('/chat/engh/plans/generate-first', ensureAuth as any, per
 // Open endpoint publicly (no Auth) to make it easy to call from chat UI
 InteractionRoutes.post('/chat/engh/action', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 30 }), decideAndApplyAction);
 // Unified actions endpoint (rules engine)
-const ActionSchema = z.object({
-  type: z.enum(['PLAN_SWAP_EXERCISE','PLAN_SET_DAYS_PER_WEEK','NUTRITION_SET_CALORIES','WEIGHT_LOG','WEIGHT_DELETE']),
-  payload: z.any().optional(),
-});
-type ActionBody = z.infer<typeof ActionSchema> & { userId?: string };
 function validateActionBody(body: any, userId: string): { ok: true; data: ActionBody } | { ok: false; error: any }{
   const parsed = ActionSchema.safeParse(body);
   if (!parsed.success) return { ok: false, error: parsed.error.flatten() } as const;
   return { ok: true, data: { ...parsed.data, userId } } as const;
 }
-InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
+InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
     let userId: any = (req as any).user?._id || req.body.userId || (req as any).session?.user?.id;
     if (!userId) {
@@ -126,8 +122,9 @@ InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserI
     const MAX_VOL_JUMP = 0.20; // 20%
 
     if (type === 'NUTRITION_SET_CALORIES') {
-      const kcal = Number(payload?.kcal);
-      if (!Number.isFinite(kcal)) return res.status(400).json({ error: 'kcal required' });
+      const parsed = NutritionCaloriesSchema.safeParse(payload);
+      if (!parsed.success) return res.status(422).json({ error: 'validation_failed', details: parsed.error.flatten() });
+      const kcal = Number(parsed.data.kcal);
       if (kcal < MIN_KCAL || kcal > MAX_KCAL) return res.status(422).json({ error: `kcal must be between ${MIN_KCAL} and ${MAX_KCAL}` });
     }
     // Read current versions via StudentState pointers
@@ -137,14 +134,18 @@ InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserI
     const currentTraining = state?.currentTrainingPlanVersion ? await TrainingPlanVersion.findById(state.currentTrainingPlanVersion) : null;
 
     if (type === 'PLAN_SWAP_EXERCISE') {
+      const vr = SwapExerciseSchema.safeParse(payload);
+      if (!vr.success) return res.status(422).json({ error: 'validation_failed', details: vr.error.flatten() });
       if (!currentTraining) return res.status(404).json({ error: 'No current training plan' });
-      const patch = patchSwapExercise(currentTraining.days as any, payload?.day || 'Mon', payload?.from, payload?.to);
+      const patch = patchSwapExercise(currentTraining.days as any, vr.data.day || 'Mon', vr.data.from, vr.data.to);
       const ret = await applyTrainingPatch(userId, currentTraining, patch);
       return res.json({ ok: true, summary: patch.reason.summary, ...ret });
     }
     if (type === 'PLAN_SET_DAYS_PER_WEEK') {
+      const vr = DaysPerWeekSchema.safeParse(payload);
+      if (!vr.success) return res.status(422).json({ error: 'validation_failed', details: vr.error.flatten() });
       if (!currentTraining) return res.status(404).json({ error: 'No current training plan' });
-      const nextDays = Number(payload?.daysPerWeek || 3);
+      const nextDays = Number(vr.data.daysPerWeek || 3);
       if (!Number.isFinite(nextDays) || nextDays < 1 || nextDays > 7) return res.status(422).json({ error: 'daysPerWeek must be 1–7' });
       try {
         const currentDays = Array.isArray((currentTraining as any).days)
@@ -165,7 +166,9 @@ InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserI
       return res.json({ ok: true, summary: `Kalorier satt til ${kcal}`, ...ret });
     }
     if (type === 'WEIGHT_LOG') {
-      const { date, kg } = payload || {};
+      const vr = WeightLogSchema.safeParse(payload);
+      if (!vr.success) return res.status(422).json({ error: 'validation_failed', details: vr.error.flatten() });
+      const { date, kg } = vr.data;
       const { WeightEntry } = await import('../app/Models/WeightEntry');
       await WeightEntry.updateOne({ userId, date }, { $set: { kg } }, { upsert: true });
       try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})`, actor: (req as any)?.user?._id, after: { date, kg } }); } catch {}
@@ -173,7 +176,9 @@ InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserI
       return res.json({ ok: true, summary: `Vekt ${kg}kg lagret` });
     }
     if (type === 'WEIGHT_DELETE') {
-      const { date } = payload || {};
+      const vr = WeightDeleteSchema.safeParse(payload);
+      if (!vr.success) return res.status(422).json({ error: 'validation_failed', details: vr.error.flatten() });
+      const { date } = vr.data;
       const { WeightEntry } = await import('../app/Models/WeightEntry');
       await WeightEntry.deleteOne({ userId, date });
       try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}`, actor: (req as any)?.user?._id, before: { date } }); } catch {}
@@ -188,7 +193,7 @@ InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserI
 
 // Alias without the extra "/interaction" segment so final path is
 // /api/backend/v1/interaction/actions/apply (expected by FE/tests)
-InteractionRoutes.post('/actions/apply', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req, res) => {
+InteractionRoutes.post('/actions/apply', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
     let userId: any = (req as any).user?._id || req.body.userId;
     if (!userId) {
