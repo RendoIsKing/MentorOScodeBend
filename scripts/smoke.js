@@ -61,13 +61,22 @@ async function post(path, body, cookie) {
   // 2) Invalid actions payload → 422
   const r2 = await post('/api/backend/v1/interaction/actions/apply', {}, cookie);
   console.log('actions status:', r2.status);
-  // 3) Burst to hit per-user+IP rate limiter
+  // 3) Empty chat → 422
+  const r3 = await post('/api/backend/v1/interaction/chat/engh', { message: '' }, cookie);
+  console.log('chat empty status:', r3.status);
+
+  // 4) Burst to hit per-user+IP rate limiter
   let burst429 = 0;
   for (let i = 0; i < 15; i++) {
     const r = await post('/api/backend/v1/interaction/chat/engh', { message: `ping ${i}` }, cookie);
     if (r.status === 429) burst429++;
   }
   console.log('burst429:', burst429);
+  
+  // 5) Conversation messages non-member → 403 (make a fake thread id)
+  const fakeId = '000000000000000000000000';
+  const res4 = await fetch(`http://localhost:3006/api/backend/v1/chat/threads/${fakeId}/messages`, { headers: { Cookie: cookie } });
+  console.log('conv non-member or not-found status:', res4.status);
 })().catch(()=>{});
 
 
