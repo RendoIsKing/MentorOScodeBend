@@ -180,6 +180,14 @@ const UserSchema = new Schema(
       default: "VISITOR",
       index: true,
     },
+    acceptedTosAt: {
+      type: Date,
+      default: null,
+    },
+    tosVersion: {
+      type: String,
+      default: null,
+    },
     profileId: {
       type: Types.ObjectId,
       ref: "Profile",

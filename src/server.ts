@@ -40,6 +40,8 @@ import { FileEnum } from "./types/FileEnum";
 import PostRoutes from "./routes/post.routes";
 import InteractionRoutes from "./routes/interaction.routes";
 import preonboardingRoutes from "./routes/preonboarding";
+import legalRoutes from './routes/legal.routes';
+import accountRoutes from './routes/account.routes';
 import devLoginRouter from "./routes/dev/loginAs";
 import devBootstrap from "./routes/dev.bootstrap";
 import studentSnapshotRouter from "./routes/student/snapshot";
@@ -164,6 +166,8 @@ export class Server {
     });
     this.app.use(express.static("public"));
     this.app.use('/api/backend', healthRouter);
+    this.app.use('/', legalRoutes);
+    this.app.use('/api/backend/v1', accountRoutes);
     this.app.use("/api/backend/v1/auth", AuthRoutes);
     this.app.use("/api/backend/v1/profile", Auth, ProfileRoutes);
     this.app.use("/api/backend/v1/user", UserRoutes);

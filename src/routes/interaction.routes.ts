@@ -76,6 +76,17 @@ InteractionRoutes.post("/log-view", Auth, InteractionController.logView);
 InteractionRoutes.post("/chat/engh", ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), chatWithCoachEngh);
 // Coach Majen avatar chat (mirror of Engh path shape)
 InteractionRoutes.post("/chat/majen", ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), chatWithCoachMajen);
+// Expose Majen coach user for FE convenience (dev only if seeded)
+InteractionRoutes.get('/chat/majen/coach', ensureAuth as any, async (req, res) => {
+  try {
+    const { User } = await import('../app/Models/User');
+    const u = await (User as any).findOne({ userName: 'coach-majen' }).lean();
+    if (!u?._id) return res.status(404).json({ message: 'not found' });
+    return res.json({ id: String(u._id), userName: u.userName, fullName: u.fullName });
+  } catch {
+    return res.status(500).json({ message: 'lookup failed' });
+  }
+});
 InteractionRoutes.post('/chat/engh/plans/generate-first', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 20 }), generateFirstPlans);
 // Open endpoint publicly (no Auth) to make it easy to call from chat UI
 InteractionRoutes.post('/chat/engh/action', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 30 }), decideAndApplyAction);
