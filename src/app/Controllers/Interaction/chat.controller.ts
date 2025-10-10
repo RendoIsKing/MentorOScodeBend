@@ -5,7 +5,11 @@ import { UserProfile } from "../../Models/UserProfile";
 import { Types } from "mongoose";
 
 const OPENAI_KEY = (process.env.OPENAI_API_KEY || process.env.OPENAI_API_TOKEN || process.env.OPENAI_KEY || '').trim();
-const openai = new OpenAI({ apiKey: OPENAI_KEY || undefined });
+function getOpenAI(): OpenAI | null {
+  const key = OPENAI_KEY;
+  if (!key) return null;
+  try { return new OpenAI({ apiKey: key }); } catch { return null; }
+}
 
 // Global guidance: Meal plan output format used by all avatars
 const OUTPUT_FORMAT_MEAL_PLAN = `
@@ -80,8 +84,12 @@ export const chatWithCoachEngh = async (req: Request, res: Response) => {
         "[Dev] OPENAI_API_KEY mangler. Midlertidig svar: " + (message ? String(message) : "Hei!");
       return res.json({ reply: echo });
     }
-
-    const response = await openai.chat.completions.create({
+    const client = getOpenAI();
+    if (!client) {
+      const echo = "[Dev] OPENAI client init feilet. Midlertidig svar: " + (message ? String(message) : "Hei!");
+      return res.json({ reply: echo });
+    }
+    const response = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: msgs as any,
       temperature: 0.7,
@@ -157,8 +165,12 @@ export const chatWithCoachMajen = async (req: Request, res: Response) => {
       const echo = '[Dev] OPENAI_API_KEY mangler. Midlertidig svar: ' + (message ? String(message) : 'Hei!');
       return res.json({ reply: echo });
     }
-
-    const response = await openai.chat.completions.create({
+    const client = getOpenAI();
+    if (!client) {
+      const echo = '[Dev] OPENAI client init feilet. Midlertidig svar: ' + (message ? String(message) : 'Hei!');
+      return res.json({ reply: echo });
+    }
+    const response = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: msgs as any,
       temperature: 0.6,
