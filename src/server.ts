@@ -83,8 +83,7 @@ export class Server {
   public app: Application;
 
   public port: String;
-  // Note: reserved for future graceful shutdown hooks
-  private _httpServer: import('http').Server | null = null;
+  // Note: http server handle removed (unused)
 
   constructor(port: String) {
     this.app = express();
@@ -233,7 +232,6 @@ export class Server {
 
   start() {
     const http = require("http").createServer(this.app);
-    this._httpServer = http;
     // *********
     createPublicDirectory();
     // *********
