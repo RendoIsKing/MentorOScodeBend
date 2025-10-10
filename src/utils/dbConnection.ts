@@ -4,9 +4,10 @@ export const connectDatabase = async (): Promise<void> => {
     if (connection.readyState !== 0) {
         return;
     }
-    if (!process.env.DB_URL) {
-        throw new Error("DB_URL is not set. Add it to backend/.env");
+    const uri = (process.env.DB_URL || process.env.MONGO_URI) as string | undefined;
+    if (!uri) {
+        throw new Error("DB_URL (or MONGO_URI) is not set. Add it to backend/.env or Railway Variables");
     }
-    await connect(process.env.DB_URL as string);
+    await connect(uri);
     console.log(`Database connected Successfully`);
 };
