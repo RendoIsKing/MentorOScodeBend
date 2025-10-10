@@ -82,7 +82,7 @@ r.post('/threads/:id/read', ensureAuth as any, perUserIpLimiter({ windowMs: 60_0
   thread.unread.set(myId, 0);
   await thread.save();
   ssePush(myId, 'chat:thread', { id: thread._id.toString(), lastMessageAt: thread.lastMessageAt, lastMessageText: thread.lastMessageText, unread: 0 });
-  res.json({ ok: true });
+  return res.json({ ok: true });
 });
 
 r.get('/sse', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_SSE_PER_MIN || 30) }), (req: any, res: Response) => {

@@ -13,7 +13,7 @@ export async function requireEntitlement(req: Request, res: Response, next: Next
       // @ts-ignore
       const userId = (user as any)._id || (user as any).id;
       if (userId) {
-        const fresh = await User.findById(userId).select('status').lean();
+        const fresh: any = await User.findById(userId).select('status').lean();
         if (fresh?.status === 'SUBSCRIBED') return next();
       }
     } catch {}

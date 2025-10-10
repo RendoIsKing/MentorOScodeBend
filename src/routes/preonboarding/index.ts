@@ -144,7 +144,7 @@ r.post("/convert", async (req: any, res) => {
       return res.status(200).json({ ok: true, activated: true, snapshotId: String(snapshot?._id || "") });
     }
   } catch {}
-  res.json({ ok: true, activated: true });
+  return res.json({ ok: true, activated: true });
 });
 
 // Dev/test helper: force entitlement and refresh session user
