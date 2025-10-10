@@ -8,12 +8,16 @@
     "dev": "ts-node-dev --respawn --rs --transpile-only ./src/index.ts",
     "dev-chat": "ts-node-dev --respawn --rs --transpile-only ./src/indexChat.ts",
     "build": "rimraf ./dist && tsc --build",
-    "start": "node ./dist",
+    "start": "node dist/index.js",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "webhook:simulate": "node scripts/stripe-webhook-sim.js",
-    "dev:insert-sub": "node scripts/dev-insert-sub.js"
+    "dev:insert-sub": "node scripts/dev-insert-sub.js",
+    "smoke": "node scripts/smoke.js",
+    "burst": "node scripts/burst.js",
+    "dev:seed": "curl -s -X POST http://localhost:3006/api/backend/v1/dev/seed/coach-majen -H 'Content-Type: application/json' || true",
+    "dev:stripe": "echo Run: stripe listen --forward-to http://localhost:3006/api/v1/handlePaymentStripe"
   },
   "author": "",
   "license": "ISC",

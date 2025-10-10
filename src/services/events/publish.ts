@@ -1,5 +1,4 @@
 import { Types } from "mongoose";
-import { rebuildSnapshot } from "../snapshot/rebuildSnapshot";
 import { onWeightLogged, onWorkoutLogged, onPlanUpdated, onWeightDeleted } from "../snapshot/incremental";
 import StudentState from "../../models/StudentState";
 
@@ -8,7 +7,8 @@ type DomainEvent =
   | { type: "NUTRITION_UPDATED"; user: Types.ObjectId }
   | { type: "WEIGHT_LOGGED"; user: Types.ObjectId; date?: string; kg?: number }
   | { type: "WORKOUT_LOGGED"; user: Types.ObjectId; date?: string }
-  | { type: "WEIGHT_DELETED"; user: Types.ObjectId; date: string };
+  | { type: "WEIGHT_DELETED"; user: Types.ObjectId; date: string }
+  | { type: "GOAL_UPDATED"; user: Types.ObjectId };
 
 export async function publish(event: DomainEvent) {
   try {
@@ -29,6 +29,10 @@ export async function publish(event: DomainEvent) {
       break;
     case "WORKOUT_LOGGED":
       if (event.date) await onWorkoutLogged(event.user, event.date);
+      break;
+    case "GOAL_UPDATED":
+      // For now, reuse onPlanUpdated to refresh snapshot
+      await onPlanUpdated(event.user);
       break;
   }
   // Optionally also do full rebuild for robustness in dev

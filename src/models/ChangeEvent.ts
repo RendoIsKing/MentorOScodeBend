@@ -2,7 +2,7 @@ import { Schema, model, Types } from "mongoose";
 
 export interface ChangeEvent {
   user: Types.ObjectId;
-  type: "PLAN_EDIT" | "NUTRITION_EDIT" | "WEIGHT_LOG" | "WORKOUT_LOG";
+  type: "PLAN_EDIT" | "NUTRITION_EDIT" | "WEIGHT_LOG" | "WORKOUT_LOG" | "GOAL_EDIT";
   summary: string; rationale?: string;
   refId?: Types.ObjectId;
   actor?: Types.ObjectId | string;
@@ -13,7 +13,7 @@ export interface ChangeEvent {
 
 const ChangeEventSchema = new Schema<ChangeEvent>({
   user: { type: Schema.Types.ObjectId, ref: "User", index: true, required: true },
-  type: { type: String, enum: ["PLAN_EDIT","NUTRITION_EDIT","WEIGHT_LOG","WORKOUT_LOG"], required: true },
+  type: { type: String, enum: ["PLAN_EDIT","NUTRITION_EDIT","WEIGHT_LOG","WORKOUT_LOG","GOAL_EDIT"], required: true },
   summary: { type: String, required: true },
   rationale: String,
   refId: { type: Schema.Types.ObjectId },

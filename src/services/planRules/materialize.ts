@@ -9,21 +9,21 @@ import { TrainingPatch, NutritionPatch } from "./types";
 export async function applyTrainingPatch(user: any, current: any, patch: TrainingPatch) {
   let days = [...(current?.days || [])];
 
-  patch.swaps?.forEach(s => {
-    days = days.map(d => d.day !== s.day ? d : ({
-      ...d, exercises: (d.exercises||[]).map(e => e.name === s.from ? { ...e, name: s.to } : e)
+  patch.swaps?.forEach((s: any) => {
+    days = days.map((d: any) => d.day !== s.day ? d : ({
+      ...d, exercises: (d.exercises||[]).map((e: any) => e.name === s.from ? { ...e, name: s.to } : e)
     }));
   });
 
-  patch.volumeTweaks?.forEach(t => {
-    days = days.map(d => d.day !== t.day ? d : ({
-      ...d, exercises: (d.exercises||[]).map(e => e.name !== t.name ? e : { ...e, sets: Math.max(1, (e.sets||3) + (t.deltaSets||0)) })
+  patch.volumeTweaks?.forEach((t: any) => {
+    days = days.map((d: any) => d.day !== t.day ? d : ({
+      ...d, exercises: (d.exercises||[]).map((e: any) => e.name !== t.name ? e : { ...e, sets: Math.max(1, (e.sets||3) + (t.deltaSets||0)) })
     }));
   });
 
-  patch.intensityTweaks?.forEach(t => {
-    days = days.map(d => d.day !== t.day ? d : ({
-      ...d, exercises: (d.exercises||[]).map(e => e.name !== t.name ? e : { ...e, rpe: t.newRpe || e.rpe })
+  patch.intensityTweaks?.forEach((t: any) => {
+    days = days.map((d: any) => d.day !== t.day ? d : ({
+      ...d, exercises: (d.exercises||[]).map((e: any) => e.name !== t.name ? e : { ...e, rpe: t.newRpe || e.rpe })
     }));
   });
 

@@ -41,7 +41,7 @@ r.post("/start", async (req: any, res) => {
     ok: true,
     firstMessage:
       "Hei! Jeg er Coach Engh. Fortell meg kort hva du vil oppnå – så lager jeg et første forslag skreddersydd for deg.",
-    status: user?.status,
+    status: (user as any)?.status,
   });
 });
 
@@ -100,7 +100,7 @@ r.post("/consent", async (req: any, res) => {
     { $set: { "consentFlags.healthData": !!healthData, "consentFlags.timestamp": now } },
     { upsert: true }
   );
-  res.json({ ok: true, consented: !!healthData, timestamp: now.toISOString() });
+  return res.json({ ok: true, consented: !!healthData, timestamp: now.toISOString() });
 });
 
 r.get("/preview", async (req: any, res) => {
@@ -108,7 +108,7 @@ r.get("/preview", async (req: any, res) => {
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   const preview = await PlanPreview.findOne({ user: userId });
   if (!preview) return res.status(404).json({ error: "No preview yet" });
-  res.json({ ok: true, preview });
+  return res.json({ ok: true, preview });
 });
 
 r.post("/convert", async (req: any, res) => {
@@ -147,6 +147,26 @@ r.post("/convert", async (req: any, res) => {
   res.json({ ok: true, activated: true });
 });
 
+// Dev/test helper: force entitlement and refresh session user
+r.post("/force-sub", async (req: any, res) => {
+  try {
+    const userId = req.user?._id || req.body.userId;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    await (User as any).updateOne({ _id: userId }, { $set: { status: "SUBSCRIBED" } });
+    try {
+      // Reflect immediately in request context
+      if (req.user) (req.user as any).status = "SUBSCRIBED";
+      // If using express-session, ensure session user id is set
+      if (req.session) {
+        req.session.user = { id: String(userId) };
+      }
+    } catch {}
+    return res.json({ ok: true });
+  } catch {
+    return res.status(500).json({ error: "failed" });
+  }
+});
+
 r.get("/state", async (req: any, res) => {
   const userId = req.user?._id || req.query.userId;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
@@ -155,7 +175,7 @@ r.get("/state", async (req: any, res) => {
   const profile = await Profile.findOne({ user: userId });
   const preview = await PlanPreview.findOne({ user: userId });
 
-  res.json({
+  return res.json({
     ok: true,
     status: user?.status ?? "VISITOR",
     collectedFieldsPercent: profile?.collectedPercent ?? 0,

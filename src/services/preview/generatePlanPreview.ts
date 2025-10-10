@@ -45,8 +45,9 @@ export function macrosFrom(profile: any, kcal: number) {
 }
 
 export function generateDeterministicPreview({ userId, profile }: GenInput): IPlanPreview {
-  const exp = profile?.experienceLevel ?? "beginner";
-  const injuries = profile?.injuries ?? [];
+  const p: any = profile || {};
+  const exp = p?.experienceLevel ?? "beginner";
+  const injuries = p?.injuries ?? [];
 
   const days: PreviewDay[] = dayNames.map((d, i) => {
     if (exp === "beginner") {
@@ -68,14 +69,14 @@ export function generateDeterministicPreview({ userId, profile }: GenInput): IPl
     return { day: d, focus, exercises: full };
   });
 
-  const kcal = kcalFrom(profile);
-  const macros = macrosFrom(profile, kcal);
+  const kcal = kcalFrom(p);
+  const macros = macrosFrom(p, kcal);
 
   const nutrition = {
     kcal,
     ...macros,
     rationale:
-      profile?.diet === "vegan"
+      p?.diet === "vegan"
         ? "Protein set to ~2.2g/kg for plant-based completeness."
         : "Protein set to ~2.0g/kg; carbs/fat split 55/45 for adherence.",
   };
@@ -84,15 +85,15 @@ export function generateDeterministicPreview({ userId, profile }: GenInput): IPl
     userId,
     exp,
     injuries: [...injuries].sort(),
-    goals: profile?.goals,
-    diet: profile?.diet,
-    weight: profile?.bodyWeightKg,
+    goals: p?.goals,
+    diet: p?.diet,
+    weight: p?.bodyWeightKg,
     days,
     nutrition,
   });
 
   const hash = crypto.createHash("sha256").update(raw).digest("hex");
-  return { user: profile.user, trainingWeek: days, nutrition, hash } as IPlanPreview;
+  return { user: (p as any).user, trainingWeek: days, nutrition, hash } as IPlanPreview;
 }
 
 

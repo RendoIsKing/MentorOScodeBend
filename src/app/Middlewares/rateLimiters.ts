@@ -1,4 +1,4 @@
-import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import rateLimit from 'express-rate-limit';
 import type { Request } from 'express';
 
 export function perUserIpLimiter(options?: { windowMs?: number; max?: number; standardHeaders?: boolean; legacyHeaders?: boolean; }): any {
@@ -11,7 +11,9 @@ export function perUserIpLimiter(options?: { windowMs?: number; max?: number; st
     legacyHeaders: options?.legacyHeaders ?? false,
     keyGenerator: (req: Request) => {
       const uid = (req as any)?.user?._id ? String((req as any).user._id) : '';
-      const ipKey = ipKeyGenerator(req);
+      const xff = String(req.headers['x-forwarded-for'] || '').split(',').map(s=>s.trim()).filter(Boolean)[0];
+      const ip = (req.ip || xff || (req.socket as any)?.remoteAddress || '') as string;
+      const ipKey = String(ip);
       return `${uid}::${ipKey}`;
     },
   });

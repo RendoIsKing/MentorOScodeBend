@@ -23,14 +23,14 @@ r.post('/threads', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 
   if (!thread) {
     thread = await ChatThread.create({ participants: pair, lastMessageAt: new Date(), unread: new Map([[userId, 0],[myId,0]]) });
   }
-  res.json({ threadId: thread._id.toString() });
+  return res.json({ threadId: thread._id.toString() });
 });
 
 r.get('/threads', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const threads = await ChatThread.find({ participants: myId }).sort({ lastMessageAt: -1 }).lean();
-  res.json({ threads: threads.map(t=>({ id: t._id.toString(), lastMessageAt: t.lastMessageAt, lastMessageText: t.lastMessageText || '', unread: (t.unread?.get(myId) ?? 0), participants: t.participants.map(String) })) });
+  return res.json({ threads: threads.map(t=>({ id: t._id.toString(), lastMessageAt: t.lastMessageAt, lastMessageText: t.lastMessageText || '', unread: (t.unread?.get(myId) ?? 0), participants: t.participants.map(String) })) });
 });
 
 r.get('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }), async (req, res) => {
@@ -44,7 +44,7 @@ r.get('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 6
   const q: any = { thread: id };
   if (cursor) q._id = { $lt: cursor };
   const messages = await ChatMessage.find(q).sort({ _id: -1 }).limit(Number(limit)).lean();
-  res.json({ messages: messages.reverse().map(m=>({ id: m._id.toString(), text: m.text, sender: m.sender.toString(), createdAt: m.createdAt })), nextCursor: messages.length ? messages[0]._id.toString() : null });
+  return res.json({ messages: messages.reverse().map(m=>({ id: m._id.toString(), text: m.text, sender: m.sender.toString(), createdAt: m.createdAt })), nextCursor: messages.length ? messages[0]._id.toString() : null });
 });
 
 r.post('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }), async (req, res) => {
@@ -68,7 +68,7 @@ r.post('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 
     ssePush(p, 'chat:message', { threadId: thread._id.toString(), message: { id: msg._id.toString(), text: msg.text, sender: myId, createdAt: msg.createdAt } });
     ssePush(p, 'chat:thread', { id: thread._id.toString(), lastMessageAt: thread.lastMessageAt, lastMessageText: thread.lastMessageText, unread: thread.unread.get(p) ?? 0 });
   }
-  res.json({ ok: true, id: msg._id.toString() });
+  return res.json({ ok: true, id: msg._id.toString() });
 });
 
 r.post('/threads/:id/read', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }), async (req, res) => {
@@ -94,6 +94,7 @@ r.get('/sse', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Numbe
   res.write(':\n\n');
   sseAddClient(myId, res);
   req.on('close', () => { sseRemoveClient(myId, res); try{ res.end(); }catch{} });
+  return;
 });
 
 export default r;

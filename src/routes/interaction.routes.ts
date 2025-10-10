@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { z } from 'zod';
+// zod not used directly in this file (schemas are imported from Validation)
 import { ActionSchema, type ActionBody, DaysPerWeekSchema, NutritionCaloriesSchema, SwapExerciseSchema, WeightDeleteSchema, WeightLogSchema } from '../app/Validation/schemas';
 import { Auth as ensureAuth } from "../app/Middlewares";
 import { perUserIpLimiter } from "../app/Middlewares/rateLimiters";
@@ -1210,7 +1210,7 @@ InteractionRoutes.post('/chat/engh/goals/from-text', ensureAuth as any, perUserI
     await Goal.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
     const created = await Goal.create({ userId, version: nextVersion, isCurrent: true, targetWeightKg: targetWeight, strengthTargets: strength, horizonWeeks: horizon, sourceText: text, caloriesDailyDeficit: deficit, weeklyWeightLossKg: weeklyLoss, weeklyExerciseMinutes: weeklyMinutes, hydrationLiters: hydration, plan });
     try {
-      await ChangeEvent.create({ user: userId, type: 'PLAN_EDIT', summary: 'Goal imported from text', actor: (req as any)?.user?._id, after: { goalId: created._id, version: nextVersion } });
+      await ChangeEvent.create({ user: userId, type: 'GOAL_EDIT', summary: 'Goal imported from text', actor: (req as any)?.user?._id, after: { goalId: created._id, version: nextVersion } });
       await publish({ type: 'GOAL_UPDATED', user: userId as any });
     } catch {}
     return res.json({ actions: [{ type: 'GOAL_SET', goalId: String(created._id) }], message: 'Goal imported to Assets' });

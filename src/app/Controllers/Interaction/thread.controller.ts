@@ -29,9 +29,9 @@ export const getThread = async (req: Request, res: Response) => {
       { upsert: true, new: true }
     );
     const msgs = await ChatMessage.find({ threadId: thread._id }).sort({ createdAt: 1 }).lean();
-    res.json({ threadId: thread._id, messages: msgs });
+    return res.json({ threadId: thread._id, messages: msgs });
   } catch (e) {
-    res.status(500).json({ message: 'thread fetch failed' });
+    return res.status(500).json({ message: 'thread fetch failed' });
   }
 };
 
@@ -48,9 +48,9 @@ export const appendMessage = async (req: Request, res: Response) => {
       { upsert: true, new: true }
     );
     const msg = await ChatMessage.create({ threadId: thread._id, sender, text });
-    res.json({ data: msg });
+    return res.json({ data: msg });
   } catch (e) {
-    res.status(500).json({ message: 'append failed' });
+    return res.status(500).json({ message: 'append failed' });
   }
 };
 
@@ -63,9 +63,9 @@ export const clearThread = async (req: Request, res: Response) => {
     if (thread) {
       await ChatMessage.deleteMany({ threadId: thread._id });
     }
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ message: 'clear failed' });
+    return res.status(500).json({ message: 'clear failed' });
   }
 };
 

@@ -60,7 +60,7 @@ PostRoutes.get('/moderation/reports', OnlyAdmins, async (req, res) => {
 PostRoutes.post('/moderation/reports/:id/resolve', OnlyAdmins, async (req, res) => {
   try {
     const { id } = req.params;
-    const { action, notes } = (req.body || {}) as any;
+    // const { action, notes } = (req.body || {}) as any; // reserved for future moderation actions
     await ModerationReport.updateOne({ _id: id as any }, { $set: { status: 'resolved' } });
     // Optional: if action === 'remove', you could hide the post here.
     return res.json({ ok: true });

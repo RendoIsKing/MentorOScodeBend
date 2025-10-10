@@ -2,12 +2,14 @@ import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
 import createPaymentIntent from "./createPaymentIntent";
 import stripeInstance from "../../../../utils/stripe";
+import * as Sentry from '@sentry/node';
 import { User } from "../../../Models/User";
 
 export const createSessionAction = async (
   req: Request,
   res: Response
 ): Promise<Response> => {
+  const tx = process.env.SENTRY_DSN ? Sentry.startTransaction({ name: 'payments.create-session' }) : undefined as any;
   try {
     const user = req.user as UserInterface;
     const idempotencyKey = (req.headers['idempotency-key'] as string) || undefined;
@@ -38,6 +40,7 @@ export const createSessionAction = async (
       sessionId: response?.id ?? null,
       type: response?.object || 'setup_intent',
     };
+    try { Sentry.addBreadcrumb({ category: 'stripe', message: 'create-session', level: 'info', data: { status: sessionObject.status } }); } catch {}
     return res.json({ data: sessionObject });
   } catch (error) {
     return res.status(500).json({
@@ -45,5 +48,5 @@ export const createSessionAction = async (
         message: "Something went wrong.",
       },
     });
-  }
+  } finally { try { tx?.finish(); } catch {} }
 };

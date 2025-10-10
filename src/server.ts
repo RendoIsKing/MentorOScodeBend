@@ -1,6 +1,7 @@
 import express, { Application } from "express";
 import { Request, Response } from "express";
 import helmet from "helmet";
+import compression from "compression";
 import passport from "passport";
 import cors from "cors";
 import { connectDatabase } from "./utils/dbConnection";
@@ -82,6 +83,7 @@ export class Server {
   public app: Application;
 
   public port: String;
+  private httpServer: import('http').Server | null = null;
 
   constructor(port: String) {
     this.app = express();
@@ -123,14 +125,16 @@ export class Server {
     this.app.use(express.json({ limit: "50mb" }));
     this.app.use(express.urlencoded({ limit: "50mb", extended: true }));
     this.app.use(helmet());
+    this.app.use(compression());
     initSentry(this.app as unknown as import('express').Application);
     this.app.use(withRequestId as any, httpLogger as any);
 
-    const ALLOW = (process.env.FRONTEND_ORIGIN || 'http://localhost:3002,http://192.168.1.244:3002')
+    // Prefer CORS_ALLOW_ORIGINS; fall back to FRONTEND_ORIGIN for backward compatibility
+    const allowedOrigins = (process.env.CORS_ALLOW_ORIGINS || process.env.FRONTEND_ORIGIN || 'http://localhost:3002,http://192.168.1.244:3002')
       .split(',')
       .map(s=>s.trim())
       .filter(Boolean);
-    console.log('[CORS] Allowed origins:', ALLOW);
+    console.log('[CORS] Allowed origins:', allowedOrigins);
     const devOpenCors = process.env.DEV_LOGIN_ENABLED === 'true' && process.env.NODE_ENV !== 'production';
     if (devOpenCors) {
       // In dev, accept any origin and send credentials for convenience
@@ -138,16 +142,25 @@ export class Server {
     } else {
       this.app.use(cors({ origin: (origin, cb)=>{
         if (!origin) return cb(null, true);
-        if (ALLOW.includes(origin)) return cb(null, true);
+        if (allowedOrigins.includes(origin)) return cb(null, true);
         return cb(new Error('CORS'));
       }, credentials: true }));
     }
     const isProd = process.env.NODE_ENV === 'production';
+    const trustProxy = (process.env.TRUST_PROXY || (isProd ? '1' : '0')).trim();
+    if (trustProxy === '1' || trustProxy.toLowerCase() === 'true') {
+      // Trust proxy for secure cookies on Railway/managed platforms
+      this.app.set('trust proxy', 1);
+    }
+    const sameSiteEnv = String(process.env.SESSION_SAMESITE || '').toLowerCase();
+    const cookieSameSite = sameSiteEnv === 'none' ? 'none' : 'lax';
+    const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
+    const cookieSecure = secureEnv === 'true' || secureEnv === '1';
     this.app.use(session({
       secret: process.env.SESSION_SECRET || 'dev_session_secret_change_me',
       resave: false,
       saveUninitialized: false,
-      cookie: { httpOnly: true, sameSite: 'lax', secure: isProd, maxAge: 1000*60*60*24*30 }
+      cookie: { httpOnly: true, sameSite: cookieSameSite as any, secure: cookieSecure, maxAge: 1000*60*60*24*30 }
     }));
     if (isProd && process.env.DEV_LOGIN_ENABLED === 'true') {
       console.warn('[WARN] DEV_LOGIN_ENABLED=true in production – dev routes should be disabled');
@@ -156,6 +169,8 @@ export class Server {
   }
 
   regsiterRoutes() {
+    // Lightweight healthcheck for platforms
+    this.app.get('/healthz', (_req: Request, res: Response) => res.status(200).json({ ok: true }));
     this.app.get("/api", (req: Request, res: Response) => {
       res.status(200).json({ message: `App running on version ${version}` });
     });
@@ -217,6 +232,7 @@ export class Server {
 
   start() {
     const http = require("http").createServer(this.app);
+    this.httpServer = http;
     // *********
     createPublicDirectory();
     // *********

@@ -26,8 +26,6 @@ class SSEHub {
 export const sseHub = new SSEHub();
 
 import { Response } from 'express';
-
-type Client = { userId: string; res: Response };
 const clients = new Map<string, Set<Response>>();
 
 export function sseAddClient(userId: string, res: Response) {
