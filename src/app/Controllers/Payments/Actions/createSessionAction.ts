@@ -9,7 +9,7 @@ export const createSessionAction = async (
   req: Request,
   res: Response
 ): Promise<Response> => {
-  const tx = process.env.SENTRY_DSN ? Sentry.startTransaction({ name: 'payments.create-session' }) : undefined as any;
+  const tx = process.env.SENTRY_DSN ? (Sentry as any)?.startTransaction?.({ name: 'payments.create-session' }) : undefined as any;
   try {
     const user = req.user as UserInterface;
     const idempotencyKey = (req.headers['idempotency-key'] as string) || undefined;

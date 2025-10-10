@@ -348,7 +348,7 @@ StudentRoutes.get('/:userId([0-9a-fA-F]{24})/exercise-progress', ensureAuth as a
     }).select('date value -_id').sort({ date: 1 }).lean();
     return res.status(200).json({ series, exercise });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to load exercise progress' });
+    return res.status(500).json({ message: 'Failed to load exercise progress' });
   }
 });
 

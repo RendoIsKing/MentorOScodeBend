@@ -7,7 +7,7 @@ export async function requireEntitlement(req: Request, res: Response, next: Next
     const user = req.user;
     if (!user) return res.status(401).json({ error: { message: 'Unauthorized' } });
     // Simple guard: require status SUBSCRIBED or active subscription in request context
-    if ((user as any).status === 'SUBSCRIBED') return next();
+    if ((user as any)?.status === 'SUBSCRIBED') return next();
     // Re-fetch fresh user from DB to account for status flips during session
     try {
       // @ts-ignore
