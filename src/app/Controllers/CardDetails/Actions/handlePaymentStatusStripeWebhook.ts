@@ -116,12 +116,13 @@ const handleSubscriptionEvent = async (event: any) => {
     }
 
     try {
+      if (!updatedSubscription) return; // TS guard
       // Mark user as subscribed and persist entitlement flag for access guard
       await User.updateOne({ _id: updatedSubscription.userId }, { $set: { status: 'SUBSCRIBED' } });
     } catch (e) {
       console.log('user entitlement update failed');
     }
-    console.log("Subscription Updated:", { id: updatedSubscription._id, status: updatedSubscription.status });
+    if (updatedSubscription) console.log("Subscription Updated:", { id: updatedSubscription._id, status: updatedSubscription.status });
   } catch (error) {
     console.error("Error handling subscription event:", error);
   }

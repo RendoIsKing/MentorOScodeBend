@@ -45,8 +45,13 @@ PostRoutes.post('/:id/report', Auth, perUserIpLimiter({ windowMs: 60_000, max: 1
 // Minimal admin endpoints for moderation queue
 PostRoutes.get('/moderation/reports', OnlyAdmins, async (req, res) => {
   try {
-    const items = await ModerationReport.find({}).sort({ createdAt: -1 }).limit(50).lean();
-    return res.json({ items: items.map(it => ({ id: String(it._id), post: String((it as any).post), reporter: String((it as any).reporter), reason: (it as any).reason, status: (it as any).status, createdAt: (it as any).createdAt })) });
+    const { status, cursor } = req.query as any;
+    const filter: any = {};
+    if (status && ['open','resolved'].includes(String(status))) filter.status = String(status);
+    if (cursor) filter._id = { $lt: cursor };
+    const items = await ModerationReport.find(filter).sort({ _id: -1 }).limit(50).lean();
+    const nextCursor = items.length ? String(items[items.length - 1]._id) : null;
+    return res.json({ items: items.map((it: any) => ({ id: String(it._id), post: String(it.post), reporter: String(it.reporter), reason: it.reason, status: it.status, createdAt: it.createdAt })), nextCursor });
   } catch {
     return res.status(500).json({ error: { message: 'list failed' } });
   }
@@ -55,7 +60,9 @@ PostRoutes.get('/moderation/reports', OnlyAdmins, async (req, res) => {
 PostRoutes.post('/moderation/reports/:id/resolve', OnlyAdmins, async (req, res) => {
   try {
     const { id } = req.params;
+    const { action, notes } = (req.body || {}) as any;
     await ModerationReport.updateOne({ _id: id as any }, { $set: { status: 'resolved' } });
+    // Optional: if action === 'remove', you could hide the post here.
     return res.json({ ok: true });
   } catch {
     return res.status(500).json({ error: { message: 'resolve failed' } });
