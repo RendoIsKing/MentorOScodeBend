@@ -7,7 +7,7 @@ import {
 import { UserInterface } from "../../types/UserInterface";
 
 const options: StrategyOptions = {
-  secretOrKey: process.env.APP_SECRET,
+  secretOrKey: process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me',
   jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
 };
 

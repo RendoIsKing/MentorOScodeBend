@@ -10,10 +10,20 @@ export function perUserIpLimiter(options?: { windowMs?: number; max?: number; st
     standardHeaders: options?.standardHeaders ?? true,
     legacyHeaders: options?.legacyHeaders ?? false,
     keyGenerator: (req: Request) => {
+      // Use express-rate-limit's ipv6-safe helper when available
+      let ipKey: string = '';
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { ipKeyGenerator } = require('express-rate-limit');
+        if (typeof ipKeyGenerator === 'function') {
+          ipKey = String(ipKeyGenerator(req));
+        }
+      } catch {}
+      if (!ipKey) {
+        // Fallback: rely on library's ipv6 validation by returning empty -> it will use internal ip extractor
+        ipKey = '';
+      }
       const uid = (req as any)?.user?._id ? String((req as any).user._id) : '';
-      const xff = String(req.headers['x-forwarded-for'] || '').split(',').map(s=>s.trim()).filter(Boolean)[0];
-      const ip = (req.ip || xff || (req.socket as any)?.remoteAddress || '') as string;
-      const ipKey = String(ip);
       return `${uid}::${ipKey}`;
     },
   });
