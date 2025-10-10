@@ -25,11 +25,4 @@ COPY --from=build /app/dist ./dist
 ENV NODE_ENV=production
 EXPOSE 3006
 CMD ["node", "dist/index.js"]
-FROM node:18
-WORKDIR /app
-COPY package*.json ./
-# Do not copy .env in production images; Railway injects env vars at runtime
-COPY . .
-RUN npm install --legacy-peer-deps
-EXPOSE 3006
-CMD ["npm", "run", "dev"]
+# Note: remove dev stage. Final image is production runtime above.
