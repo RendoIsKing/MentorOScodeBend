@@ -471,6 +471,25 @@ class AuthController {
 
       const token = await generateAuthToken(updatedUser);
 
+      // Set auth cookie so subsequent cross-site requests include credentials
+      try {
+        const isProd = process.env.NODE_ENV === 'production';
+        const sameSiteEnv = String(process.env.SESSION_SAMESITE || (isProd ? 'none' : 'lax')).toLowerCase();
+        const cookieSameSite = (sameSiteEnv === 'none' ? 'none' : 'lax') as any;
+        const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
+        const cookieSecure = secureEnv === 'true' || secureEnv === '1';
+        const cookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
+        const cookieOpts: any = {
+          httpOnly: true,
+          sameSite: cookieSameSite,
+          secure: cookieSecure,
+          maxAge: 1000 * 60 * 60 * 24 * 30,
+          path: '/',
+        };
+        if (cookieDomain) cookieOpts.domain = cookieDomain;
+        res.cookie('auth_token', token, cookieOpts);
+      } catch {}
+
       return res.json({
         data: {
           ...updatedUser.toObject(),
