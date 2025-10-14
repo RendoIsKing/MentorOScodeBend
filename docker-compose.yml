@@ -2,44 +2,6 @@ version: '3.9'
 services:
   mongo:
     image: mongo:6
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-  backend:
-    build: .
-    environment:
-      - NODE_ENV=development
-      # Required backend env NAMES (no values):
-      # MONGO_URI
-      # SESSION_SECRET
-      # FRONTEND_ORIGIN
-      # SENTRY_DSN
-      # STRIPE_SECRET_KEY
-      # STRIPE_WEBHOOK_SECRET
-    ports:
-      - "3006:3006"
-    depends_on:
-      - mongo
-  frontend:
-    build: ../frontend
-    environment:
-      - NODE_ENV=development
-      # Required frontend env NAMES (no values):
-      # NEXT_PUBLIC_BACKEND_ORIGIN
-      # NEXT_PUBLIC_API_SERVER
-      # NEXT_PUBLIC_SENTRY_DSN
-    ports:
-      - "3002:3002"
-    depends_on:
-      - backend
-volumes:
-  mongo_data: {}
-
-version: '3.9'
-services:
-  mongo:
-    image: mongo:6
     restart: unless-stopped
     ports:
       - "27017:27017"
