@@ -204,26 +204,30 @@ export class UsersControllers {
       );
 
       if (newUser) {
-        const paramsToCreateCustomer = {
-          email: newUser.email,
-          firstName: newUser.fullName,
-          userId: newUser.id,
-        };
-        try {
-          createCustomerOnStripe(paramsToCreateCustomer);
-        } catch (error) {
-          console.error("Error creating customer on Stripe", error);
-        }
-
-        try {
-          const stripeTipProduct = await createTipProductOnStripe({
-            title: `${newUser.userName} + Tip Product`,
+        const hasStripe = !!process.env.STRIPE_SECRET_KEY;
+        if (hasStripe) {
+          const paramsToCreateCustomer = {
+            email: newUser.email,
+            firstName: newUser.fullName,
+            userId: newUser.id,
+          };
+          // Fire-and-forget with safe catch to avoid unhandled rejection crashing the request
+          Promise.resolve(createCustomerOnStripe(paramsToCreateCustomer)).catch((error) => {
+            console.error("Error creating customer on Stripe", error);
           });
-          newUser.stripeProductId = (stripeTipProduct as any)?.id;
-          newUser.stripeProduct = stripeTipProduct;
-          await newUser.save();
-        } catch (error) {
-          console.error("Error creating user Tip product on Stripe", error);
+
+          try {
+            const stripeTipProduct = await createTipProductOnStripe({
+              title: `${newUser.userName} + Tip Product`,
+            });
+            if (stripeTipProduct) {
+              newUser.stripeProductId = (stripeTipProduct as any)?.id;
+              newUser.stripeProduct = stripeTipProduct;
+              await newUser.save();
+            }
+          } catch (error) {
+            console.error("Error creating user Tip product on Stripe", error);
+          }
         }
       }
 
