@@ -32,8 +32,69 @@ import { InteractionType } from "../../types/enums/InteractionTypeEnum";
 import { PostType } from "../../types/enums/postTypeEnum";
 import { SubscriptionStatusEnum } from "../../types/enums/SubscriptionStatusEnum";
 import { sendMessage } from "../../utils/Twillio/sendMessage";
+import { OAuth2Client } from "google-auth-library";
 
 class AuthController {
+  static googleLogin = async (req: Request, res: Response): Promise<Response> => {
+    try {
+      const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+      if (!clientId) return res.status(500).json({ message: "GOOGLE_OAUTH_CLIENT_ID missing" });
+      const { idToken } = (req.body || {}) as { idToken?: string };
+      if (!idToken) return res.status(400).json({ message: "idToken required" });
+
+      const client = new OAuth2Client(clientId);
+      const ticket = await client.verifyIdToken({ idToken, audience: clientId });
+      const payload = ticket.getPayload();
+      if (!payload || !payload.sub || !payload.email) {
+        return res.status(401).json({ message: "Invalid Google token" });
+      }
+
+      const googleId = payload.sub;
+      const email = String(payload.email).toLowerCase();
+
+      let user = await User.findOne({ $or: [{ googleId }, { email }] });
+      if (!user) {
+        user = await User.create({
+          firstName: payload.given_name || "",
+          lastName: payload.family_name || "",
+          email,
+          googleId,
+          role: RolesEnum.USER,
+          isActive: true,
+          isVerified: true,
+        } as any);
+      } else if (!user.googleId) {
+        (user as any).googleId = googleId;
+        await user.save();
+      }
+
+      const token = generateAuthToken(user as unknown as UserInterface);
+      try {
+        const isProd = process.env.NODE_ENV === 'production';
+        const sameSiteEnv = String(process.env.SESSION_SAMESITE || (isProd ? 'none' : 'lax')).toLowerCase();
+        const cookieSameSite = (sameSiteEnv === 'none' ? 'none' : 'lax') as any;
+        const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
+        const cookieSecure = secureEnv === 'true' || secureEnv === '1';
+        const cookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
+        const cookieOpts: any = { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 1000*60*60*24*30, path: '/' };
+        if (cookieDomain) cookieOpts.domain = cookieDomain;
+        res.cookie('auth_token', token, cookieOpts);
+      } catch {}
+
+      return res.json({
+        token,
+        user: {
+          id: user._id,
+          email: user.email,
+          name: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim(),
+          role: user.role,
+        },
+      });
+    } catch (e) {
+      const msg = (e as any)?.message || String(e);
+      return res.status(401).json({ message: msg || 'Google login failed' });
+    }
+  };
   // NOTE: legacy misspelling kept for backward compatibility with any callers
   static regsiter = async (req: Request, res: Response): Promise<any> => {
     const input = req.body;

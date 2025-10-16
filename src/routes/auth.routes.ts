@@ -7,6 +7,7 @@ const auth: Router = Router();
 auth.post("/register", AuthController.regsiter);
 auth.post("/login", AuthController.login);
 auth.post("/user-login", AuthController.userLogin);
+auth.post("/google", AuthController.googleLogin);
 auth.post("/verify-otp", AuthController.verifyOtp);
 auth.post("/me", Auth, AuthController.updateMe);
 auth.post("/checkUser", AuthController.checkUser);

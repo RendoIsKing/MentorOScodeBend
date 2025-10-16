@@ -12,6 +12,7 @@ export interface UserInterface extends Document {
   phoneNumber: string;
   email: string;
   password: string;
+  googleId?: string | null;
   role: RolesEnum;
   lastLogin: Date;
   photoId: Types.ObjectId | FileInterface;

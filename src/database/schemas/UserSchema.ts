@@ -33,6 +33,11 @@ const UserSchema = new Schema(
       type: String,
       // unique: true,
     },
+    googleId: {
+      type: String,
+      index: true,
+      default: null,
+    },
     hasPersonalInfo: {
       type: Boolean,
       default: false,
