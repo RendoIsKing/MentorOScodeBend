@@ -124,7 +124,11 @@ export class Server {
     );
     this.app.use(express.json({ limit: "50mb" }));
     this.app.use(express.urlencoded({ limit: "50mb", extended: true }));
-    this.app.use(helmet());
+    // Allow assets to be embedded across subdomains (www.mentorio.no → api.mentorio.no)
+    this.app.use(helmet({
+      crossOriginResourcePolicy: { policy: 'same-site' },
+      crossOriginEmbedderPolicy: false,
+    }));
     this.app.use(compression());
     initSentry(this.app as unknown as import('express').Application);
     this.app.use(withRequestId as any, httpLogger as any);
