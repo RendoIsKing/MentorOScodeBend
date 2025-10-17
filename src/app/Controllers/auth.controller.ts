@@ -53,7 +53,10 @@ class AuthController {
       const email = String(payload.email).toLowerCase();
 
       let user = await User.findOne({ $or: [{ googleId }, { email }] });
+      let isNewUser = false;
+      
       if (!user) {
+        // Brand new Google user - needs onboarding
         user = await User.create({
           firstName: payload.given_name || "",
           lastName: payload.family_name || "",
@@ -63,9 +66,16 @@ class AuthController {
           isActive: true,
           isVerified: true,
         } as any);
+        isNewUser = true;
       } else if (!user.googleId) {
+        // Existing email user linking Google
         (user as any).googleId = googleId;
         await user.save();
+      }
+      
+      // Check if user needs to complete onboarding (no userName set)
+      if (!user.userName || user.userName.trim() === '') {
+        isNewUser = true;
       }
 
       const token = generateAuthToken(user as unknown as UserInterface);
@@ -83,6 +93,7 @@ class AuthController {
 
       return res.json({
         token,
+        isNewUser,
         user: {
           id: user._id,
           email: user.email,
