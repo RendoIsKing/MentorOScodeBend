@@ -172,6 +172,27 @@ export class UsersControllers {
         return res.status(400).json({ errors: validationErrors });
       }
 
+      // Check if email is being changed to one that already exists (and it's not the current user's email)
+      if (userInput.email && userInput.email !== userToAddOnboardingDetails.email) {
+        const existingUserWithEmail = await User.findOne({ email: userInput.email, _id: { $ne: userToAddOnboardingDetails._id } });
+        if (existingUserWithEmail) {
+          console.error("[onboardUser] Email already in use:", userInput.email);
+          return res.status(400).json({ error: { message: "Email is already in use by another account." } });
+        }
+      }
+
+      // Check if username is being changed to one that already exists
+      if (userInput.userName) {
+        const existingUserWithUsername = await User.findOne({ 
+          userName: { $regex: `^${userInput.userName}$`, $options: 'i' },
+          _id: { $ne: userToAddOnboardingDetails._id } 
+        });
+        if (existingUserWithUsername) {
+          console.error("[onboardUser] Username already in use:", userInput.userName);
+          return res.status(400).json({ error: { message: "Username is already taken. Please choose another." } });
+        }
+      }
+
       const updateData: Partial<UserInterface | any> = { ...userInput };
 
       // Hash the password if it exists in userInput
@@ -256,6 +277,22 @@ export class UsersControllers {
       console.error("[onboardUser] Error in user onboarding:", err);
       console.error("[onboardUser] Error stack:", err?.stack);
       console.error("[onboardUser] Error message:", err?.message);
+      
+      // Handle MongoDB duplicate key errors specifically
+      if (err.code === 11000 || err.codeName === 'DuplicateKey') {
+        const field = Object.keys(err.keyValue || {})[0];
+        const value = err.keyValue?.[field];
+        console.error(`[onboardUser] Duplicate key error: ${field} = ${value}`);
+        
+        if (field === 'email') {
+          return res.status(400).json({ error: { message: "Email is already in use by another account." } });
+        } else if (field === 'userName') {
+          return res.status(400).json({ error: { message: "Username is already taken. Please choose another." } });
+        } else {
+          return res.status(400).json({ error: { message: `${field} is already in use.` } });
+        }
+      }
+      
       return res
         .status(500)
         .json({ error: { message: "Something went wrong.", details: err?.message } });
