@@ -13,7 +13,8 @@ import WorkoutLog from "../models/WorkoutLog";
 
 const StudentRoutes: Router = Router();
 // Recent changes endpoint
-StudentRoutes.get('/:userId/changes', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
+// Only match real ObjectId userIds so '/me/changes' doesn't get captured here
+StudentRoutes.get('/:userId([0-9a-fA-F]{24})/changes', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
   try {
     const { userId } = req.params as any;
     const limRaw = (req.query.limit as string) || '10';
