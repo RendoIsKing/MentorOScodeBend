@@ -53,7 +53,10 @@ StudentRoutes.get('/me/changes', ensureAuth as any, perUserIpLimiter({ windowMs:
     }
     const limRaw = (req.query.limit as string) || '10';
     const limit = Math.max(1, Math.min(50, Number(limRaw) || 10));
-    if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId)) return res.status(401).json({ message: 'Unauthorized' });
+  if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId)) {
+    // Be permissive for UI: return an empty list instead of error
+    return res.json({ items: [] });
+  }
     const items = await ChangeEvent.find({ user: new Types.ObjectId(resolvedUserId) }).sort({ createdAt: -1 }).limit(limit).lean();
     return res.json({ items: items.map((c:any)=>({ id: String(c._id), date: c.createdAt, type: c.type, summary: c.summary, rationale: c.rationale, actor: c.actor ? String(c.actor) : undefined, before: c.before, after: c.after })) });
   } catch {
