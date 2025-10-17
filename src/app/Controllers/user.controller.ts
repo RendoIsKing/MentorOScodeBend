@@ -155,15 +155,20 @@ export class UsersControllers {
   ): Promise<Response> => {
     try {
       const user = req.user as UserInterface;
+      console.log("[onboardUser] Starting onboarding for user:", user?.id);
 
       const userToAddOnboardingDetails = await User.findById(user.id);
       if (!userToAddOnboardingDetails) {
+        console.error("[onboardUser] User not found:", user.id);
         return res.status(404).json({ error: { message: "User not found." } });
       }
 
       const userInput = req.body as UserInput;
+      console.log("[onboardUser] Received input:", JSON.stringify(userInput, null, 2));
+      
       const validationErrors = await validate(userInput);
       if (validationErrors.length > 0) {
+        console.error("[onboardUser] Validation errors:", JSON.stringify(validationErrors, null, 2));
         return res.status(400).json({ errors: validationErrors });
       }
 
@@ -197,11 +202,20 @@ export class UsersControllers {
         updateData.hasConfirmedAge = true;
       }
 
+      console.log("[onboardUser] Updating user with data:", JSON.stringify(updateData, null, 2));
+
       const newUser = await User.findByIdAndUpdate(
         userToAddOnboardingDetails._id,
         updateData,
         { new: true }
       );
+
+      if (!newUser) {
+        console.error("[onboardUser] Failed to update user in database");
+        return res.status(500).json({ error: { message: "Failed to update user." } });
+      }
+
+      console.log("[onboardUser] User updated successfully:", newUser._id);
 
       if (newUser) {
         const hasStripe = !!process.env.STRIPE_SECRET_KEY;
@@ -213,10 +227,11 @@ export class UsersControllers {
           };
           // Fire-and-forget with safe catch to avoid unhandled rejection crashing the request
           Promise.resolve(createCustomerOnStripe(paramsToCreateCustomer)).catch((error) => {
-            console.error("Error creating customer on Stripe", error);
+            console.error("[onboardUser] Error creating customer on Stripe", error);
           });
 
           try {
+            console.log("[onboardUser] Creating Stripe Tip Product for:", newUser.userName);
             const stripeTipProduct = await createTipProductOnStripe({
               title: `${newUser.userName} + Tip Product`,
             });
@@ -224,9 +239,11 @@ export class UsersControllers {
               newUser.stripeProductId = (stripeTipProduct as any)?.id;
               newUser.stripeProduct = stripeTipProduct;
               await newUser.save();
+              console.log("[onboardUser] Stripe Tip Product created:", stripeTipProduct.id);
             }
           } catch (error) {
-            console.error("Error creating user Tip product on Stripe", error);
+            console.error("[onboardUser] Error creating user Tip product on Stripe", error);
+            // Don't fail the whole request if Stripe fails
           }
         }
       }
@@ -235,11 +252,13 @@ export class UsersControllers {
         data: newUser,
         message: "User onboarded successfully.",
       });
-    } catch (err) {
-      console.error(err, "Error in user onboarding");
+    } catch (err: any) {
+      console.error("[onboardUser] Error in user onboarding:", err);
+      console.error("[onboardUser] Error stack:", err?.stack);
+      console.error("[onboardUser] Error message:", err?.message);
       return res
         .status(500)
-        .json({ error: { message: "Something went wrong." } });
+        .json({ error: { message: "Something went wrong.", details: err?.message } });
     }
   };
 
