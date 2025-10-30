@@ -865,14 +865,33 @@ class AuthController {
       }).select("-stripeSubscriptionObject");
 
       if (result && result.user) {
+        const userDoc: any = Array.isArray((result as any).user)
+          ? (result as any).user[0]
+          : (result as any).user;
+        const followersCount = Array.isArray((result as any).followersCount)
+          ? ((result as any).followersCount[0]?.count || 0)
+          : 0;
+        const followingCount = Array.isArray((result as any).followingCount)
+          ? ((result as any).followingCount[0]?.count || 0)
+          : 0;
+        const postsCount = Array.isArray((result as any).postsCount)
+          ? ((result as any).postsCount[0]?.count || 0)
+          : 0;
+        const totalLikes = Array.isArray((result as any).likesCount)
+          ? ((result as any).likesCount[0]?.totalLikes || 0)
+          : 0;
+        const subscriberCount = Array.isArray((result as any).subscriberCount)
+          ? ((result as any).subscriberCount[0]?.count || 0)
+          : 0;
+
         return res.json({
           data: {
-            ...result.user,
-            followersCount: result.followersCount,
-            followingCount: result.followingCount,
-            postsCount: result.postsCount,
-            totalLikes: result.totalLikes,
-            subscriberCount: result.subscriberCount,
+            ...(userDoc || {}),
+            followersCount,
+            followingCount,
+            postsCount,
+            totalLikes,
+            subscriberCount,
             platformSubscription: subscriptionDetails,
           },
         });
