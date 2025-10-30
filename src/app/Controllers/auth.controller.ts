@@ -884,17 +884,28 @@ class AuthController {
           ? ((result as any).subscriberCount[0]?.count || 0)
           : 0;
 
-        return res.json({
-          data: {
-            ...(userDoc || {}),
-            followersCount,
-            followingCount,
-            postsCount,
-            totalLikes,
-            subscriberCount,
-            platformSubscription: subscriptionDetails,
-          },
-        });
+        // Preserve legacy shape (data.user = {...}) to avoid breaking existing clients,
+        // but also expose useful fields at top-level for convenience
+        const payload: any = {
+          user: userDoc || {},
+          followersCount,
+          followingCount,
+          postsCount,
+          totalLikes,
+          subscriberCount,
+          platformSubscription: subscriptionDetails,
+        };
+        // duplicate some common fields at top level for clients that read data.fullName/userName/photo
+        if (userDoc) {
+          payload._id = userDoc._id;
+          payload.fullName = userDoc.fullName;
+          payload.userName = userDoc.userName;
+          payload.email = userDoc.email;
+          payload.photo = userDoc.photo;
+          payload.coverPhoto = userDoc.coverPhoto;
+          payload.googleId = userDoc.googleId;
+        }
+        return res.json({ data: payload });
       }
 
       return res.status(404).json({ error: { message: "User not found." } });
