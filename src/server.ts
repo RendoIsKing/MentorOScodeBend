@@ -118,9 +118,14 @@ export class Server {
   }
 
   registerMiddlewares() {
+    // Serve static uploads from both CWD/public and dist-relative public to survive different runtimes
     this.app.use(
       "/api/backend",
       express.static(`${process.cwd()}${FileEnum.PUBLICDIR}`)
+    );
+    this.app.use(
+      "/api/backend",
+      express.static(path.join(__dirname, "../public"))
     );
     this.app.use(express.json({ limit: "50mb" }));
     this.app.use(express.urlencoded({ limit: "50mb", extended: true }));
