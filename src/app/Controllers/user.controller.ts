@@ -338,9 +338,11 @@ export class UsersControllers {
       // Try to stream the actual file from disk; fall back to metadata JSON if not found
       const rel = String(file.path || "");
       if (!rel) return res.status(404).json({ error: "File path missing" });
+      const cleanRel = rel.replace(/^\/+/, '');
       const tryPaths = [
-        path.join(process.cwd(), 'public', rel.replace(/^\/+/, '')),
-        path.join(__dirname, '..', '..', 'public', rel.replace(/^\/+/, '')),
+        path.join(process.cwd(), 'public', cleanRel),
+        // When running from compiled dist, __dirname points to dist/... so one level up is dist/ -> ../public
+        path.join(__dirname, '..', 'public', cleanRel),
       ];
       for (const fp of tryPaths) {
         try {
