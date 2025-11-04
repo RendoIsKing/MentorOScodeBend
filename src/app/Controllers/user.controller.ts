@@ -333,12 +333,31 @@ export class UsersControllers {
       }
 
       const file = await File.findById(id);
+      if (!file) return res.status(404).json({ error: "File not found" });
 
-      if (!file) {
-        return res.status(404).json({ error: "File not found" });
+      // Try to stream the actual file from disk; fall back to metadata JSON if not found
+      const rel = String(file.path || "");
+      if (!rel) return res.status(404).json({ error: "File path missing" });
+      const tryPaths = [
+        path.join(process.cwd(), 'public', rel.replace(/^\/+/, '')),
+        path.join(__dirname, '..', '..', 'public', rel.replace(/^\/+/, '')),
+      ];
+      for (const fp of tryPaths) {
+        try {
+          if (fs.existsSync(fp)) {
+            // best-effort content-type
+            const ct = rel.toLowerCase().endsWith('.png') ? 'image/png'
+              : rel.toLowerCase().match(/\.(jpg|jpeg)$/) ? 'image/jpeg'
+              : rel.toLowerCase().endsWith('.webp') ? 'image/webp'
+              : rel.toLowerCase().endsWith('.gif') ? 'image/gif'
+              : undefined;
+            if (ct) res.setHeader('Content-Type', ct);
+            // sendFile will handle range headers efficiently
+            return res.sendFile(fp);
+          }
+        } catch {}
       }
-
-      return res.json(file);
+      return res.status(404).json({ error: "File not found on server" });
     } catch (error) {
       console.error("Error retrieving file:", error);
       return res.status(500).json({ error: "Internal Server Error" });
