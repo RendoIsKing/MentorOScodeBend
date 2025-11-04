@@ -324,7 +324,7 @@ export class UsersControllers {
     }
   };
 
-  static getFile = async (req: Request, res: Response): Promise<Response> => {
+  static getFile = async (req: Request, res: Response): Promise<any> => {
     try {
       const { id } = req.params;
 
@@ -353,7 +353,7 @@ export class UsersControllers {
               : undefined;
             if (ct) res.setHeader('Content-Type', ct);
             // sendFile will handle range headers efficiently
-            return res.sendFile(fp);
+            return (res as any).sendFile(fp);
           }
         } catch {}
       }
