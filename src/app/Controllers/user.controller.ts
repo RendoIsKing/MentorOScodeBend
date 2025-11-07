@@ -329,15 +329,16 @@ export class UsersControllers {
       const { id } = req.params;
 
       if (!mongoose.Types.ObjectId.isValid(id)) {
-        return res.status(400).json({ error: "Invalid ID format" });
+        res.status(400).json({ error: "Invalid ID format" });
+        return;
       }
 
       const file = await File.findById(id);
-      if (!file) return res.status(404).json({ error: "File not found" });
+      if (!file) { res.status(404).json({ error: "File not found" }); return; }
 
       // Try to stream the actual file from disk; fall back to metadata JSON if not found
       const rel = String(file.path || "");
-      if (!rel) return res.status(404).json({ error: "File path missing" });
+      if (!rel) { res.status(404).json({ error: "File path missing" }); return; }
       const cleanRel = rel.replace(/^\/+/, '');
       const tryPaths = [
         path.join(process.cwd(), 'public', cleanRel),
