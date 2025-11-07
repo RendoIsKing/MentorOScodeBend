@@ -324,7 +324,7 @@ export class UsersControllers {
     }
   };
 
-  static getFile = async (req: Request, res: Response): Promise<any> => {
+  static getFile = async (req: Request, res: Response): Promise<void> => {
     try {
       const { id } = req.params;
 
@@ -355,14 +355,17 @@ export class UsersControllers {
               : undefined;
             if (ct) res.setHeader('Content-Type', ct);
             // sendFile will handle range headers efficiently
-            return (res as any).sendFile(fp);
+            (res as any).sendFile(fp);
+            return;
           }
         } catch {}
       }
-      return res.status(404).json({ error: "File not found on server" });
+      res.status(404).json({ error: "File not found on server" });
+      return;
     } catch (error) {
       console.error("Error retrieving file:", error);
-      return res.status(500).json({ error: "Internal Server Error" });
+      res.status(500).json({ error: "Internal Server Error" });
+      return;
     }
   };
 
