@@ -218,7 +218,8 @@ export class Server {
     // Student routes must be accessible with cookie-based auth inside the route (no bearer required)
     this.app.use("/api/backend/v1/student", StudentRoutes);
     this.app.use("/api/backend/v1/student", studentSnapshotRouter);
-    this.app.use("/api/backend/v1/feature", Auth, requireEntitlement as any, FeatureRoutes);
+    // Public features list to allow subscription UI to load without auth
+    this.app.use("/api/backend/v1/feature", FeatureRoutes);
     this.app.use("/api/backend/v1/card-details", CardDetailsRoutes);
     this.app.use("/api/backend/v1/subscriptions", Auth, SubscriptionRoutes);
     this.app.use("/api/backend/v1/support", Auth, SupportRoutes);
