@@ -7,7 +7,8 @@ const feature: Router = Router();
 
 feature.post("/", OnlyAdmins, FeatureController.createFeature);
 // feature.post("/product-feat/:id", FeatureController.addFeatureToProduct);
-feature.get("/", Auth, FeatureController.getAllFeaturesActions);
+// Make feature list public to prevent 403 blocking plan creation UI
+feature.get("/", FeatureController.getAllFeaturesActions);
 
 // Simple entitlement-protected probe used by FE smoke to confirm gating works
 feature.get('/protected-check', Auth as any, requireEntitlement as any, (req, res)=>{
