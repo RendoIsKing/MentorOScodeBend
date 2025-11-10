@@ -334,11 +334,22 @@ export class UsersControllers {
       }
 
       const file = await File.findById(id);
-      if (!file) { res.status(404).json({ error: "File not found" }); return; }
+      if (!file) {
+        // Fallback: redirect to frontend default avatar to avoid broken UI
+        const host = req.get('host');
+        const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
+        res.redirect(302, `${proto}://${host}/assets/images/Home/small-profile-img.svg`);
+        return;
+      }
 
       // Try to stream the actual file from disk; fall back to metadata JSON if not found
       const rel = String(file.path || "");
-      if (!rel) { res.status(404).json({ error: "File path missing" }); return; }
+      if (!rel) {
+        const host = req.get('host');
+        const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
+        res.redirect(302, `${proto}://${host}/assets/images/Home/small-profile-img.svg`);
+        return;
+      }
       const cleanRel = rel.replace(/^\/+/, '');
       const tryPaths = [
         path.join(process.cwd(), 'public', cleanRel),
@@ -361,7 +372,9 @@ export class UsersControllers {
           }
         } catch {}
       }
-      res.status(404).json({ error: "File not found on server" });
+      const host = req.get('host');
+      const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'https';
+      res.redirect(302, `${proto}://${host}/assets/images/Home/small-profile-img.svg`);
       return;
     } catch (error) {
       console.error("Error retrieving file:", error);

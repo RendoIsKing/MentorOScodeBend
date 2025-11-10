@@ -278,6 +278,8 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
         $addFields: {
           isLiked: { $gt: [{ $size: "$likeInteractions" }, 0] },
           isSaved: { $gt: [{ $size: "$savedInteractions" }, 0] },
+          // Viewer ownership flag for easier UI logic
+          isOwner: { $eq: ["$user", new Types.ObjectId(user._id)] },
           commentsCount: {
             $ifNull: [{ $arrayElemAt: ["$commentsCount.commentsCount", 0] }, 0],
           },
