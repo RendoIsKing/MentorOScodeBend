@@ -184,6 +184,8 @@ export const getPostById = async (
           isFollowing: { $gt: [{ $size: "$followInfo" }, 0] },
           isLiked: { $gt: [{ $size: "$likeInteractions" }, 0] },
           isSaved: { $gt: [{ $size: "$savedInteractions" }, 0] },
+          // Viewer ownership for modal actions
+          isOwner: { $eq: ["$user", new mongoose.Types.ObjectId(user._id)] },
           commentsCount: {
             $ifNull: [{ $arrayElemAt: ["$commentsCount.commentsCount", 0] }, 0],
           },
