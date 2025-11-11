@@ -41,9 +41,9 @@ export class SubscriptionPlanInput {
   })
   planType?: SubscriptionPlanType;
 
-  @IsNotEmpty()
+  // Entitlements are optional; plans can be created without features
+  @IsOptional()
   @ValidateNested({ each: true })
-  @ArrayMinSize(1, { message: "There should be at least one entitlement." })
   @Type(() => EntitlementInput)
   entitlements?: EntitlementInput[];
 }
