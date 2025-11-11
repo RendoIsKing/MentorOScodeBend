@@ -3,10 +3,8 @@ import {
   IsOptional,
   IsString,
   IsNumber,
-  ArrayMinSize,
   ValidateNested,
   IsEnum,
-  IsNotEmpty,
 } from "class-validator";
 import { SubscriptionPlanType } from "../../../../types/enums/subscriptionPlanEnum";
 
