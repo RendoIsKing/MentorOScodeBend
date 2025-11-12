@@ -58,32 +58,19 @@ export const getSubscriptionPlan = async (
             // { $limit: perPage },
             { $sort: { createdAt: -1 } },
             {
-              $unwind: "$featureIds",
-            },
-            {
               $lookup: {
                 from: "features",
                 localField: "featureIds",
                 foreignField: "_id",
-                as: "featureIds",
+                as: "featureObjects",
               },
             },
             {
-              $unwind: "$featureIds",
-            },
-            {
-              $group: {
-                _id: "$_id",
-                featureIds: { $push: "$featureIds" },
-                title: { $first: "$title" },
-                description: { $first: "$description" },
-                price: { $first: "$price" },
-                isDeleted: { $first: "$isDeleted" },
-                planType: { $first: "$planType" },
-                createdAt: { $first: "$createdAt" },
-                updatedAt: { $first: "$updatedAt" },
+              $addFields: {
+                featureIds: { $ifNull: ["$featureObjects", []] },
               },
             },
+            { $project: { featureObjects: 0 } },
           ],
           planCount: [{ $match: dataToFind }, { $count: "count" }],
         },
