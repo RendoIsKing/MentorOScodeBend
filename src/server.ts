@@ -118,7 +118,17 @@ export class Server {
   }
 
   registerMiddlewares() {
-    // Serve static uploads from both CWD/public and dist-relative public to survive different runtimes
+    // Serve static uploads; prefer UPLOAD_ROOT when provided (e.g., Railway volume for persistence)
+    const uploadRoot = process.env.UPLOAD_ROOT
+      ? path.isAbsolute(process.env.UPLOAD_ROOT)
+        ? process.env.UPLOAD_ROOT
+        : path.join(process.cwd(), process.env.UPLOAD_ROOT)
+      : `${process.cwd()}${FileEnum.PUBLICDIR}`;
+    if (uploadRoot) {
+      try { console.log('[STATIC] uploadRoot =', uploadRoot); } catch {}
+      this.app.use("/api/backend", express.static(uploadRoot));
+    }
+    // Also serve from both CWD/public and dist-relative public to survive different runtimes
     this.app.use(
       "/api/backend",
       express.static(`${process.cwd()}${FileEnum.PUBLICDIR}`)

@@ -24,7 +24,13 @@ import { CoachKnowledge } from '../app/Models/CoachKnowledge';
 import path from 'path';
 import { getThread, appendMessage, clearThread } from '../app/Controllers/Interaction/thread.controller';
 
-const knowledgeUpload = createMulterInstance(`${process.cwd()}${FileEnum.PUBLICDIR}/coach-knowledge`);
+const uploadRoot =
+  (process.env.UPLOAD_ROOT
+    ? (require('path') as typeof import('path')).isAbsolute(process.env.UPLOAD_ROOT)
+      ? process.env.UPLOAD_ROOT
+      : `${process.cwd()}${process.env.UPLOAD_ROOT}`
+    : `${process.cwd()}${FileEnum.PUBLICDIR}`);
+const knowledgeUpload = createMulterInstance(`${uploadRoot}/coach-knowledge`);
 import { Auth } from "../app/Middlewares";
 
 const InteractionRoutes: Router = Router();

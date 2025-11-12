@@ -9,8 +9,14 @@ import { createMulterInstance } from "../app/Middlewares/fileUpload";
 import { updateProfilePicture } from '../app/Controllers/updateProfilePicture';
 
 const user: Router = Router();
+const uploadBase =
+  (process.env.UPLOAD_ROOT
+    ? (require('path') as typeof import('path')).isAbsolute(process.env.UPLOAD_ROOT)
+      ? process.env.UPLOAD_ROOT
+      : `${process.cwd()}${process.env.UPLOAD_ROOT}`
+    : `${process.cwd()}${FileEnum.PUBLICDIR}`);
 const upload = createMulterInstance(
-  `${process.cwd()}${FileEnum.PUBLICDIR}${FileEnum.PROFILEIMAGE}`
+  `${uploadBase}${FileEnum.PROFILEIMAGE}`
 );
 user.post("/fcm-token", Auth, UsersControllers.updateFcmToken);
 
