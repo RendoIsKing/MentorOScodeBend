@@ -4,7 +4,8 @@ WORKDIR /app
 
 # install deps
 COPY package*.json ./
-RUN npm ci
+# Use npm install to avoid lockfile mismatch failures when deps change
+RUN npm install
 
 # app source
 COPY . .
@@ -18,7 +19,8 @@ WORKDIR /app
 
 # only copy what we need to run
 COPY package*.json ./
-RUN npm ci --omit=dev
+# Use npm install (omit dev deps) in runtime image too
+RUN npm install --omit=dev
 
 COPY --from=build /app/dist ./dist
 
