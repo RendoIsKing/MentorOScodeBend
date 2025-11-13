@@ -22,19 +22,24 @@ const ALLOWED_FILE_TYPES = [
 
 export function createMulterInstance(path: string) {
   // Ensure the directory exists
-  if (!fs.existsSync(path)) {
-    fs.mkdirSync(path, { recursive: true }); // Create the directory
+  const useS3 = String(process.env.MEDIA_STORAGE || "").toLowerCase() === "s3";
+  if (!useS3) {
+    if (!fs.existsSync(path)) {
+      fs.mkdirSync(path, { recursive: true }); // Create the directory
+    }
   }
 
-  const storage = multer.diskStorage({
-    destination: function (req: Request, file: FileInterface, cb: Function) {
-      cb(null, path);
-    },
-    filename: function (req: Request, file: FileInterface, cb: Function) {
-      const fileExtension = file.originalname.split(".").pop();
-      cb(null, `${file.fieldname}-${Date.now()}.${fileExtension}`);
-    },
-  });
+  const storage = useS3
+    ? multer.memoryStorage()
+    : multer.diskStorage({
+        destination: function (req: Request, file: FileInterface, cb: Function) {
+          cb(null, path);
+        },
+        filename: function (req: Request, file: FileInterface, cb: Function) {
+          const fileExtension = file.originalname.split(".").pop();
+          cb(null, `${file.fieldname}-${Date.now()}.${fileExtension}`);
+        },
+      });
 
   const fileFilter = (req: Request, file: FileInterface, cb: Function) => {
     if (ALLOWED_FILE_TYPES.includes(file.mimetype)) {

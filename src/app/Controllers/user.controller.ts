@@ -34,6 +34,21 @@ import { userActionType } from "../../types/enums/userActionTypeEnum";
 import { MoreAction } from "../Models/MoreAction";
 const JWT_SECRET = process.env.JWT_SECRET || "secret_secret";
 
+// Optional S3 support (enabled when MEDIA_STORAGE=s3)
+let S3ClientCtor: any;
+let GetObjectCommandCtor: any;
+let DeleteObjectCommandCtor: any;
+let PutObjectCommandCtor: any;
+let getSignedUrlFn: any;
+try {
+  // Dynamic import so build works even without S3 deps locally
+  S3ClientCtor = require("@aws-sdk/client-s3").S3Client;
+  GetObjectCommandCtor = require("@aws-sdk/client-s3").GetObjectCommand;
+  DeleteObjectCommandCtor = require("@aws-sdk/client-s3").DeleteObjectCommand;
+  PutObjectCommandCtor = require("@aws-sdk/client-s3").PutObjectCommand;
+  getSignedUrlFn = require("@aws-sdk/s3-request-presigner").getSignedUrl;
+} catch {}
+
 // import { createCustomerOnStripe } from "../../utils/Webhooks/createCustomerOnStripe";
 
 export class UsersControllers {
@@ -308,14 +323,43 @@ export class UsersControllers {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
-      const file = new File({
-        path: `profile-image/${req.file.filename}`,
-      });
-      const savedFile = await file.save();
-      return res.json({
-        id: savedFile._id,
-        path: savedFile.path,
-      });
+      const useS3 = String(process.env.MEDIA_STORAGE || "").toLowerCase() === "s3";
+      if (useS3 && S3ClientCtor) {
+        const region = process.env.S3_REGION || process.env.AWS_REGION || "eu-north-1";
+        const accessKeyId = process.env.S3_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
+        const secretAccessKey = process.env.S3_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
+        const bucket = process.env.S3_BUCKET as string;
+        if (!bucket || !accessKeyId || !secretAccessKey) {
+          return res.status(500).json({ error: "S3 is not configured properly." });
+        }
+        const s3 = new S3ClientCtor({
+          region,
+          credentials: { accessKeyId, secretAccessKey },
+        });
+        const safeName = (req.file.originalname || "upload")
+          .replace(/[^A-Za-z0-9._-]/g, "_")
+          .slice(0, 64);
+        const key = `profile-image/${Date.now()}-${Math.random().toString(36).slice(2)}-${safeName}`;
+        await s3.send(new PutObjectCommandCtor({
+          Bucket: bucket,
+          Key: key,
+          Body: (req.file as any).buffer,
+          ContentType: (req.file as any).mimetype,
+          CacheControl: "public, max-age=31536000, immutable",
+        }));
+        const file = new File({ path: key });
+        const savedFile = await file.save();
+        return res.json({ id: savedFile._id, path: savedFile.path });
+      } else {
+        const file = new File({
+          path: `profile-image/${(req.file as any).filename}`,
+        });
+        const savedFile = await file.save();
+        return res.json({
+          id: savedFile._id,
+          path: savedFile.path,
+        });
+      }
     } catch (error) {
       console.error("Error uploading file:", error);
       return res
@@ -350,8 +394,33 @@ export class UsersControllers {
         res.redirect(302, `${proto}://${host}/assets/images/Home/small-profile-img.svg`);
         return;
       }
+
+      // If using S3, redirect to a short-lived signed URL
+      const useS3 = String(process.env.MEDIA_STORAGE || "").toLowerCase() === "s3";
+      if (useS3 && S3ClientCtor && getSignedUrlFn) {
+        try {
+          const region = process.env.S3_REGION || process.env.AWS_REGION || "eu-north-1";
+          const accessKeyId = process.env.S3_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
+          const secretAccessKey = process.env.S3_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
+          const bucket = process.env.S3_BUCKET as string;
+          const s3 = new S3ClientCtor({ region, credentials: { accessKeyId, secretAccessKey } });
+          const cmd = new GetObjectCommandCtor({ Bucket: bucket, Key: rel });
+          const signed = await getSignedUrlFn(s3, cmd, { expiresIn: 60 * 10 }); // 10 minutes
+          res.redirect(302, signed);
+          return;
+        } catch (e) {
+          // fall through to local checks if anything goes wrong
+        }
+      }
+
       const cleanRel = rel.replace(/^\/+/, '');
+      const uploadRoot = process.env.UPLOAD_ROOT
+        ? (path.isAbsolute(process.env.UPLOAD_ROOT)
+            ? process.env.UPLOAD_ROOT
+            : path.join(process.cwd(), process.env.UPLOAD_ROOT))
+        : undefined;
       const tryPaths = [
+        ...(uploadRoot ? [path.join(uploadRoot, cleanRel)] : []),
         path.join(process.cwd(), 'public', cleanRel),
         // When running from compiled dist, __dirname points to dist/... so one level up is dist/ -> ../public
         path.join(__dirname, '..', 'public', cleanRel),
@@ -395,12 +464,41 @@ export class UsersControllers {
         return res.status(404).json({ error: "File not found" });
       }
 
-      const filePath = path.join(process.cwd(), "public", file.path);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      } else {
-        return res.status(404).json({ error: "File not found on server" });
+      const candidates = [
+        path.join(process.cwd(), "public", String(file.path || "")),
+        path.join(__dirname, "..", "public", String(file.path || "")),
+        ...(process.env.UPLOAD_ROOT
+          ? [path.join(
+              path.isAbsolute(process.env.UPLOAD_ROOT) ? process.env.UPLOAD_ROOT : path.join(process.cwd(), process.env.UPLOAD_ROOT),
+              String(file.path || "")
+            )]
+          : []),
+      ];
+      let deleted = false;
+      for (const p of candidates) {
+        try {
+          if (fs.existsSync(p)) {
+            fs.unlinkSync(p);
+            deleted = true;
+          }
+        } catch {}
+        if (deleted) break;
       }
+
+      // Also try deleting from S3 if configured
+      const useS3 = String(process.env.MEDIA_STORAGE || "").toLowerCase() === "s3";
+      if (!deleted && useS3 && S3ClientCtor) {
+        try {
+          const region = process.env.S3_REGION || process.env.AWS_REGION || "eu-north-1";
+          const accessKeyId = process.env.S3_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
+          const secretAccessKey = process.env.S3_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
+          const bucket = process.env.S3_BUCKET as string;
+          const s3 = new S3ClientCtor({ region, credentials: { accessKeyId, secretAccessKey } });
+          await s3.send(new DeleteObjectCommandCtor({ Bucket: bucket, Key: String(file.path || "") }));
+          deleted = true;
+        } catch {}
+      }
+      if (!deleted) return res.status(404).json({ error: "File not found on server" });
 
       file.isDeleted = true;
       file.deletedAt = new Date();
