@@ -124,6 +124,61 @@ export class Server {
         ? process.env.UPLOAD_ROOT
         : path.join(process.cwd(), process.env.UPLOAD_ROOT)
       : `${process.cwd()}${FileEnum.PUBLICDIR}`;
+
+    // Handle legacy path-based media URLs by redirecting/serving dynamically
+    // e.g. /api/backend/profile-image/<fileName>
+    try {
+      // Lazy require AWS SDK to avoid hard dependency in local dev
+      const Aws = (() => {
+        try {
+          return {
+            S3Client: require("@aws-sdk/client-s3").S3Client,
+            GetObjectCommand: require("@aws-sdk/client-s3").GetObjectCommand,
+            getSignedUrl: require("@aws-sdk/s3-request-presigner").getSignedUrl,
+          };
+        } catch {
+          return null;
+        }
+      })();
+      this.app.get("/api/backend/profile-image/:name", async (req: any, res: any) => {
+        const fileName = String(req.params?.name || "");
+        const key = `profile-image/${fileName}`;
+        const useS3 = String(process.env.MEDIA_STORAGE || "").toLowerCase() === "s3";
+        if (useS3 && Aws) {
+          try {
+            const region = process.env.S3_REGION || process.env.AWS_REGION || "eu-north-1";
+            const accessKeyId = process.env.S3_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
+            const secretAccessKey = process.env.S3_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
+            const bucket = process.env.S3_BUCKET as string;
+            if (bucket && accessKeyId && secretAccessKey) {
+              const s3 = new Aws.S3Client({ region, credentials: { accessKeyId, secretAccessKey } });
+              const cmd = new Aws.GetObjectCommand({ Bucket: bucket, Key: key });
+              const signed = await Aws.getSignedUrl(s3, cmd, { expiresIn: 60 * 10 });
+              return res.redirect(302, signed);
+            }
+          } catch {}
+        }
+        // Local/persistent disk fallback
+        const tryFiles: string[] = [];
+        if (uploadRoot) tryFiles.push(path.join(uploadRoot, key));
+        tryFiles.push(path.join(process.cwd(), 'public', key));
+        tryFiles.push(path.join(__dirname, '../public', key));
+        for (const fp of tryFiles) {
+          try {
+            if (fs.existsSync(fp)) {
+              return res.sendFile(fp);
+            }
+          } catch {}
+        }
+        // Final fallback: send placeholder to avoid broken UI
+        try {
+          return res.redirect(302, '/assets/images/Home/small-profile-img.svg');
+        } catch {
+          return res.status(404).end();
+        }
+      });
+    } catch {}
+
     if (uploadRoot) {
       try { console.log('[STATIC] uploadRoot =', uploadRoot); } catch {}
       this.app.use("/api/backend", express.static(uploadRoot));
