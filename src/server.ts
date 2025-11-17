@@ -274,15 +274,19 @@ export class Server {
     this.app.use('/api/backend', healthRouter);
     this.app.use('/', legalRoutes);
     this.app.use('/api/backend/v1', accountRoutes);
-    // Dedicated limiter for auth endpoints with a reasonable burst
-    const authLimiter = rateLimit({
+    // Dedicated limiter for auth POST endpoints only (do NOT count /auth/me or other GETs)
+    const authPostLimiter = rateLimit({
       windowMs: 60_000,
-      max: Number(process.env.RL_AUTH_MAX || 30),
+      max: Number(process.env.RL_AUTH_LOGIN_MAX || 30),
       standardHeaders: true,
       legacyHeaders: false,
+      skip: (req) => req.method !== 'POST',
     });
-    // Apply auth limiter narrowly to auth routes only
-    this.app.use("/api/backend/v1/auth", authLimiter, AuthRoutes);
+    // Apply only to login endpoints; mount limiter before the auth router
+    this.app.use("/api/backend/v1/auth/user-login", authPostLimiter);
+    this.app.use("/api/backend/v1/auth/google", authPostLimiter);
+    // Mount remaining auth routes without limiter so /auth/me isn't rate-limited
+    this.app.use("/api/backend/v1/auth", AuthRoutes);
     this.app.use("/api/backend/v1/profile", Auth, ProfileRoutes);
     this.app.use("/api/backend/v1/user", UserRoutes);
     this.app.use("/api/backend/v1/module", OnlyAdmins, ModuleRoutes);
