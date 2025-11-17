@@ -240,7 +240,23 @@ export class Server {
     if (isProd && process.env.DEV_LOGIN_ENABLED === 'true') {
       console.warn('[WARN] DEV_LOGIN_ENABLED=true in production – dev routes should be disabled');
     }
-    this.app.use('/api/backend/', rateLimit({ windowMs: 60_000, max: 120 }));
+    // Rate limiting
+    // General limiter for backend routes, but skip auth endpoints and streaming
+    const generalLimiter = rateLimit({
+      windowMs: 60_000,
+      max: Number(process.env.RL_GENERAL_MAX || 600),
+      standardHeaders: true,
+      legacyHeaders: false,
+      skip: (req) => {
+        const p = req.path || '';
+        // Skip auth endpoints; they have their own dedicated limiter
+        if (p.startsWith('/v1/auth')) return true;
+        // Skip event streams (long-lived)
+        if (p.includes('/events/stream')) return true;
+        return false;
+      },
+    });
+    this.app.use('/api/backend', generalLimiter);
   }
 
   regsiterRoutes() {
@@ -258,7 +274,15 @@ export class Server {
     this.app.use('/api/backend', healthRouter);
     this.app.use('/', legalRoutes);
     this.app.use('/api/backend/v1', accountRoutes);
-    this.app.use("/api/backend/v1/auth", AuthRoutes);
+    // Dedicated limiter for auth endpoints with a reasonable burst
+    const authLimiter = rateLimit({
+      windowMs: 60_000,
+      max: Number(process.env.RL_AUTH_MAX || 30),
+      standardHeaders: true,
+      legacyHeaders: false,
+    });
+    // Apply auth limiter narrowly to auth routes only
+    this.app.use("/api/backend/v1/auth", authLimiter, AuthRoutes);
     this.app.use("/api/backend/v1/profile", Auth, ProfileRoutes);
     this.app.use("/api/backend/v1/user", UserRoutes);
     this.app.use("/api/backend/v1/module", OnlyAdmins, ModuleRoutes);
