@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsEmail, IsDateString, IsMongoId } from 'class-validator';
+import { IsOptional, IsString, IsEmail, IsDateString, IsMongoId, IsBoolean } from 'class-validator';
 
 export class UpdateUserDTO {
   @IsOptional()
@@ -60,6 +60,11 @@ export class UpdateUserDTO {
   @IsOptional()
   @IsMongoId()
   coverPhotoId?: string;
+
+  // Mentor mode (UI/UX gating). Safe to toggle without changing permissions.
+  @IsOptional()
+  @IsBoolean()
+  isMentor?: boolean;
 
 
 }

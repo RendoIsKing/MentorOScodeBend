@@ -143,6 +143,13 @@ const UserSchema = new Schema(
       type: String,
       default: RolesEnum.USER,
     },
+    // Mentor mode (UI/UX gating). This does NOT grant admin privileges.
+    // Default false for all existing users.
+    isMentor: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     isActive: {
       type: Boolean,
       default: true,

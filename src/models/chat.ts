@@ -15,6 +15,7 @@ export interface IChatMessage {
   thread: Types.ObjectId;
   sender: Types.ObjectId;
   text: string;
+  clientId?: string | null;
   createdAt: Date;
   readBy: Types.ObjectId[];
 }
@@ -36,6 +37,8 @@ const ChatMessageSchema = new Schema<IChatMessage>(
     thread: { type: Schema.Types.ObjectId, ref: 'ChatThread', index: true, required: true },
     sender: { type: Schema.Types.ObjectId, ref: 'User', index: true, required: true },
     text: { type: String, required: true },
+    // Optional client-provided id for optimistic UI dedupe.
+    clientId: { type: String, required: false, index: true, default: null },
     readBy: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   },
   { timestamps: { createdAt: true, updatedAt: false } }

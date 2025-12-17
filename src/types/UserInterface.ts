@@ -14,6 +14,7 @@ export interface UserInterface extends Document {
   password: string;
   googleId?: string | null;
   role: RolesEnum;
+  isMentor?: boolean;
   lastLogin: Date;
   photoId: Types.ObjectId | FileInterface;
   coverPhotoId: Types.ObjectId | FileInterface;

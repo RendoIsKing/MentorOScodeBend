@@ -18,8 +18,18 @@ r.post('/conversations', ensureAuth as any, async (req: any, res) => {
     if (!partnerId || partnerId === me) return res.status(400).json({ error: 'invalid partner' });
     const pair = [new Types.ObjectId(me), new Types.ObjectId(String(partnerId))].sort((a,b)=>a.toString().localeCompare(b.toString()));
     let t = await DMThread.findOne({ participants: pair });
-    if (!t) t = await (await DMThread.create({ participants: pair })).populate?.('participants') || await DMThread.findOne({ participants: pair });
-    const payload = { id: String(t?._id), lastMessageText: t?.lastMessageText || '', lastMessageAt: t?.lastMessageAt || null, participants: (t?.participants||[]).map(String) };
+    if (!t) {
+      t = await DMThread.create({ participants: pair, unread: new Map([[String(partnerId), 0], [me, 0]]) } as any);
+    }
+    // Ensure unread map has keys for both participants
+    try {
+      const ids = (t?.participants || []).map(String);
+      for (const p of ids) {
+        if ((t as any).unread?.get?.(p) === undefined) (t as any).unread?.set?.(p, 0);
+      }
+      await t.save();
+    } catch {}
+    const payload = { id: String(t?._id), lastMessageText: t?.lastMessageText || '', lastMessageAt: t?.lastMessageAt || null, participants: (t?.participants||[]).map(String), unread: (t as any)?.unread?.get?.(me) ?? 0 };
     sseHub.publishMany(payload.participants, { type: 'chat:thread', payload });
     return res.json({ conversationId: payload.id });
   } catch (e) { return res.status(500).json({ error: 'internal' }); }
@@ -29,7 +39,7 @@ r.get('/conversations', ensureAuth as any, async (req: any, res) => {
   try {
     const me = String(req.user._id);
     const list = await DMThread.find({ participants: me }).sort({ updatedAt: -1 }).limit(50).lean();
-    return res.json({ conversations: list.map(t=>({ id: String(t._id), participants: (t.participants||[]).map(String), lastMessageText: t.lastMessageText||'', lastMessageAt: t.lastMessageAt||null, unread: 0 })) });
+    return res.json({ conversations: list.map(t=>({ id: String(t._id), participants: (t.participants||[]).map(String), lastMessageText: t.lastMessageText||'', lastMessageAt: t.lastMessageAt||null, unread: (t as any)?.unread?.get?.(me) ?? 0 })) });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
@@ -55,11 +65,21 @@ r.post('/conversations/:id/messages', ensureAuth as any, async (req: any, res) =
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'text_required' });
     const t = await DMThread.findById(id);
     if (!t || !isParticipant(t, me)) return res.status(403).json({ error: 'forbidden' });
-    const m = await DMMessage.create({ thread: t._id, sender: me, text: String(text).trim(), clientId, readBy: [me] } as any);
-    t.lastMessageText = m.text; t.lastMessageAt = new Date(); await t.save();
+    const m = await DMMessage.create({ thread: t._id, sender: me, text: String(text).trim(), clientId: clientId || null, readBy: [me] } as any);
+    t.lastMessageText = m.text;
+    t.lastMessageAt = new Date();
+    // Update per-user unread counts
+    for (const p of (t.participants || []).map(String)) {
+      if ((t as any).unread?.get?.(p) === undefined) (t as any).unread?.set?.(p, 0);
+      (t as any).unread?.set?.(p, p === me ? 0 : (((t as any).unread?.get?.(p) ?? 0) + 1));
+    }
+    await t.save();
     const payload = { threadId: String(t._id), message: { id: String(m._id), sender: me, text: m.text, clientId: clientId || null, createdAt: m.createdAt, status: 'delivered' } };
     sseHub.publishMany((t.participants||[]).map(String), { type: 'chat:message', payload });
-    sseHub.publishMany((t.participants||[]).map(String), { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants: (t.participants||[]).map(String) } });
+    // send per-user unread with chat:thread
+    for (const p of (t.participants || []).map(String)) {
+      sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants: (t.participants||[]).map(String), unread: (t as any).unread?.get?.(p) ?? 0 } });
+    }
     return res.status(201).json({ ok: true, id: String(m._id) });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
@@ -70,7 +90,18 @@ r.post('/conversations/:id/read', ensureAuth as any, async (req: any, res) => {
     const { id } = req.params;
     const t = await DMThread.findById(id);
     if (!t || !isParticipant(t, me)) return res.status(403).json({ error: 'forbidden' });
+    // Mark messages read and clear unread count
+    try {
+      await DMMessage.updateMany({ thread: id, sender: { $ne: me } }, { $addToSet: { readBy: new Types.ObjectId(me) } } as any);
+    } catch {}
+    try {
+      (t as any).unread?.set?.(me, 0);
+      await t.save();
+    } catch {}
+
     sseHub.publishMany((t.participants||[]).map(String), { type: 'chat:read', payload: { threadId: id, by: me } });
+    // Push updated thread unread to reader
+    sseHub.publish(me, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText || '', lastMessageAt: t.lastMessageAt || null, participants: (t.participants||[]).map(String), unread: 0 } });
     return res.json({ ok: true });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
