@@ -15,6 +15,18 @@ export interface UserInterface extends Document {
   googleId?: string | null;
   role: RolesEnum;
   isMentor?: boolean;
+  mentorExpertise?: string[];
+  mentorCertifications?: string[];
+  mentorYearsExperience?: number | null;
+  mentorHasFreeTrial?: boolean;
+  mentorRating?: number | null;
+  mentorReviewCount?: number;
+  mentorAiVoiceTone?: string;
+  mentorAiKnowledgeBaseFileIds?: Types.ObjectId[];
+  mentorAiTrainingPhilosophy?: string;
+  mentorAiNutritionPhilosophy?: string;
+  mentorAiMacroApproach?: string;
+  mentorAiDietaryNotes?: string;
   lastLogin: Date;
   photoId: Types.ObjectId | FileInterface;
   coverPhotoId: Types.ObjectId | FileInterface;

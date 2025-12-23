@@ -150,6 +150,58 @@ const UserSchema = new Schema(
       default: false,
       index: true,
     },
+    // Mentor profile fields (for the new design). Optional and safe for existing users.
+    mentorExpertise: {
+      type: [String],
+      default: [],
+    },
+    mentorCertifications: {
+      type: [String],
+      default: [],
+    },
+    mentorYearsExperience: {
+      type: Number,
+      default: null,
+    },
+    mentorHasFreeTrial: {
+      type: Boolean,
+      default: false,
+    },
+    // Temporary fields until a full reviews system exists
+    mentorRating: {
+      type: Number,
+      default: null,
+    },
+    mentorReviewCount: {
+      type: Number,
+      default: 0,
+    },
+    // Mentor AI config (for the new design). Optional.
+    mentorAiVoiceTone: {
+      type: String,
+      default: null,
+    },
+    mentorAiKnowledgeBaseFileIds: {
+      type: [Types.ObjectId],
+      ref: "File",
+      default: [],
+    },
+    mentorAiTrainingPhilosophy: {
+      type: String,
+      default: null,
+    },
+    mentorAiNutritionPhilosophy: {
+      type: String,
+      default: null,
+    },
+    mentorAiMacroApproach: {
+      type: String,
+      default: null,
+    },
+    mentorAiDietaryNotes: {
+      type: String,
+      default: null,
+    },
     isActive: {
       type: Boolean,
       default: true,
