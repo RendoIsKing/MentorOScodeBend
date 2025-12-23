@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsEmail, IsDateString, IsMongoId, IsBoolean } from 'class-validator';
+import { IsOptional, IsString, IsEmail, IsDateString, IsMongoId, IsBoolean, IsArray, IsNumber } from 'class-validator';
 
 export class UpdateUserDTO {
   @IsOptional()
@@ -65,6 +65,59 @@ export class UpdateUserDTO {
   @IsOptional()
   @IsBoolean()
   isMentor?: boolean;
+
+  // Mentor profile fields (optional)
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  mentorExpertise?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  mentorCertifications?: string[];
+
+  @IsOptional()
+  @IsNumber()
+  mentorYearsExperience?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  mentorHasFreeTrial?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  mentorRating?: number;
+
+  @IsOptional()
+  @IsNumber()
+  mentorReviewCount?: number;
+
+  // Mentor AI config (for the new design). Optional.
+  @IsOptional()
+  @IsString()
+  mentorAiVoiceTone?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsMongoId({ each: true })
+  mentorAiKnowledgeBaseFileIds?: string[];
+
+  @IsOptional()
+  @IsString()
+  mentorAiTrainingPhilosophy?: string;
+
+  @IsOptional()
+  @IsString()
+  mentorAiNutritionPhilosophy?: string;
+
+  @IsOptional()
+  @IsString()
+  mentorAiMacroApproach?: string;
+
+  @IsOptional()
+  @IsString()
+  mentorAiDietaryNotes?: string;
 
 
 }
