@@ -436,6 +436,21 @@ class AuthController {
           orClauses.push({ completePhoneNumber: `${dial3}--${num3}` });
           orClauses.push({ $and: [{ dialCode: dial3 }, { phoneNumber: num3 }] });
         }
+      } else if (phoneNumber && dialCode) {
+        // Support legacy frontend payload: { dialCode: "47", phoneNumber: "48290380", password }
+        // (Earlier code accidentally only supported phoneNumber strings containing "--".)
+        const esc = (s: string) => s.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
+        const dial = String(dialCode || "").replace(/^\+/, "").replace(/\s+/g, "");
+        const num = String(phoneNumber || "").replace(/\s+/g, "");
+        if (dial && num) {
+          orClauses.push({ completePhoneNumber: `${dial}--${num}` });
+          orClauses.push({
+            completePhoneNumber: {
+              $regex: new RegExp(`^[A-Za-z]{2}--${esc(dial)}--${esc(num)}$`, "i"),
+            },
+          });
+          orClauses.push({ $and: [{ dialCode: dial }, { phoneNumber: num }] });
+        }
       }
 
       const user = await User.findOne({
