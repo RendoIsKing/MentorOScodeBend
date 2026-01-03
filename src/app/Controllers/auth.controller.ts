@@ -307,13 +307,19 @@ class AuthController {
       // If password change requested, require and verify currentPassword
       if (updateData.password) {
         const currentPassword = (req.body as any)?.currentPassword as string | undefined;
-        if (!currentPassword) {
-          return res.status(400).json({ error: { message: "CURRENT_PASSWORD_REQUIRED" } });
-        }
-        // Fetch fresh user to compare hash
+        // Fetch fresh user to compare hash (and to detect first-time password set during onboarding)
         const dbUser = await User.findById(user.id).select("password");
-        if (!dbUser || !dbUser.password || !compareSync(currentPassword, dbUser.password)) {
-          return res.status(400).json({ error: { message: "CURRENT_PASSWORD_INVALID" } });
+        const hasExistingPassword = Boolean(dbUser?.password);
+
+        // If the user already has a password, require currentPassword to change it.
+        // If they don't have one yet (OTP/Google onboarding), allow setting initial password without currentPassword.
+        if (hasExistingPassword) {
+          if (!currentPassword) {
+            return res.status(400).json({ error: { message: "CURRENT_PASSWORD_REQUIRED" } });
+          }
+          if (!compareSync(currentPassword, dbUser!.password as any)) {
+            return res.status(400).json({ error: { message: "CURRENT_PASSWORD_INVALID" } });
+          }
         }
         const salt = genSaltSync(10);
         updateData.password = hashSync(updateData.password, salt);
@@ -423,11 +429,13 @@ class AuthController {
           orClauses.push({ completePhoneNumber: `${dial}--${num}` });
           orClauses.push({
             completePhoneNumber: {
-              $regex: new RegExp(`^[A-Za-z]{2}--${esc(dial)}--${esc(num)}$`, "i"),
+              // Some legacy data stored dialCode with a leading '+' (e.g. "NO--+47--48290380")
+              $regex: new RegExp(`^[A-Za-z]{2}--\\+?${esc(dial)}--${esc(num)}$`, "i"),
             },
           });
           // Also allow direct match on separate fields
           orClauses.push({ $and: [{ dialCode: dial }, { phoneNumber: num }] });
+          orClauses.push({ $and: [{ dialCode: `+${dial}` }, { phoneNumber: num }] });
         } else {
           // Already three-part; try exact match
           const [, rawDial3, rawNum3] = parts as any;
@@ -435,6 +443,7 @@ class AuthController {
           const num3 = String(rawNum3 || "").replace(/\s+/g, "");
           orClauses.push({ completePhoneNumber: `${dial3}--${num3}` });
           orClauses.push({ $and: [{ dialCode: dial3 }, { phoneNumber: num3 }] });
+          orClauses.push({ $and: [{ dialCode: `+${dial3}` }, { phoneNumber: num3 }] });
         }
       } else if (phoneNumber && dialCode) {
         // Support legacy frontend payload: { dialCode: "47", phoneNumber: "48290380", password }
@@ -446,10 +455,11 @@ class AuthController {
           orClauses.push({ completePhoneNumber: `${dial}--${num}` });
           orClauses.push({
             completePhoneNumber: {
-              $regex: new RegExp(`^[A-Za-z]{2}--${esc(dial)}--${esc(num)}$`, "i"),
+              $regex: new RegExp(`^[A-Za-z]{2}--\\+?${esc(dial)}--${esc(num)}$`, "i"),
             },
           });
           orClauses.push({ $and: [{ dialCode: dial }, { phoneNumber: num }] });
+          orClauses.push({ $and: [{ dialCode: `+${dial}` }, { phoneNumber: num }] });
         }
       }
 
