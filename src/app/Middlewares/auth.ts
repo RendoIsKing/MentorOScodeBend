@@ -54,10 +54,7 @@ export default async function Auth(
 
     if (token) {
       try {
-        const primary = process.env.APP_SECRET || process.env.JWT_SECRET;
-        if (!primary) {
-          return res.status(500).json({ error: { message: "APP_SECRET or JWT_SECRET missing" } });
-        }
+        const primary = process.env.APP_SECRET || process.env.JWT_SECRET || "dev_session_secret_change_me";
         let payload: any;
         try { payload = jwt.verify(token, primary); } catch (e) {
           // If verification fails, fall through to passport JWT
