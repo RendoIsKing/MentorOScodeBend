@@ -43,6 +43,9 @@ When creating training plans, ALWAYS follow this exact format:
   "Kjemp på! Denne økten gjør deg sterkere både fysisk og mentalt. Gi alt du har!"
 `;
 
+/**
+ * Handle chat messages for Coach Engh and return AI response.
+ */
 export const chatWithCoachEngh = async (req: Request, res: Response) => {
   try {
     const Body = z.object({
@@ -132,6 +135,9 @@ Mandag: Bryst og Triceps
 3. Dips: 3 sett x 6-8 reps
 - Det var det for dagen, stå på! Husk målene du har satt deg og kjemp for å oppnå dem - dette får du til!`;
 
+/**
+ * Handle chat messages for Coach Majen and return AI response.
+ */
 export const chatWithCoachMajen = async (req: Request, res: Response) => {
   try {
     const Body = z.object({

@@ -54,11 +54,13 @@ export default async function Auth(
 
     if (token) {
       try {
-        const primary = process.env.APP_SECRET || process.env.JWT_SECRET || 'secret_secret';
+        const primary = process.env.APP_SECRET || process.env.JWT_SECRET;
+        if (!primary) {
+          return res.status(500).json({ error: { message: "APP_SECRET or JWT_SECRET missing" } });
+        }
         let payload: any;
         try { payload = jwt.verify(token, primary); } catch (e) {
-          // Try fallback dev secret used elsewhere
-          try { payload = jwt.verify(token, 'dev_session_secret_change_me'); } catch {}
+          // If verification fails, fall through to passport JWT
         }
         if (!payload?.id) return res.status(401).json({ error: { message: 'Invalid Token. Access Denied!' } });
         const dbUser = await User.findById(payload.id);

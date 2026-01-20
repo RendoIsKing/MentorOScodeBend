@@ -5,6 +5,9 @@ import stripeInstance from "../../../../utils/stripe";
 import * as Sentry from '@sentry/node';
 import { User } from "../../../Models/User";
 
+/**
+ * Create Stripe session/setup intent for current user.
+ */
 export const createSessionAction = async (
   req: Request,
   res: Response

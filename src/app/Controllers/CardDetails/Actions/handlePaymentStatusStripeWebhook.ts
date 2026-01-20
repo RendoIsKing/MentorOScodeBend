@@ -8,6 +8,9 @@ import { Types } from 'mongoose';
 import * as Sentry from '@sentry/node';
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
 
+/**
+ * Handle Stripe webhook events for payment/subscription updates.
+ */
 export const handlePaymentStatusWebhookStripe = async (
   req: Request,
   res: Response
@@ -25,7 +28,6 @@ export const handlePaymentStatusWebhookStripe = async (
 
   const sig = req.headers["stripe-signature"];
   if (!sig) {
-    console.log(`⚠️  Missing Stripe signature.`);
     return res.status(400).send(`Webhook Error: Missing Stripe signature.`);
   }
 
@@ -34,7 +36,7 @@ export const handlePaymentStatusWebhookStripe = async (
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
   } catch (err) {
-    console.log(`⚠️  Webhook signature verification failed.`, err.message);
+    console.error(`Webhook signature verification failed.`, (err as any)?.message || err);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
   try { Sentry.addBreadcrumb({ category: 'stripe', message: 'webhook', data: { type: event?.type } }); } catch {}
@@ -56,15 +58,17 @@ export const handlePaymentStatusWebhookStripe = async (
       await handlePaymentFailed(event);
       break;
     default:
-      console.log(`Unhandled event type ${event.type}`);
+      break;
   }
 
   return res.json({ received: true });
 };
 
+/**
+ * Handle subscription lifecycle events from Stripe.
+ */
 const handleSubscriptionEvent = async (event: any) => {
   const subscriptionData = event.data.object;
-  console.log("Handling subscription event:", subscriptionData);
 
   try {
     let updatedSubscription = await Subscription.findOneAndUpdate(
@@ -120,19 +124,27 @@ const handleSubscriptionEvent = async (event: any) => {
       // Mark user as subscribed and persist entitlement flag for access guard
       await User.updateOne({ _id: updatedSubscription.userId }, { $set: { status: 'SUBSCRIBED' } });
     } catch (e) {
-      console.log('user entitlement update failed');
+      console.error('user entitlement update failed', e);
     }
-    if (updatedSubscription) console.log("Subscription Updated:", { id: updatedSubscription._id, status: updatedSubscription.status });
+    if (updatedSubscription) {
+      try { Sentry.addBreadcrumb({ category: 'stripe', message: 'subscription-updated', data: { id: String(updatedSubscription._id) } }); } catch {}
+    }
   } catch (error) {
     console.error("Error handling subscription event:", error);
   }
 };
 
+/**
+ * Track payment intent creation events.
+ */
 const handlePaymentIntentCreated = async (event: any) => {
   const paymentIntent = event.data.object;
-  console.log("Payment Intent Created:", paymentIntent);
+  try { Sentry.addBreadcrumb({ category: 'stripe', message: 'payment-intent-created', data: { id: paymentIntent?.id } }); } catch {}
 };
 
+/**
+ * Update transactions on successful Stripe payments.
+ */
 const handlePaymentSuccess = async (event: any) => {
   const paymentIntent = event.data.object;
   const user = await User.findOne({ stripeClientId: paymentIntent.customer });
@@ -140,8 +152,6 @@ const handlePaymentSuccess = async (event: any) => {
     console.error("User not found for customer ID:", typeof paymentIntent.customer === 'string' ? paymentIntent.customer.slice(-6) : 'unknown');
     return;
   }
-  console.log("paymentIntentpaymentIntent In webhook-->>", paymentIntent);
-
   const updatedTransaction = await Transaction.updateMany(
     {
       stripePaymentIntentId: paymentIntent.id,
@@ -153,9 +163,12 @@ const handlePaymentSuccess = async (event: any) => {
     { new: true }
   );
 
-  console.log("Payment Success Transaction recorded:", updatedTransaction);
+  try { Sentry.addBreadcrumb({ category: 'stripe', message: 'payment-success', data: { count: updatedTransaction?.modifiedCount } }); } catch {}
 };
 
+/**
+ * Update transactions on failed Stripe payments.
+ */
 const handlePaymentFailed = async (event: any) => {
   const paymentIntent = event.data.object;
   const user = await User.findOne({ stripeClientId: paymentIntent.customer });
@@ -163,8 +176,6 @@ const handlePaymentFailed = async (event: any) => {
     console.error("User not found for customer ID:", typeof paymentIntent.customer === 'string' ? paymentIntent.customer.slice(-6) : 'unknown');
     return;
   }
-
-  console.log("paymentIntentpaymentIntent In webhook-->>", paymentIntent);
 
   const updatedTransaction = await Transaction.updateMany(
     {
@@ -178,5 +189,5 @@ const handlePaymentFailed = async (event: any) => {
   );
 
   await Transaction.create(updatedTransaction);
-  console.log("Payment Failed Transaction recorded:", updatedTransaction);
+  try { Sentry.addBreadcrumb({ category: 'stripe', message: 'payment-failed', data: { count: updatedTransaction?.modifiedCount } }); } catch {}
 };

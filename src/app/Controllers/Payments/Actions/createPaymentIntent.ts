@@ -4,6 +4,9 @@ import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum
 import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
 import { Transaction } from "../../../Models/Transaction";
 
+/**
+ * Create a Stripe payment or setup intent and record transaction state.
+ */
 const createPaymentIntent = async (params: {
   amount: number;
   userId: Types.ObjectId;
@@ -50,7 +53,6 @@ const createPaymentIntent = async (params: {
       await Transaction.create({
         userId: params.userId,
         amount: params.amount,
-        // type: TransactionType.BALANCE_ADD,
         status: TransactionStatus.PENDING,
         description: "Balance adding transaction initiated",
         referenceId: paymentInstanceIntent.id,
@@ -61,10 +63,6 @@ const createPaymentIntent = async (params: {
     await Transaction.create({
       userId: params.userId,
       amount: params.amount,
-      // type:
-      //   params.amount === 0
-      //     ? TransactionType.CARD_ADD
-      //     // : TransactionType.BALANCE_ADD,
       status: TransactionStatus.FAILED,
       description: `Transaction failed: ${err.message}`,
       referenceId: null,

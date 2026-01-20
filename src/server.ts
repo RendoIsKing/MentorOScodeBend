@@ -72,9 +72,9 @@ const publicDir = path.join(__dirname, "../public");
 const createPublicDirectory = () => {
   if (!fs.existsSync(publicDir)) {
     fs.mkdirSync(publicDir, { recursive: true }); // Create the directory, including parent directories if necessary
-    console.log(`'public' directory created at: ${publicDir}`);
+    console.info(`'public' directory created at: ${publicDir}`);
   } else {
-    console.log(`'public' directory already exists.`);
+    console.info(`'public' directory already exists.`);
   }
 };
 //*************** */
@@ -93,7 +93,7 @@ export class Server {
     try { void connectDatabase(); } catch {}
 
     // Log dev login flag at boot for clarity
-    try { console.log('[BOOT] DEV_LOGIN_ENABLED =', process.env.DEV_LOGIN_ENABLED); } catch {}
+    try { console.info('[BOOT] DEV_LOGIN_ENABLED =', process.env.DEV_LOGIN_ENABLED); } catch {}
 
     this.registerPreRoutes();
 
@@ -105,8 +105,8 @@ export class Server {
     if (process.env.NODE_ENV !== 'test') startSnapshotReconciler();
     expireDataSetCronJob();
     // this.start()
-    console.log(port);
-    console.log(`HTTP Application server ready to be started at ${this.port}`);
+    console.info(port);
+    console.info(`HTTP Application server ready to be started at ${this.port}`);
   }
 
   registerPreRoutes() {
@@ -180,7 +180,7 @@ export class Server {
     } catch {}
 
     if (uploadRoot) {
-      try { console.log('[STATIC] uploadRoot =', uploadRoot); } catch {}
+      try { console.info('[STATIC] uploadRoot =', uploadRoot); } catch {}
       this.app.use("/api/backend", express.static(uploadRoot));
     }
     // Also serve from both CWD/public and dist-relative public to survive different runtimes
@@ -209,7 +209,6 @@ export class Server {
       .split(',')
       .map(s=>s.trim())
       .filter(Boolean);
-    console.log('[CORS] Allowed origins:', allowedOrigins);
     const devOpenCors = process.env.DEV_LOGIN_ENABLED === 'true' && process.env.NODE_ENV !== 'production';
     if (devOpenCors) {
       // In dev, accept any origin and send credentials for convenience
@@ -231,8 +230,12 @@ export class Server {
     const cookieSameSite = sameSiteEnv === 'none' ? 'none' : 'lax';
     const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
     const cookieSecure = secureEnv === 'true' || secureEnv === '1';
+    const sessionSecret = process.env.SESSION_SECRET;
+    if (!sessionSecret) {
+      throw new Error('SESSION_SECRET is missing');
+    }
     this.app.use(session({
-      secret: process.env.SESSION_SECRET || 'dev_session_secret_change_me',
+      secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
       cookie: { httpOnly: true, sameSite: cookieSameSite as any, secure: cookieSecure, maxAge: 1000*60*60*24*30 }
@@ -298,11 +301,11 @@ export class Server {
     this.app.use("/api/backend/v1/interaction", InteractionRoutes);
     const devOn = (String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase() === 'true') || (process.env.NODE_ENV !== 'production');
     if (devOn) {
-      try { console.log('[DEV] Enabling /api/backend/v1/dev/* routes'); } catch {}
+      try { console.info('[DEV] Enabling /api/backend/v1/dev/* routes'); } catch {}
       this.app.use("/api/backend/v1", devLoginRouter);
       this.app.use("/api/backend/v1", devBootstrap);
     } else {
-      try { console.log('[DEV] Dev routes disabled'); } catch {}
+      try { console.info('[DEV] Dev routes disabled'); } catch {}
     }
     this.app.use("/api/backend/v1/plans", Auth, SubscriptionPlanRoutes);
     this.app.use("/api/backend/v1/user-connections", Auth, ConnectionRoutes);
@@ -340,11 +343,10 @@ export class Server {
     createPublicDirectory();
     // *********
     http.listen(this.port, () => {
-      console.log(`:rocket: HTTP Server started at port ${this.port}`);
+      console.info(`:rocket: HTTP Server started at port ${this.port}`);
     });
 
     // http.listen(3001, () => {
-    //   console.log(`:rocket: HTTP Server started at port 3001`);
     // });
   }
 }

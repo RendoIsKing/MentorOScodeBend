@@ -15,18 +15,14 @@ import { LoginInput } from "../Inputs/Login.input";
 import { generateAuthToken } from "../../utils/jwt";
 import { RolesEnum } from "../../types/RolesEnum";
 import { CheckUserInput } from "../Inputs/checkUser.input";
-// import { UserLoginDto } from "../Inputs/UserLogin.input";
 import { plainToClass } from "class-transformer";
 import { addMinutes } from "date-fns";
 import otpGenerator from "../../utils/otpGenerator";
 import { OTPInput } from "../Inputs/OTPInput";
-// import { Collection } from "../Models/Collection";
-// import { SubscriptionPlan } from "../Models/SubscriptionPlan";
 import { UpdateUserDTO } from "../Inputs/UpdateUser.input";
 
 import { UserForgotPasswordDto } from "../Inputs/UserForgotPassword.input";
 import mongoose from "mongoose";
-// import jwt from "jsonwebtoken";
 import { SubscriptionPlanType } from "../../types/enums/subscriptionPlanEnum";
 import { InteractionType } from "../../types/enums/InteractionTypeEnum";
 import { PostType } from "../../types/enums/postTypeEnum";
@@ -35,6 +31,9 @@ import { sendMessage } from "../../utils/Twillio/sendMessage";
 import { OAuth2Client } from "google-auth-library";
 
 class AuthController {
+  /**
+   * Handle Google OAuth login and issue auth token.
+   */
   static googleLogin = async (req: Request, res: Response): Promise<Response> => {
     try {
       const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
@@ -107,6 +106,9 @@ class AuthController {
     }
   };
   // NOTE: legacy misspelling kept for backward compatibility with any callers
+  /**
+   * Register a new user using email/phone credentials.
+   */
   static regsiter = async (req: Request, res: Response): Promise<any> => {
     const input = req.body;
 
@@ -132,7 +134,6 @@ class AuthController {
         .json({ error: { message: "VALIDATIONS_ERROR", info: errorsInfo } });
     }
     try {
-      // const user = await User.findOne({phoneNumber: input.phoneNumber,email : input.email});
       const user = await User.findOne({
         $or: [
           { email: input.email },
@@ -224,6 +225,9 @@ class AuthController {
     }
   };
 
+  /**
+   * Authenticate user credentials and return auth token.
+   */
   static login = async (req: Request, res: Response): Promise<Response> => {
     const input = req.body;
     const loginInput = new LoginInput();
@@ -294,6 +298,9 @@ class AuthController {
     )(req, res);
   };
 
+  /**
+   * Update authenticated user's profile, with optional password change.
+   */
   static updateMe = async (req: Request, res: Response): Promise<Response> => {
     try {
       const user = req.user as UserInterface;
@@ -348,6 +355,9 @@ class AuthController {
     }
   };
 
+  /**
+   * Handle mixed login flows: OTP-based phone auth or password login.
+   */
   static userLogin = async (req: Request, res: Response): Promise<Response> => {
     try {
       const { email, username, phoneNumber, password, dialCode } = req.body || {};
@@ -512,11 +522,12 @@ class AuthController {
     }
   };
 
+  /**
+   * Check whether a user exists by email/phone.
+   */
   static checkUser = async (req: Request, res: Response): Promise<Response> => {
     const input = req.body;
     const userInput = new CheckUserInput();
-    // userInput.phoneNumber = input.phoneNumber;
-    // userInput.email = input.email;
 
     userInput.email = input.email;
     userInput.phoneNumber = input.phoneNumber;
@@ -543,7 +554,6 @@ class AuthController {
         },
       ],
     });
-    // const user = await User.findOne({phoneNumber: input.phoneNumber,email : input.email});
     if (user) {
       return res.json({ data: { message: "User exist." } });
     } else {
@@ -553,6 +563,9 @@ class AuthController {
     }
   };
 
+  /**
+   * Verify OTP and issue auth token for the user.
+   */
   static verifyOtp = async (req: Request, res: Response): Promise<Response> => {
     try {
       const { id, otp } = req.body;
@@ -581,11 +594,6 @@ class AuthController {
         return res.status(400).json({ error: { message: "User not found" } });
       }
 
-      //   if (user?.isVerified) {
-      //     return res
-      //       .status(400)
-      //       .json({ error: { message: "User already verified" } });
-      //   }
       if (user.otp != otp || compareAsc(new Date(), user.otpInvalidAt) === 1) {
         return res.status(400).json({ data: { message: "otp is invalid" } });
       }
@@ -631,6 +639,9 @@ class AuthController {
     }
   };
 
+  /**
+   * Fetch the authenticated user's profile with counts and subscription details.
+   */
   static me = async (req: Request, res: Response): Promise<Response> => {
     const user = req.user as UserInterface | undefined;
     try {
@@ -878,12 +889,12 @@ class AuthController {
       ]);
 
       // get the user platform subscription
-      console.log("Existing user id is", user.id);
-      let planId = "67648382f267d99e0dc8de11";
-
-      if (user?.isFreeSubscription) {
-        planId = "678a0764e01be7cfa52b9a9c";
+      const paidPlanId = (process.env.PLATFORM_SUBSCRIPTION_PLAN_ID || '').trim();
+      const freePlanId = (process.env.PLATFORM_FREE_SUBSCRIPTION_PLAN_ID || '').trim() || paidPlanId;
+      if (!paidPlanId) {
+        return res.status(500).json({ error: { message: "PLATFORM_SUBSCRIPTION_PLAN_ID missing" } });
       }
+      const planId = user?.isFreeSubscription ? freePlanId : paidPlanId;
       const subscriptionDetails = await Subscription.findOne({
         userId: user.id,
         planId: planId, //same $20 plan used for all users.
@@ -943,6 +954,9 @@ class AuthController {
   };
 
   //Below forget password apis
+  /**
+   * Send OTP to user's phone for password reset.
+   */
   static sendForgotPasswordOtp = async (
     req: Request,
     res: Response
@@ -975,7 +989,6 @@ class AuthController {
           { completePhoneNumber: { $regex: threePartRegex } },
         ],
       });
-      console.log("Reached");
       if (!user) {
         return res.status(404).json({
           status: false,
@@ -1014,6 +1027,9 @@ class AuthController {
     }
   };
 
+  /**
+   * Validate OTP for password reset flow.
+   */
   static validateForgotPasswordOtp = async (
     req: Request,
     res: Response
@@ -1044,8 +1060,6 @@ class AuthController {
         });
       }
 
-      console.log("user details are", user);
-
       if (!user.otp || user.otp !== otp.toString()) {
         return res.status(400).json({
           status: false,
@@ -1060,17 +1074,10 @@ class AuthController {
         });
       }
 
-      // const usreInfo = await User.findOneAndUpdate(
-      //   {completePhoneNumber: completePhoneNumber},
-      //   {otp: ""},
-      //  {new: true}
-      // );
-
       return res.status(200).json({
         status: true,
         message: "OTP validated successfully.",
         user: user,
-        // user: usreInfo
       });
     } catch (error) {
       console.error("Error in validating OTP:", error);
@@ -1082,6 +1089,9 @@ class AuthController {
     }
   };
 
+  /**
+   * Reset user password after OTP validation.
+   */
   static resetPassword = async (
     req: Request,
     res: Response
