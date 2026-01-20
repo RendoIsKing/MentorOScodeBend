@@ -889,11 +889,8 @@ class AuthController {
       ]);
 
       // get the user platform subscription
-      const paidPlanId = (process.env.PLATFORM_SUBSCRIPTION_PLAN_ID || '').trim();
-      const freePlanId = (process.env.PLATFORM_FREE_SUBSCRIPTION_PLAN_ID || '').trim() || paidPlanId;
-      if (!paidPlanId) {
-        return res.status(500).json({ error: { message: "PLATFORM_SUBSCRIPTION_PLAN_ID missing" } });
-      }
+      const paidPlanId = (process.env.PLATFORM_SUBSCRIPTION_PLAN_ID || '67648382f267d99e0dc8de11').trim();
+      const freePlanId = (process.env.PLATFORM_FREE_SUBSCRIPTION_PLAN_ID || '678a0764e01be7cfa52b9a9c').trim() || paidPlanId;
       const planId = user?.isFreeSubscription ? freePlanId : paidPlanId;
       const subscriptionDetails = await Subscription.findOne({
         userId: user.id,
