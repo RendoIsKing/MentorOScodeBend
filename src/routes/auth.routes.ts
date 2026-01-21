@@ -22,14 +22,25 @@ const loginSchema = z.object({
   password: nonEmptyString,
 }).strict();
 
-const userLoginSchema = z.object({
-  dialCode: z.string().optional(),
-  phoneNumber: z.string().optional(),
-  email: z.string().email().optional(),
-  password: z.string().optional(),
-}).strict().refine((data) => Boolean(data.email || data.phoneNumber), {
-  message: "email or phoneNumber is required",
-});
+const optionalTrimmed = (schema: z.ZodTypeAny) =>
+  z.preprocess((value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : undefined;
+  }, schema.optional());
+
+const userLoginSchema = z
+  .object({
+    dialCode: optionalTrimmed(z.string()),
+    phoneNumber: optionalTrimmed(z.string()),
+    email: optionalTrimmed(z.string().email()),
+    userName: optionalTrimmed(z.string()),
+    password: optionalTrimmed(z.string()),
+  })
+  .strict()
+  .refine((data) => Boolean(data.email || data.phoneNumber || data.userName), {
+    message: "email, phoneNumber, or userName is required",
+  });
 
 const googleLoginSchema = z.object({
   idToken: nonEmptyString,
