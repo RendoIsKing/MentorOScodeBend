@@ -35,9 +35,14 @@ const userLoginSchema = z
     phoneNumber: optionalTrimmed(z.string()),
     email: optionalTrimmed(z.string().email()),
     userName: optionalTrimmed(z.string()),
+    username: optionalTrimmed(z.string()),
     password: optionalTrimmed(z.string()),
   })
   .strict()
+  .transform((data) => ({
+    ...data,
+    userName: data.userName || data.username,
+  }))
   .refine((data) => Boolean(data.email || data.phoneNumber || data.userName), {
     message: "email, phoneNumber, or userName is required",
   });
