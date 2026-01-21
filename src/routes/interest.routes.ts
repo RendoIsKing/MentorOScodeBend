@@ -2,7 +2,7 @@ import { Router } from "express";
 import { Auth, OnlyAdmins, validateZod } from "../app/Middlewares";
 import { InterestController } from "../app/Controllers/Interests";
 import { z } from "zod";
-import { nonEmptyString, objectIdParam, objectId } from "../app/Validation/requestSchemas";
+import { objectIdParam, objectId } from "../app/Validation/requestSchemas";
 
 const interest: Router = Router();
 

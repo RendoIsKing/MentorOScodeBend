@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { Auth, validateZod } from "../app/Middlewares";
 import { z } from "zod";
-import { nonEmptyString, objectId } from "../app/Validation/requestSchemas";
+import { objectId } from "../app/Validation/requestSchemas";
 import { SubscriptionController } from "../app/Controllers/Subscriptions";
 
 const SubscriptionRoutes: Router = Router();
