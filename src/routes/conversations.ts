@@ -1,17 +1,32 @@
 import { Router } from 'express';
-import { Auth as ensureAuth } from '../app/Middlewares';
+import { Auth as ensureAuth, validateZod } from '../app/Middlewares';
 import { Types } from 'mongoose';
 import { sseHub } from '../lib/sseHub';
 import { ChatThread as DMThread } from '../models/chat';
 import { ChatMessage as DMMessage } from '../models/chat';
+import { z } from 'zod';
+import { nonEmptyString, objectId, objectIdParam } from '../app/Validation/requestSchemas';
 
 const r = Router();
+
+const createConversationSchema = z.object({
+  partnerId: objectId,
+}).strict();
+
+const sendMessageSchema = z.object({
+  text: nonEmptyString,
+  clientId: nonEmptyString.optional(),
+}).strict();
 
 function isParticipant(doc: any, userId: string): boolean {
   try { return (doc?.participants || []).map(String).includes(String(userId)); } catch { return false; }
 }
 
-r.post('/conversations', ensureAuth as any, async (req: any, res) => {
+r.post(
+  '/conversations',
+  ensureAuth as any,
+  validateZod({ body: createConversationSchema }),
+  async (req: any, res) => {
   try {
     const me = String(req.user._id);
     const { partnerId } = req.body || {};
@@ -57,7 +72,11 @@ r.get('/conversations/:id/messages', ensureAuth as any, async (req: any, res) =>
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
-r.post('/conversations/:id/messages', ensureAuth as any, async (req: any, res) => {
+r.post(
+  '/conversations/:id/messages',
+  ensureAuth as any,
+  validateZod({ params: objectIdParam('id'), body: sendMessageSchema }),
+  async (req: any, res) => {
   try {
     const me = String(req.user._id);
     const { id } = req.params;
@@ -84,7 +103,11 @@ r.post('/conversations/:id/messages', ensureAuth as any, async (req: any, res) =
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
-r.post('/conversations/:id/read', ensureAuth as any, async (req: any, res) => {
+r.post(
+  '/conversations/:id/read',
+  ensureAuth as any,
+  validateZod({ params: objectIdParam('id'), body: z.object({}).strict() }),
+  async (req: any, res) => {
   try {
     const me = String(req.user._id);
     const { id } = req.params;

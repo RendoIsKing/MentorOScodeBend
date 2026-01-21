@@ -1,19 +1,34 @@
 import { Router } from "express";
-import { Auth } from "../app/Middlewares";
+import { Auth, validateZod } from "../app/Middlewares";
+import { z } from "zod";
+import { nonEmptyString, objectId } from "../app/Validation/requestSchemas";
 import { SubscriptionController } from "../app/Controllers/Subscriptions";
 
 const SubscriptionRoutes: Router = Router();
 
-SubscriptionRoutes.post("/", Auth, SubscriptionController.createSubscription);
+const createSubscriptionSchema = z.object({
+  planId: objectId,
+}).strict();
+
+const tipSchema = z.object({
+  creatorId: objectId,
+  tipAmount: z.number(),
+  message: z.string().optional(),
+  tipOn: objectId.optional(),
+}).strict();
+
+SubscriptionRoutes.post("/", Auth, validateZod({ body: createSubscriptionSchema }), SubscriptionController.createSubscription);
 SubscriptionRoutes.post(
   "/one-time",
   Auth,
+  validateZod({ body: z.object({}).passthrough() }),
   SubscriptionController.createOneTimePayment
 );
 
 SubscriptionRoutes.post(
   "/tip",
   Auth,
+  validateZod({ body: tipSchema }),
   SubscriptionController.provideTipToCreator
 );
 

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { z } from 'zod';
-import { Auth as ensureAuth } from '../app/Middlewares';
+import { Auth as ensureAuth, validateZod } from '../app/Middlewares';
 import { perUserIpLimiter } from '../app/Middlewares/rateLimiters';
 import { WeightEntry } from "../app/Models/WeightEntry";
 import { Types } from "mongoose";
@@ -10,6 +10,7 @@ import { publish } from "../services/events/publish";
 import jwt from 'jsonwebtoken';
 import { ExerciseProgress } from "../app/Models/ExerciseProgress";
 import WorkoutLog from "../models/WorkoutLog";
+import { objectIdParam } from "../app/Validation/requestSchemas";
 
 const StudentRoutes: Router = Router();
 // Recent changes endpoint
@@ -70,6 +71,8 @@ const NonEmptyString = z.string().trim().min(1);
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const WeightLogSchema = z.object({ date: IsoDate, kg: z.number().min(30).max(400) });
 const ExerciseProgressSchema = z.object({ exercise: NonEmptyString, date: IsoDate, value: z.number() });
+const ExerciseProgressQuerySchema = z.object({ exercise: NonEmptyString, date: IsoDate }).strict();
+const WorkoutLogSchema = z.object({ date: IsoDate.optional() }).strict();
 
 type Period = '7d' | '30d' | '90d' | 'ytd';
 
@@ -392,7 +395,12 @@ StudentRoutes.get('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({
   }
 });
 
-StudentRoutes.post('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
+StudentRoutes.post(
+  '/me/exercise-progress',
+  ensureAuth as any,
+  perUserIpLimiter({ windowMs: 60_000, max: 60 }),
+  validateZod({ body: ExerciseProgressSchema }),
+  async (req: Request, res: Response) => {
   try {
     let resolvedUserId: any = (req as any)?.user?._id;
     if (!resolvedUserId) {
@@ -424,7 +432,12 @@ StudentRoutes.post('/me/exercise-progress', ensureAuth as any, perUserIpLimiter(
   }
 });
 
-StudentRoutes.put('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
+StudentRoutes.put(
+  '/me/exercise-progress',
+  ensureAuth as any,
+  perUserIpLimiter({ windowMs: 60_000, max: 60 }),
+  validateZod({ body: ExerciseProgressSchema }),
+  async (req: Request, res: Response) => {
   try {
     let resolvedUserId: any = (req as any)?.user?._id;
     if (!resolvedUserId) {
@@ -456,7 +469,12 @@ StudentRoutes.put('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({
   }
 });
 
-StudentRoutes.delete('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
+StudentRoutes.delete(
+  '/me/exercise-progress',
+  ensureAuth as any,
+  perUserIpLimiter({ windowMs: 60_000, max: 60 }),
+  validateZod({ query: ExerciseProgressQuerySchema }),
+  async (req: Request, res: Response) => {
   try {
     let resolvedUserId: any = (req as any)?.user?._id;
     if (!resolvedUserId) {
@@ -484,7 +502,12 @@ StudentRoutes.delete('/me/exercise-progress', ensureAuth as any, perUserIpLimite
 });
 
 // Minimal weight check-in endpoint (placeholder for real persistence)
-StudentRoutes.post('/:userId/weights', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
+StudentRoutes.post(
+  '/:userId/weights',
+  ensureAuth as any,
+  perUserIpLimiter({ windowMs: 60_000, max: 60 }),
+  validateZod({ params: objectIdParam("userId"), body: WeightLogSchema }),
+  async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
     const parsed = WeightLogSchema.safeParse(req.body || {});
@@ -512,7 +535,12 @@ StudentRoutes.post('/:userId/weights', ensureAuth as any, perUserIpLimiter({ win
 });
 
 // Update a weight entry (upsert) for a given date
-StudentRoutes.put('/:userId/weights', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
+StudentRoutes.put(
+  '/:userId/weights',
+  ensureAuth as any,
+  perUserIpLimiter({ windowMs: 60_000, max: 60 }),
+  validateZod({ params: objectIdParam("userId"), body: WeightLogSchema }),
+  async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
     const parsed = WeightLogSchema.safeParse(req.body || {});
@@ -539,7 +567,12 @@ StudentRoutes.put('/:userId/weights', ensureAuth as any, perUserIpLimiter({ wind
 });
 
 // Delete a weight entry by date
-StudentRoutes.delete('/:userId/weights', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
+StudentRoutes.delete(
+  '/:userId/weights',
+  ensureAuth as any,
+  perUserIpLimiter({ windowMs: 60_000, max: 60 }),
+  validateZod({ params: objectIdParam("userId"), query: z.object({ date: IsoDate }).strict() }),
+  async (req: Request, res: Response) => {
   try {
     const date = req.query.date as string | undefined;
     const { userId } = req.params;
@@ -556,7 +589,10 @@ StudentRoutes.delete('/:userId/weights', ensureAuth as any, perUserIpLimiter({ w
 });
 
 // Create exercise progress entry
-StudentRoutes.post('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Request, res: Response) => {
+StudentRoutes.post(
+  '/:userId([0-9a-fA-F]{24})/exercise-progress',
+  validateZod({ params: objectIdParam("userId"), body: ExerciseProgressSchema }),
+  async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
     const { exercise, date, value } = req.body || {};
@@ -576,7 +612,10 @@ StudentRoutes.post('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Re
 });
 
 // Update exercise progress entry
-StudentRoutes.put('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Request, res: Response) => {
+StudentRoutes.put(
+  '/:userId([0-9a-fA-F]{24})/exercise-progress',
+  validateZod({ params: objectIdParam("userId"), body: ExerciseProgressSchema }),
+  async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
     const { exercise, date, value } = req.body || {};
@@ -596,7 +635,10 @@ StudentRoutes.put('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Req
 });
 
 // Delete exercise progress entry
-StudentRoutes.delete('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: Request, res: Response) => {
+StudentRoutes.delete(
+  '/:userId([0-9a-fA-F]{24})/exercise-progress',
+  validateZod({ params: objectIdParam("userId"), query: ExerciseProgressQuerySchema }),
+  async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
     const exercise = req.query.exercise as string | undefined;
@@ -612,7 +654,7 @@ StudentRoutes.delete('/:userId([0-9a-fA-F]{24})/exercise-progress', async (req: 
 });
 
 // Log a workout day (mark done today or specific date)
-StudentRoutes.post('/me/workouts', async (req: Request, res: Response) => {
+StudentRoutes.post('/me/workouts', validateZod({ body: WorkoutLogSchema }), async (req: Request, res: Response) => {
   try {
     // resolve user id from cookie/JWT
     let resolvedUserId: any = (req as any)?.user?._id;

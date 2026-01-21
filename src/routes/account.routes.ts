@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { Auth } from '../app/Middlewares';
+import { Auth, validateZod } from '../app/Middlewares';
+import { z } from 'zod';
 import { acceptTos } from '../app/Controllers/Legal/acceptTos';
 
 const r = Router();
@@ -15,7 +16,7 @@ async function sendMail(to: string, subject: string, text: string) {
   return true;
 }
 
-r.post('/account/request-deletion', Auth as any, async (req: any, res) => {
+r.post('/account/request-deletion', Auth as any, validateZod({ body: z.object({}).strict() }), async (req: any, res) => {
   try {
     const me = req.user;
     await sendMail(process.env.SUPPORT_EMAIL || 'support@example.com', 'Account Deletion Request', `User ${me?.email || me?._id} requested deletion.`);
@@ -25,7 +26,7 @@ r.post('/account/request-deletion', Auth as any, async (req: any, res) => {
   }
 });
 
-r.post('/account/request-export', Auth as any, async (req: any, res) => {
+r.post('/account/request-export', Auth as any, validateZod({ body: z.object({}).strict() }), async (req: any, res) => {
   try {
     const me = req.user;
     await sendMail(process.env.SUPPORT_EMAIL || 'support@example.com', 'Data Export Request', `User ${me?.email || me?._id} requested export.`);
@@ -38,6 +39,6 @@ r.post('/account/request-export', Auth as any, async (req: any, res) => {
 export default r;
 
 // Legal acceptance
-r.post('/legal/accept', Auth as any, acceptTos as any);
+r.post('/legal/accept', Auth as any, validateZod({ body: z.object({}).strict() }), acceptTos as any);
 
 

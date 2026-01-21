@@ -2,18 +2,29 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { ChatThread, ChatMessage } from '../models/chat';
 import { sseAddClient, sseRemoveClient, ssePush } from '../lib/sseHub';
-import { Auth as ensureAuth } from '../app/Middlewares';
+import { Auth as ensureAuth, validateZod } from '../app/Middlewares';
 import { perUserIpLimiter } from '../app/Middlewares/rateLimiters';
 import { chatMessageSchema } from '../app/Validation/schemas';
+import { z } from 'zod';
+import { nonEmptyString, objectId, objectIdParam } from '../app/Validation/requestSchemas';
 
 const r = Router();
+
+const createThreadSchema = z.object({
+  userId: objectId,
+}).strict();
 
 function me(req: Request) {
   // @ts-ignore
   return req.user?._id?.toString?.();
 }
 
-r.post('/threads', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }), async (req, res) => {
+r.post(
+  '/threads',
+  ensureAuth as any,
+  perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }),
+  validateZod({ body: createThreadSchema }),
+  async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { userId } = req.body || {};
@@ -47,7 +58,12 @@ r.get('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 6
   return res.json({ messages: messages.reverse().map(m=>({ id: m._id.toString(), text: m.text, sender: m.sender.toString(), createdAt: m.createdAt })), nextCursor: messages.length ? messages[0]._id.toString() : null });
 });
 
-r.post('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }), async (req, res) => {
+r.post(
+  '/threads/:id/messages',
+  ensureAuth as any,
+  perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }),
+  validateZod({ params: objectIdParam('id'), body: z.object({ text: nonEmptyString }).strict() }),
+  async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { id } = req.params;
@@ -71,7 +87,12 @@ r.post('/threads/:id/messages', ensureAuth as any, perUserIpLimiter({ windowMs: 
   return res.json({ ok: true, id: msg._id.toString() });
 });
 
-r.post('/threads/:id/read', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }), async (req, res) => {
+r.post(
+  '/threads/:id/read',
+  ensureAuth as any,
+  perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }),
+  validateZod({ params: objectIdParam('id'), body: z.object({}).strict() }),
+  async (req, res) => {
   const myId = me(req);
   if (!myId) return res.status(401).json({ error: 'unauthorized' });
   const { id } = req.params;

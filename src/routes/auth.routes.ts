@@ -1,22 +1,108 @@
 import { Router } from "express";
 import { AuthController } from "../app/Controllers";
 import Auth from "../app/Middlewares/auth";
+import { validateZod } from "../app/Middlewares";
+import { z } from "zod";
+import { nonEmptyString } from "../app/Validation/requestSchemas";
 
 const auth: Router = Router();
 
-auth.post("/register", AuthController.regsiter);
-auth.post("/login", AuthController.login);
-auth.post("/user-login", AuthController.userLogin);
-auth.post("/google", AuthController.googleLogin);
-auth.post("/verify-otp", AuthController.verifyOtp);
-auth.post("/me", Auth, AuthController.updateMe);
-auth.post("/checkUser", AuthController.checkUser);
-auth.post("/forget-password", AuthController.sendForgotPasswordOtp);
-auth.post("/validate-otp", AuthController.validateForgotPasswordOtp);
-auth.put("/reset-password", AuthController.resetPassword);
+const registerSchema = z.object({
+  firstName: nonEmptyString,
+  lastName: nonEmptyString,
+  email: z.string().email(),
+  phoneNumber: nonEmptyString,
+  password: nonEmptyString,
+  dialCode: nonEmptyString,
+  country: nonEmptyString,
+}).strict();
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: nonEmptyString,
+}).strict();
+
+const userLoginSchema = z.object({
+  dialCode: z.string().optional(),
+  phoneNumber: z.string().optional(),
+  email: z.string().email().optional(),
+  password: z.string().optional(),
+}).strict().refine((data) => Boolean(data.email || data.phoneNumber), {
+  message: "email or phoneNumber is required",
+});
+
+const googleLoginSchema = z.object({
+  idToken: nonEmptyString,
+}).strict();
+
+const otpSchema = z.object({
+  otp: nonEmptyString,
+  id: nonEmptyString,
+}).strict();
+
+const checkUserSchema = z.object({
+  phoneNumber: nonEmptyString,
+  dialCode: nonEmptyString,
+  email: nonEmptyString,
+  country: nonEmptyString,
+}).strict();
+
+const forgotPasswordSchema = z.object({
+  dialCode: nonEmptyString,
+  phoneNumber: nonEmptyString,
+}).strict();
+
+const resetPasswordSchema = z.object({
+  dialCode: nonEmptyString,
+  phoneNumber: nonEmptyString,
+  newPassword: nonEmptyString,
+  confirmPassword: nonEmptyString,
+}).strict();
+
+const updateMeSchema = z.object({
+  fullName: z.string().optional(),
+  userName: z.string().optional(),
+  password: z.string().optional(),
+  phoneNumber: z.string().optional(),
+  dob: z.string().optional(),
+  bio: z.string().optional(),
+  youtubeLink: z.string().optional(),
+  instagramLink: z.string().optional(),
+  tiktokLink: z.string().optional(),
+  facebookLink: z.string().optional(),
+  gender: z.string().optional(),
+  email: z.string().email().optional(),
+  dialCode: z.string().optional(),
+  photoId: z.string().optional(),
+  coverPhotoId: z.string().optional(),
+  isMentor: z.boolean().optional(),
+  mentorExpertise: z.array(z.string()).optional(),
+  mentorCertifications: z.array(z.string()).optional(),
+  mentorYearsExperience: z.number().optional(),
+  mentorHasFreeTrial: z.boolean().optional(),
+  mentorRating: z.number().optional(),
+  mentorReviewCount: z.number().optional(),
+  mentorAiVoiceTone: z.string().optional(),
+  mentorAiKnowledgeBaseFileIds: z.array(z.string()).optional(),
+  mentorAiTrainingPhilosophy: z.string().optional(),
+  mentorAiNutritionPhilosophy: z.string().optional(),
+  mentorAiMacroApproach: z.string().optional(),
+  mentorAiDietaryNotes: z.string().optional(),
+}).strict();
+
+auth.post("/register", validateZod({ body: registerSchema }), AuthController.regsiter);
+auth.post("/login", validateZod({ body: loginSchema }), AuthController.login);
+auth.post("/user-login", validateZod({ body: userLoginSchema }), AuthController.userLogin);
+auth.post("/google", validateZod({ body: googleLoginSchema }), AuthController.googleLogin);
+auth.post("/verify-otp", validateZod({ body: otpSchema }), AuthController.verifyOtp);
+auth.post("/me", Auth, validateZod({ body: updateMeSchema }), AuthController.updateMe);
+auth.post("/checkUser", validateZod({ body: checkUserSchema }), AuthController.checkUser);
+auth.post("/forget-password", validateZod({ body: forgotPasswordSchema }), AuthController.sendForgotPasswordOtp);
+auth.post("/validate-otp", validateZod({ body: otpSchema }), AuthController.validateForgotPasswordOtp);
+auth.put("/reset-password", validateZod({ body: resetPasswordSchema }), AuthController.resetPassword);
 
 auth.get("/me", Auth, AuthController.me);
-auth.post('/logout', (req, res)=>{
+auth.post('/logout', validateZod({ body: z.object({}).strict() }), (req, res)=>{
   try {
     res.cookie('auth_token', '', { maxAge: 0, path: '/', sameSite: 'lax' });
     try { (req as any).session?.destroy?.(()=>{}); } catch {}

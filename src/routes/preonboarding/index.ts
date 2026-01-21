@@ -9,8 +9,26 @@ import StudentState from "../../models/StudentState";
 import StudentSnapshot from "../../models/StudentSnapshot";
 import { publish } from "../../services/events/publish";
 import ChangeEvent from "../../models/ChangeEvent";
+import { validateZod } from "../../app/Middlewares";
+import { z } from "zod";
+import { nonEmptyString, objectId } from "../../app/Validation/requestSchemas";
 
 const r = Router();
+
+const userIdSchema = z.object({ userId: objectId.optional() }).strict();
+const messageSchema = z.object({
+  userId: objectId.optional(),
+  message: nonEmptyString,
+  patch: z.record(z.any()).optional(),
+}).strict();
+const consentSchema = z.object({
+  userId: objectId.optional(),
+  healthData: z.boolean(),
+}).strict();
+const convertSchema = z.object({
+  userId: objectId.optional(),
+  planType: z.enum(["TRIAL", "SUBSCRIBED"]),
+}).strict();
 
 function collectedPercentOf(p: any): number {
   const total = 6;
@@ -24,7 +42,7 @@ function collectedPercentOf(p: any): number {
   return Math.round((have / total) * 100);
 }
 
-r.post("/start", async (req: any, res) => {
+r.post("/start", validateZod({ body: userIdSchema }), async (req: any, res) => {
   const userId = req.user?._id || req.body.userId;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -45,7 +63,7 @@ r.post("/start", async (req: any, res) => {
   });
 });
 
-r.post("/message", async (req: any, res) => {
+r.post("/message", validateZod({ body: messageSchema }), async (req: any, res) => {
   const userId = req.user?._id || req.body.userId;
   const { message, patch } = req.body as { message: string; patch?: any };
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
@@ -89,7 +107,7 @@ r.post("/message", async (req: any, res) => {
   });
 });
 
-r.post("/consent", async (req: any, res) => {
+r.post("/consent", validateZod({ body: consentSchema }), async (req: any, res) => {
   const userId = req.user?._id || req.body.userId;
   const { healthData } = req.body as { healthData: boolean };
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
@@ -111,7 +129,7 @@ r.get("/preview", async (req: any, res) => {
   return res.json({ ok: true, preview });
 });
 
-r.post("/convert", async (req: any, res) => {
+r.post("/convert", validateZod({ body: convertSchema }), async (req: any, res) => {
   const userId = req.user?._id || req.body.userId;
   const { planType } = req.body as { planType: "TRIAL" | "SUBSCRIBED" };
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
@@ -148,7 +166,7 @@ r.post("/convert", async (req: any, res) => {
 });
 
 // Dev/test helper: force entitlement and refresh session user
-r.post("/force-sub", async (req: any, res) => {
+r.post("/force-sub", validateZod({ body: userIdSchema }), async (req: any, res) => {
   try {
     const userId = req.user?._id || req.body.userId;
     if (!userId) return res.status(401).json({ error: "Unauthorized" });

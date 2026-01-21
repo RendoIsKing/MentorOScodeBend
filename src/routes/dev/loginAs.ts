@@ -4,10 +4,17 @@ import { Post } from "../../app/Models/Post";
 import { Types } from "mongoose";
 import { genSaltSync, hashSync } from 'bcryptjs';
 import { generateAuthToken } from '../../utils/jwt';
+import { validateZod } from "../../app/Middlewares";
+import { z } from "zod";
+import { nonEmptyString, objectId } from "../../app/Validation/requestSchemas";
 
 const r = Router();
+const emailSchema = z.object({ email: z.string().email() }).strict();
+const setUsernameSchema = z.object({ userName: nonEmptyString }).strict();
+const migratePostsSchema = z.object({ sourceUserId: objectId }).strict();
+const setPasswordSchema = z.object({ password: nonEmptyString.min(6) }).strict();
 
-r.post("/dev/login-as", async (req: any, res) => {
+r.post("/dev/login-as", validateZod({ body: emailSchema }), async (req: any, res) => {
   try {
     const enabled = String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase();
     const devOn = enabled === 'true' || (process.env.NODE_ENV !== 'production');
@@ -85,7 +92,7 @@ r.get('/events', async (req: any, res) => {
 });
 
 // Dev-only: set current user's username
-r.post('/dev/set-username', async (req: any, res) => {
+r.post('/dev/set-username', validateZod({ body: setUsernameSchema }), async (req: any, res) => {
   try {
     const enabled = String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase();
     const devOn = enabled === 'true' || (process.env.NODE_ENV !== 'production');
@@ -105,7 +112,7 @@ r.post('/dev/set-username', async (req: any, res) => {
 });
 
 // Dev-only: migrate posts from source userId to current session user
-r.post('/dev/migrate-posts', async (req: any, res) => {
+r.post('/dev/migrate-posts', validateZod({ body: migratePostsSchema }), async (req: any, res) => {
   try {
     const enabled = String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase();
     const devOn = enabled === 'true' || (process.env.NODE_ENV !== 'production');
@@ -122,7 +129,7 @@ r.post('/dev/migrate-posts', async (req: any, res) => {
 });
 
 // Dev-only: set password for the current session user
-r.post('/dev/set-password', async (req: any, res) => {
+r.post('/dev/set-password', validateZod({ body: setPasswordSchema }), async (req: any, res) => {
   try {
     const enabled = String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase();
     const devOn = enabled === 'true' || (process.env.NODE_ENV !== 'production');

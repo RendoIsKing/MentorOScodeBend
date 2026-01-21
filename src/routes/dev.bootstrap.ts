@@ -4,10 +4,13 @@ import TrainingPlanVersion from "../models/TrainingPlanVersion";
 import NutritionPlanVersion from "../models/NutritionPlanVersion";
 import StudentState from "../models/StudentState";
 import StudentSnapshot from "../models/StudentSnapshot";
+import { validateZod } from "../app/Middlewares";
+import { z } from "zod";
 
 const r = Router();
+const bootstrapSchema = z.object({ email: z.string().email().optional() }).strict();
 
-r.post("/dev/bootstrap", async (req: any, res) => {
+r.post("/dev/bootstrap", validateZod({ body: bootstrapSchema }), async (req: any, res) => {
   try {
     const enabled = String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase();
     const devOn = enabled === 'true' || (process.env.NODE_ENV !== 'production');

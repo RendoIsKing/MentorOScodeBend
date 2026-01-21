@@ -2,10 +2,14 @@ import { Router } from 'express';
 import { User } from '../app/Models/User';
 import ChangeEvent from '../models/ChangeEvent';
 import { Types } from 'mongoose';
+import { validateZod } from "../app/Middlewares";
+import { z } from "zod";
+import { objectId } from "../app/Validation/requestSchemas";
 
 const r = Router();
+const seedSchema = z.object({ userId: objectId.optional() }).strict();
 
-r.post('/dev/seed/coach-majen', async (req, res) => {
+r.post('/dev/seed/coach-majen', validateZod({ body: z.object({}).strict() }), async (req, res) => {
   try {
     if (process.env.DEV_LOGIN_ENABLED !== 'true') return res.status(404).end();
     const existing = await User.findOne({ userName: 'coach-majen' }).lean();
@@ -35,7 +39,7 @@ export default r;
 
 
 // DEV: Seed 14 days of sample ChangeEvents (plan/nutrition/weight)
-r.post('/dev/seed/sample-14d', async (req, res) => {
+r.post('/dev/seed/sample-14d', validateZod({ body: seedSchema }), async (req, res) => {
   try {
     if (process.env.DEV_LOGIN_ENABLED !== 'true') return res.status(404).end();
     // Pick target user

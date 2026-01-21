@@ -1,7 +1,7 @@
 import { Router } from "express";
 // zod not used directly in this file (schemas are imported from Validation)
 import { ActionSchema, type ActionBody, DaysPerWeekSchema, NutritionCaloriesSchema, SwapExerciseSchema, WeightDeleteSchema, WeightLogSchema } from '../app/Validation/schemas';
-import { Auth as ensureAuth } from "../app/Middlewares";
+import { Auth as ensureAuth, validateZod } from "../app/Middlewares";
 import { perUserIpLimiter } from "../app/Middlewares/rateLimiters";
 import { InteractionController } from "../app/Controllers/Interaction";
 import { chatWithCoachEngh, chatWithCoachMajen } from "../app/Controllers/Interaction/chat.controller";
@@ -23,6 +23,8 @@ import { FileEnum } from '../types/FileEnum';
 import { CoachKnowledge } from '../app/Models/CoachKnowledge';
 import path from 'path';
 import { getThread, appendMessage, clearThread } from '../app/Controllers/Interaction/thread.controller';
+import { z } from "zod";
+import { objectId } from "../app/Validation/requestSchemas";
 
 const uploadRoot =
   (process.env.UPLOAD_ROOT
@@ -34,6 +36,28 @@ const knowledgeUpload = createMulterInstance(`${uploadRoot}/coach-knowledge`);
 import { Auth } from "../app/Middlewares";
 
 const InteractionRoutes: Router = Router();
+
+const writeMethods = new Set(["POST", "PATCH", "DELETE"]);
+const bodyObjectSchema = z.object({}).passthrough();
+InteractionRoutes.use((req, res, next) => {
+  if (!writeMethods.has(req.method)) return next();
+  return validateZod({ body: bodyObjectSchema })(req, res, next);
+});
+InteractionRoutes.use((req, res, next) => {
+  if (!writeMethods.has(req.method)) return next();
+  try {
+    const params = req.params || {};
+    for (const [key, value] of Object.entries(params)) {
+      if (typeof value === "string" && value.length === 24) {
+        const parsed = objectId.safeParse(value);
+        if (!parsed.success) {
+          return res.status(422).json({ error: "validation_failed", details: { [key]: "Invalid id format" } });
+        }
+      }
+    }
+  } catch {}
+  return next();
+});
 
 InteractionRoutes.post(
   "/toggle-like/:id",
