@@ -15,6 +15,9 @@ const registerSchema = z.object({
   password: nonEmptyString,
   dialCode: nonEmptyString,
   country: nonEmptyString,
+  fullName: z.string().optional(),
+  userName: z.string().optional(),
+  gender: z.string().optional(),
 }).strict();
 
 const loginSchema = z.object({

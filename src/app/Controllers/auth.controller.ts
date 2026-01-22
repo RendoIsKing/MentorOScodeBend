@@ -121,6 +121,9 @@ class AuthController {
     registerInput.password = input.password;
     registerInput.dialCode = input.dialCode;
     registerInput.country = input.country;
+    registerInput.fullName = input.fullName;
+    registerInput.userName = input.userName;
+    registerInput.gender = input.gender;
     const errors = await validate(registerInput);
 
     if (errors.length) {
@@ -149,6 +152,9 @@ class AuthController {
         await User.create({
           firstName: input.firstName,
           lastName: input.lastName,
+          fullName: input.fullName,
+          userName: input.userName,
+          gender: input.gender,
           email: input.email,
           password: hashPassword,
           role: RolesEnum.USER,
