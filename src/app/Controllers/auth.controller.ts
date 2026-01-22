@@ -30,6 +30,15 @@ import { SubscriptionStatusEnum } from "../../types/enums/SubscriptionStatusEnum
 import { sendMessage } from "../../utils/Twillio/sendMessage";
 import { OAuth2Client } from "google-auth-library";
 
+const getAdminEmailSet = () => {
+  const raw = String(process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || "").toLowerCase();
+  const emails = raw
+    .split(",")
+    .map((email) => email.trim())
+    .filter(Boolean);
+  return new Set(emails);
+};
+
 class AuthController {
   /**
    * Handle Google OAuth login and issue auth token.
@@ -487,6 +496,13 @@ class AuthController {
 
       if (!user || !user.password || !compareSync(password, user.password)) {
         return res.status(400).json({ message: "Invalid login credentials" });
+      }
+
+      const adminEmails = getAdminEmailSet();
+      const userEmail = String(user.email || "").toLowerCase();
+      if (adminEmails.size > 0 && adminEmails.has(userEmail) && user.role !== RolesEnum.ADMIN) {
+        user.role = RolesEnum.ADMIN;
+        await user.save();
       }
 
       // @ts-ignore
