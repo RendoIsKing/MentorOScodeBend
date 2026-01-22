@@ -321,12 +321,13 @@ class AuthController {
       if (updateData.password) {
         const currentPassword = (req.body as any)?.currentPassword as string | undefined;
         // Fetch fresh user to compare hash (and to detect first-time password set during onboarding)
-        const dbUser = await User.findById(user.id).select("password");
+        const dbUser = await User.findById(user.id).select("password hasPersonalInfo userName");
         const hasExistingPassword = Boolean(dbUser?.password);
+        const isOnboarding = !dbUser?.hasPersonalInfo || !dbUser?.userName;
 
-        // If the user already has a password, require currentPassword to change it.
-        // If they don't have one yet (OTP/Google onboarding), allow setting initial password without currentPassword.
-        if (hasExistingPassword) {
+        // If the user already has a password, require currentPassword to change it,
+        // except during onboarding where we allow setting the initial password.
+        if (hasExistingPassword && !isOnboarding) {
           if (!currentPassword) {
             return res.status(400).json({ error: { message: "CURRENT_PASSWORD_REQUIRED" } });
           }
