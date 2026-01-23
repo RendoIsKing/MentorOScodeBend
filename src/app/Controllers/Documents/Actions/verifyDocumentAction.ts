@@ -30,7 +30,8 @@ export const verifyDocument = async (
       await User.findByIdAndUpdate(user.id, {
         verifiedBy: adminUser.id,
         verifiedAt: new Date(),
-        hasDocumentVerified: true
+        hasDocumentVerified: true,
+        isMentor: true,
       });
     }
 
