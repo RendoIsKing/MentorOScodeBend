@@ -7,4 +7,5 @@ export enum PostFilterEnum {
   SAVED = "saved",
   FOR_YOU = "foryou",
   ALL = "all",
+  MENTORS = "mentors",
 }

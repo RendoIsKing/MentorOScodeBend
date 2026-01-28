@@ -684,7 +684,7 @@ export class UsersControllers {
           .json({ error: { message: "VALIDATIONS_ERROR", info: errorsInfo } });
       }
 
-      const { perPage, page, search } = userQuery;
+      const { perPage, page, search, filter } = userQuery;
       let skip =
         ((page as number) > 0 ? (page as number) - 1 : 0) * (perPage as number);
       let matchCondition: any = {
@@ -699,6 +699,13 @@ export class UsersControllers {
             { fullName: { $regex: search, $options: "i" } },
             { userName: { $regex: search, $options: "i" } },
           ],
+        };
+      }
+      if (filter === "mentors") {
+        matchCondition = {
+          ...matchCondition,
+          isMentor: true,
+          hasDocumentVerified: true,
         };
       }
       const reportedUsers = await MoreAction.find({

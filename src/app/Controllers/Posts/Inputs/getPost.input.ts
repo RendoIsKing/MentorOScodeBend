@@ -28,7 +28,7 @@ export class GetAllItemsInputs {
   @IsOptional()
   @IsEnum(PostFilterEnum, {
     message:
-      "Invalid filter value. Allowed values are posts, tagged, following, foryou, subscribed, liked, saved, all",
+      "Invalid filter value. Allowed values are posts, tagged, following, foryou, subscribed, liked, saved, mentors, all",
   })
   filter: PostFilterEnum;
 
