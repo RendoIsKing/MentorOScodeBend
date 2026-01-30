@@ -6,9 +6,19 @@ import {
 
 import { UserInterface } from "../../types/UserInterface";
 
+const cookieExtractor = (req: any) => {
+  if (!req) return null;
+  const cookieToken = req?.cookies?.auth_token;
+  if (cookieToken) return cookieToken;
+  return null;
+};
+
 const options: StrategyOptions = {
   secretOrKey: process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me',
-  jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+  jwtFromRequest: ExtractJwt.fromExtractors([
+    ExtractJwt.fromAuthHeaderAsBearerToken(),
+    cookieExtractor,
+  ]),
 };
 
 export default new JWTStrategy(options, (payload: UserInterface, done) => {
