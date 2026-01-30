@@ -12,6 +12,8 @@ import { PostType } from "../types/enums/postTypeEnum";
 
 const PostRoutes: Router = Router();
 PostRoutes.get("/test", PostsController.getFirstPost)
+PostRoutes.get("/admin/all", OnlyAdmins, PostsController.getAdminPosts);
+PostRoutes.delete("/admin/:id", OnlyAdmins, validateZod({ params: objectIdParam("id"), body: z.object({}).strict() }), PostsController.deletePostByAdmin);
 
 const mediaSchema = z.object({
   mediaId: nonEmptyString,

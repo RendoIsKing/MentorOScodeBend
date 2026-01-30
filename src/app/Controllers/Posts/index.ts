@@ -9,6 +9,7 @@ import { getAllStoriesActions } from "./Actions/getAllStoriesAction";
 import { getStoriesOfUserByUserName } from "./Actions/getStoriesOfUser";
 import { getTaggedUsers } from "./Actions/getTaggedUserOfPost.action";
 import { getFirstPost } from "./Actions/testPostAction";
+import { deletePostByAdmin, getAdminPosts } from "./Actions/adminPostActions";
 
 export class PostsController {
   static createPost = (req: Request, res: Response) => {
@@ -50,4 +51,12 @@ export class PostsController {
   static getFirstPost = (req:Request,  res: Response) => {
     getFirstPost(req, res);
   }
+
+  static getAdminPosts = (req: Request, res: Response) => {
+    getAdminPosts(req, res);
+  };
+
+  static deletePostByAdmin = (req: Request, res: Response) => {
+    deletePostByAdmin(req, res);
+  };
 }

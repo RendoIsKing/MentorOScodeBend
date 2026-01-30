@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
 import { Post } from "../../../Models/Post";
-import { Types } from "mongoose";
 
 export const getAdminPosts = async (req: Request, res: Response): Promise<Response> => {
   try {
