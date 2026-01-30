@@ -46,6 +46,19 @@ export const getAllDocuments = async (
                 as: "userInfo",
               },
             },
+            {
+              $lookup: {
+                from: "userprofiles",
+                localField: "userId",
+                foreignField: "userId",
+                as: "userProfile",
+              },
+            },
+            {
+              $addFields: {
+                userProfile: { $arrayElemAt: ["$userProfile", 0] },
+              },
+            },
             { $skip: skip },
             { $limit: perPage },
             { $sort: { createdAt: -1 } },
