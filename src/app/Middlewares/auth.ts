@@ -25,9 +25,9 @@ export default async function Auth(
           .status(401)
           .json({ error: { message: "User is deleted.Please contact admin!" } });
       }
-      if (!user.isActive || !user.isVerified) {
+      if (!user.isActive) {
         return res.status(401).json({
-          error: { message: "User is not verified or not active.Please contact admin!" },
+          error: { message: "User is not active.Please contact admin!" },
         });
       }
       // @ts-ignore
@@ -63,7 +63,7 @@ export default async function Auth(
         const dbUser = await User.findById(payload.id);
         if (!dbUser) return res.status(401).json({ error: { message: 'User not found' } });
         if (dbUser.isDeleted) return res.status(401).json({ error: { message: 'User is deleted.Please contact admin!' } });
-        if (!dbUser.isActive || !dbUser.isVerified) return res.status(401).json({ error: { message: 'User is not verified or not active.Please contact admin!' } });
+        if (!dbUser.isActive) return res.status(401).json({ error: { message: 'User is not active.Please contact admin!' } });
         // @ts-ignore
         req.user = dbUser;
         return next();
@@ -86,7 +86,7 @@ export default async function Auth(
         const dbUser = await User.findById((payload as any).id);
         if (!dbUser) return res.status(401).json({ error: { message: "User not found" } });
         if (dbUser.isDeleted) return res.status(401).json({ error: { message: "User is deleted.Please contact admin!" } });
-        if (!dbUser.isActive || !dbUser.isVerified) return res.status(401).json({ error: { message: "User is not verified or not active.Please contact admin!" } });
+        if (!dbUser.isActive) return res.status(401).json({ error: { message: "User is not active.Please contact admin!" } });
         // @ts-ignore
         req.user = dbUser;
         return next();
