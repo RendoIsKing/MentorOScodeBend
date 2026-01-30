@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { verifyDocument } from "./Actions/verifyDocumentAction";
+import { rejectDocument } from "./Actions/rejectDocumentAction";
 import { postDocument } from "./Actions/postDocumentAction";
 import { getDocumentById } from "./Actions/getDocumentAction";
 import { getAllDocuments } from "./Actions/getAllDocumentAction";
@@ -8,6 +9,10 @@ import { getAllDocuments } from "./Actions/getAllDocumentAction";
 export class DocumentController {
   static verifyDocument = async (req: Request, res: Response) => {
     return verifyDocument(req, res);
+  };
+
+  static rejectDocument = async (req: Request, res: Response) => {
+    return rejectDocument(req, res);
   };
 
 
