@@ -1,26 +1,30 @@
 import { Schema, Types } from 'mongoose';
 
 export interface ICoachKnowledge {
-  coachId: Types.ObjectId; // e.g., userId of the mentor/coach
-  title?: string;
-  text?: string; // free-form training text
-  filePath?: string; // uploaded file path
-  mimeType?: string;
-  sizeBytes?: number;
+  userId: Types.ObjectId;
+  title: string;
+  content: string;
+  type?: 'text' | 'pdf';
+  mentorName?: string;
+  embedding: number[];
   createdAt?: Date;
-  updatedAt?: Date;
 }
 
 export const CoachKnowledgeSchema = new Schema<ICoachKnowledge>({
-  coachId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  title: { type: String },
-  text: { type: String },
-  filePath: { type: String },
-  mimeType: { type: String },
-  sizeBytes: { type: Number },
-}, { timestamps: true });
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  title: { type: String, required: true },
+  content: { type: String, required: true },
+  type: { type: String, enum: ['text', 'pdf'], default: 'text' },
+  mentorName: { type: String, required: false },
+  embedding: {
+    type: [Number],
+    required: true,
+    select: false,
+  },
+  createdAt: { type: Date, default: Date.now },
+});
 
-CoachKnowledgeSchema.index({ coachId: 1, createdAt: -1 });
+CoachKnowledgeSchema.index({ userId: 1, createdAt: -1 });
 
 
 
