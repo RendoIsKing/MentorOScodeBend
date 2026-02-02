@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
-import pdf from "pdf-parse";
+// Use require to avoid TS default import issues in CJS build
+const pdfParse = require("pdf-parse");
 import { CoachKnowledge } from "../../../Models/CoachKnowledge";
 import { generateEmbedding } from "../../../../services/ai/embeddingService";
 
@@ -23,7 +24,7 @@ export const addKnowledgeAction = async (req: Request, res: Response) => {
     let resolvedContent = String(content || "").trim();
     let resolvedType = type || "text";
     if (file) {
-      const data = await pdf(file.buffer);
+      const data = await pdfParse(file.buffer);
       resolvedContent = String(data?.text || "").trim();
       resolvedType = "pdf";
     }

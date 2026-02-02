@@ -16,7 +16,7 @@ export const searchKnowledgeAction = async (req: Request, res: Response) => {
     const queryVector = await generateEmbedding(String(query));
     const mentorObjectId = new Types.ObjectId(mentorId);
 
-    const results = await CoachKnowledge.aggregate([
+    const pipeline: any[] = [
       {
         $vectorSearch: {
           index: "default",
@@ -34,7 +34,9 @@ export const searchKnowledgeAction = async (req: Request, res: Response) => {
           score: { $meta: "vectorSearchScore" },
         },
       },
-    ]);
+    ];
+
+    const results = await CoachKnowledge.aggregate(pipeline);
 
     return res.json({ success: true, results });
   } catch (error) {

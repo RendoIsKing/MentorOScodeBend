@@ -20,7 +20,7 @@ export async function generateResponse(
   const queryVector = await generateEmbedding(userMessage);
   const mentorObjectId = new Types.ObjectId(mentorId);
 
-  const results = await CoachKnowledge.aggregate([
+  const pipeline: any[] = [
     {
       $vectorSearch: {
         index: "default",
@@ -38,7 +38,9 @@ export async function generateResponse(
         score: { $meta: "vectorSearchScore" },
       },
     },
-  ]);
+  ];
+
+  const results = await CoachKnowledge.aggregate(pipeline);
 
   const contextData = results
     .map((item: { content?: string }) => item?.content)
