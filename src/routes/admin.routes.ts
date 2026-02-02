@@ -5,6 +5,8 @@ import { validateZod } from "../app/Middlewares/validateZod";
 import { objectIdParam } from "../app/Validation/requestSchemas";
 import { getDashboardStats } from "../app/Controllers/Admin/Dashboard/getDashboardStats";
 import { impersonateUser } from "../app/Controllers/Admin/Users/impersonateUserAction";
+import { getAdminTransactions } from "../app/Controllers/Admin/Transactions/getAdminTransactions";
+import { refundTransaction } from "../app/Controllers/Admin/Transactions/refundTransactionAction";
 
 const AdminRoutes: Router = Router();
 
@@ -14,6 +16,13 @@ AdminRoutes.post(
   OnlyAdmins,
   validateZod({ params: objectIdParam("id"), body: z.object({}).strict() }),
   impersonateUser
+);
+AdminRoutes.get("/transactions", OnlyAdmins, getAdminTransactions);
+AdminRoutes.post(
+  "/transactions/:id/refund",
+  OnlyAdmins,
+  validateZod({ params: objectIdParam("id"), body: z.object({}).strict() }),
+  refundTransaction
 );
 
 export default AdminRoutes;

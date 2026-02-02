@@ -33,6 +33,14 @@ const TransactionSchema = new Schema(
       enum: Object.values(TransactionStatus),
       default: TransactionStatus.PENDING,
     },
+    refundId: {
+      type: String,
+      default: null,
+    },
+    refundedAt: {
+      type: Date,
+      default: null,
+    },
     type: {
       type: String,
       // enum:

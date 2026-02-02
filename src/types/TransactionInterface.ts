@@ -14,4 +14,6 @@ export interface ITransactionInterface extends Document {
   stripeProductId: string;
   productId: string;
   productType: ProductType;
+  refundId?: string | null;
+  refundedAt?: Date | null;
 }
