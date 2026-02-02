@@ -37,7 +37,8 @@ export interface UserInterface extends Document {
   tiktokLink: string;
   youtubeLink: string;
   isVerified: boolean;
-  verifiedAt: Date;
+  verifiedAt?: Date | null;
+  verifiedBy?: string | null;
   hasPersonalInfo?: boolean;
   hasPhotoInfo?: boolean;
   hasConfirmedAge?: boolean;
