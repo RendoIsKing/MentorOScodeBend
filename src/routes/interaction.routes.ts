@@ -21,7 +21,6 @@ import { UserProfile } from '../app/Models/UserProfile';
 import { createMulterInstance } from '../app/Middlewares/fileUpload';
 import { FileEnum } from '../types/FileEnum';
 import { CoachKnowledge } from '../app/Models/CoachKnowledge';
-import path from 'path';
 import { getThread, appendMessage, clearThread } from '../app/Controllers/Interaction/thread.controller';
 import { z } from "zod";
 import { objectId } from "../app/Validation/requestSchemas";
