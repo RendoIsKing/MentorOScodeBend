@@ -25,6 +25,7 @@ import path from 'path';
 import { getThread, appendMessage, clearThread } from '../app/Controllers/Interaction/thread.controller';
 import { z } from "zod";
 import { objectId } from "../app/Validation/requestSchemas";
+import { generateEmbedding } from "../services/ai/embeddingService";
 
 const uploadRoot =
   (process.env.UPLOAD_ROOT
@@ -475,12 +476,14 @@ InteractionRoutes.post('/chat/engh/knowledge/upload', ensureAuth as any, perUser
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ message: 'file is required' });
+    const content = `Uploaded file: ${file.originalname}`;
+    const embedding = await generateEmbedding(content);
     const doc = await CoachKnowledge.create({
-      coachId: (req as any).user?._id || undefined,
+      userId: (req as any).user?._id || undefined,
       title: file.originalname,
-      filePath: path.join('coach-knowledge', file.filename),
-      mimeType: file.mimetype,
-      sizeBytes: file.size,
+      content,
+      type: "pdf",
+      embedding,
     });
     return res.json({ data: doc });
   } catch (e) {
@@ -493,7 +496,15 @@ InteractionRoutes.post('/chat/engh/knowledge/text', ensureAuth as any, perUserIp
   try {
     const { text, title } = req.body || {};
     if (!text) return res.status(400).json({ message: 'text is required' });
-    const doc = await CoachKnowledge.create({ coachId: (req as any).user?._id || undefined, title, text });
+    const content = String(text);
+    const embedding = await generateEmbedding(content);
+    const doc = await CoachKnowledge.create({
+      userId: (req as any).user?._id || undefined,
+      title: title || "Knowledge entry",
+      content,
+      type: "text",
+      embedding,
+    });
     return res.json({ data: doc });
   } catch (e) {
     return res.status(500).json({ message: 'save failed' });

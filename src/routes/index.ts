@@ -18,6 +18,7 @@ import SupportRoutes from "./support.routes";
 import moreActionRoutes from "./moreAction.routes";
 import userDataRoutes from "./userData.routes";
 import StudentRoutes from "./student.routes";
+import MentorRoutes from "./mentor.routes";
 
 export {
   AuthRoutes,
@@ -40,4 +41,5 @@ export {
   moreActionRoutes,
   userDataRoutes,
   StudentRoutes,
+  MentorRoutes,
 };

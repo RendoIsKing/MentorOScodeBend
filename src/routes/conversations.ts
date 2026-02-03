@@ -4,8 +4,10 @@ import { Types } from 'mongoose';
 import { sseHub } from '../lib/sseHub';
 import { ChatThread as DMThread } from '../models/chat';
 import { ChatMessage as DMMessage } from '../models/chat';
+import { User } from '../app/Models/User';
 import { z } from 'zod';
 import { nonEmptyString, objectId, objectIdParam } from '../app/Validation/requestSchemas';
+import { generateResponse as generateMentorResponse } from '../services/ai/mentorAIService';
 
 const r = Router();
 
@@ -98,6 +100,39 @@ r.post(
     // send per-user unread with chat:thread
     for (const p of (t.participants || []).map(String)) {
       sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants: (t.participants||[]).map(String), unread: (t as any).unread?.get?.(p) ?? 0 } });
+    }
+    // If receiver is a mentor, trigger AI auto-reply
+    const participants = (t.participants || []).map(String);
+    const receiverId = participants.find((p) => p !== me);
+    if (receiverId) {
+      void (async () => {
+        try {
+          const receiver = await User.findById(receiverId).select('isMentor').lean();
+          if (!receiver?.isMentor) return;
+          const aiText = await generateMentorResponse(me, receiverId, m.text);
+          if (!aiText || !String(aiText).trim()) return;
+          const aiMessage = await DMMessage.create({
+            thread: t._id,
+            sender: receiverId,
+            text: String(aiText).trim(),
+            readBy: [receiverId],
+          } as any);
+          t.lastMessageText = aiMessage.text;
+          t.lastMessageAt = new Date();
+          for (const p of participants) {
+            if ((t as any).unread?.get?.(p) === undefined) (t as any).unread?.set?.(p, 0);
+            (t as any).unread?.set?.(p, p === receiverId ? 0 : (((t as any).unread?.get?.(p) ?? 0) + 1));
+          }
+          await t.save();
+          const aiPayload = { threadId: String(t._id), message: { id: String(aiMessage._id), sender: receiverId, text: aiMessage.text, clientId: null, createdAt: aiMessage.createdAt, status: 'delivered' } };
+          sseHub.publishMany(participants, { type: 'chat:message', payload: aiPayload });
+          for (const p of participants) {
+            sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants, unread: (t as any).unread?.get?.(p) ?? 0 } });
+          }
+        } catch (err) {
+          try { console.error('[mentor-ai] auto-reply failed', err); } catch {}
+        }
+      })();
     }
     return res.status(201).json({ ok: true, id: String(m._id) });
   } catch { return res.status(500).json({ error: 'internal' }); }

@@ -32,6 +32,7 @@ import {
   moreActionRoutes,
   userDataRoutes,
   StudentRoutes,
+  MentorRoutes,
 } from "./routes";
 
 import { local, jwt } from "./utils/strategies";
@@ -300,6 +301,7 @@ export class Server {
     this.app.use("/api/backend/v1/interests", Auth, InterestRoutes);
     // Public for now: Coach Engh chatbot and knowledge endpoints
     this.app.use("/api/backend/v1/interaction", InteractionRoutes);
+    this.app.use("/api/backend/v1/mentor", MentorRoutes);
     const devOn = (String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase() === 'true') || (process.env.NODE_ENV !== 'production');
     if (devOn) {
       try { console.info('[DEV] Enabling /api/backend/v1/dev/* routes'); } catch {}
