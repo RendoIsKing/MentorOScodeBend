@@ -5,6 +5,8 @@ export interface IConversation extends Document {
   lastMessage?: string;
   archivedBy: Types.ObjectId[];
   createdBy: Types.ObjectId;
+  isPaused: boolean;
+  safetyStatus: "green" | "yellow" | "red";
   createdAt: Date;
   updatedAt: Date;
 }
@@ -14,6 +16,8 @@ const ConversationSchema = new Schema<IConversation>({
   lastMessage: { type: String },
   archivedBy: { type: [Schema.Types.ObjectId], ref: 'User', default: [] },
   createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  isPaused: { type: Boolean, default: false },
+  safetyStatus: { type: String, enum: ["green", "yellow", "red"], default: "green" },
 }, { timestamps: true });
 
 ConversationSchema.index({ participants: 1 });
