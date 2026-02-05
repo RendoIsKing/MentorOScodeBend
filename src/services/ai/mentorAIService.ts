@@ -1,7 +1,5 @@
 import { OpenAI } from "openai";
-import { Types } from "mongoose";
-import { CoachKnowledge } from "../../app/Models/CoachKnowledge";
-import { generateEmbedding } from "./embeddingService";
+import { retrieveContext } from "./ragService";
 
 const OPENAI_KEY = (process.env.OPENAI_API_KEY || process.env.OPENAI_API_TOKEN || process.env.OPENAI_KEY || "").trim();
 
@@ -17,33 +15,9 @@ export async function generateResponse(
   mentorId: string,
   userMessage: string
 ): Promise<string> {
-  const queryVector = await generateEmbedding(userMessage);
-  const mentorObjectId = new Types.ObjectId(mentorId);
-
-  const pipeline: any[] = [
-    {
-      $vectorSearch: {
-        index: "default",
-        path: "embedding",
-        queryVector,
-        numCandidates: 100,
-        limit: 3,
-        filter: { userId: { $eq: mentorObjectId } },
-      },
-    },
-    {
-      $project: {
-        content: 1,
-        title: 1,
-        score: { $meta: "vectorSearchScore" },
-      },
-    },
-  ];
-
-  const results = await CoachKnowledge.aggregate(pipeline);
-
-  const contextData = results
-    .map((item: { content?: string }) => item?.content)
+  const docs = await retrieveContext(userMessage, mentorId);
+  const contextData = docs
+    .map((item) => `Title: ${item.title}\n${item.content}`)
     .filter(Boolean)
     .join("\n\n");
 
@@ -56,7 +30,7 @@ export async function generateResponse(
         role: "system",
         content:
           "You are a fitness mentor. Use the following CONTEXT from your knowledge base to answer the user's question. " +
-          "If the answer is not in the context, use your general fitness knowledge but mention that this specific info wasn't in your uploaded guides.\n" +
+          "If the answer is not in the context, say you don't know.\n" +
           "CONTEXT:\n" +
           (contextData || "No relevant context found."),
       },

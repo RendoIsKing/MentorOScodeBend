@@ -3,9 +3,7 @@ import type { Request, Response } from 'express';
 import { ChatThread, ChatMessage } from '../models/chat';
 import { OpenAI } from 'openai';
 import { analyzeSafety } from '../services/safety/trafficLight';
-import { generateEmbedding } from '../services/ai/embeddingService';
-import { CoachKnowledge } from '../app/Models/CoachKnowledge';
-import { Types } from 'mongoose';
+import { retrieveContext } from '../services/ai/ragService';
 import { sseAddClient, sseRemoveClient, ssePush } from '../lib/sseHub';
 import { Auth as ensureAuth, validateZod } from '../app/Middlewares';
 import { perUserIpLimiter } from '../app/Middlewares/rateLimiters';
@@ -163,28 +161,9 @@ r.post(
         },
         { $project: { content: 1, title: 1, score: { $meta: "vectorSearchScore" } } },
       ];
-      const results = await CoachKnowledge.aggregate(pipeline);
-      retrievedDocuments = results
-        .map((item: { content?: string; title?: string }) => {
-          const title = String(item?.title || "").trim();
-          const body = String(item?.content || "").trim();
-          if (!body) return null;
-          return {
-            title: title || "Untitled",
-            snippet: body.length > 220 ? `${body.slice(0, 220)}...` : body,
-            content: body,
-          };
-        })
-        .filter(Boolean)
-        .map((x: any) => ({ title: x.title, snippet: x.snippet }));
-      const chunks = results
-        .map((item: { content?: string; title?: string }) => {
-          const title = String(item?.title || "").trim();
-          const body = String(item?.content || "").trim();
-          if (!body) return "";
-          return title ? `Title: ${title}\n${body}` : body;
-        })
-        .filter(Boolean);
+      const docs = await retrieveContext(String(message), myId);
+      retrievedDocuments = docs.map((d) => ({ title: d.title, snippet: d.snippet }));
+      const chunks = docs.map((d) => `Title: ${d.title}\n${d.content}`);
       const combined = chunks.join("\n\n");
       contextData = combined.length > MAX_CONTEXT_CHARS ? combined.slice(0, MAX_CONTEXT_CHARS) : combined;
     } catch {}
