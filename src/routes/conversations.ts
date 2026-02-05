@@ -81,7 +81,17 @@ r.get('/conversations/:id/messages', ensureAuth as any, async (req: any, res) =>
     const q: any = { thread: id };
     if (cursor) q._id = { $lt: new Types.ObjectId(String(cursor)) };
     const msgs = await DMMessage.find(q).sort({ _id: -1 }).limit(30).lean();
-    return res.json({ messages: msgs.reverse().map(m=>({ id: String(m._id), sender: String(m.sender), text: m.text, clientId: (m as any).clientId || null, createdAt: m.createdAt, flag: (m as any).flag || 'green' })) });
+    return res.json({
+      messages: msgs.reverse().map(m=>({
+        id: String(m._id),
+        sender: String(m.sender),
+        text: m.text,
+        clientId: (m as any).clientId || null,
+        createdAt: m.createdAt,
+        flag: (m as any).flag || 'green',
+        flaggedCategories: (m as any).flaggedCategories || [],
+      }))
+    });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
@@ -101,8 +111,17 @@ r.post(
     if ((t as any)?.isPaused && !isMentorSender) {
       return res.status(423).json({ error: 'conversation_paused' });
     }
-    const flag = await analyzeSafety(String(text));
-    const m = await DMMessage.create({ thread: t._id, sender: me, text: String(text).trim(), clientId: clientId || null, readBy: [me], flag } as any);
+    const safety = await analyzeSafety(String(text));
+    const flag = safety.status;
+    const m = await DMMessage.create({
+      thread: t._id,
+      sender: me,
+      text: String(text).trim(),
+      clientId: clientId || null,
+      readBy: [me],
+      flag,
+      flaggedCategories: safety.flaggedCategories || [],
+    } as any);
     t.lastMessageText = m.text;
     t.lastMessageAt = new Date();
     // Update per-user unread counts
@@ -111,7 +130,19 @@ r.post(
       (t as any).unread?.set?.(p, p === me ? 0 : (((t as any).unread?.get?.(p) ?? 0) + 1));
     }
     await t.save();
-    const payload = { threadId: String(t._id), message: { id: String(m._id), sender: me, text: m.text, clientId: clientId || null, createdAt: m.createdAt, status: 'delivered', flag } };
+    const payload = {
+      threadId: String(t._id),
+      message: {
+        id: String(m._id),
+        sender: me,
+        text: m.text,
+        clientId: clientId || null,
+        createdAt: m.createdAt,
+        status: 'delivered',
+        flag,
+        flaggedCategories: (m as any).flaggedCategories || [],
+      }
+    };
     sseHub.publishMany((t.participants||[]).map(String), { type: 'chat:message', payload });
     // send per-user unread with chat:thread
     for (const p of (t.participants || []).map(String)) {
@@ -131,6 +162,7 @@ r.post(
         text: systemText,
         readBy: [systemSender],
         flag: 'red',
+        flaggedCategories: safety.flaggedCategories || [],
       } as any);
       t.lastMessageText = systemText;
       t.lastMessageAt = new Date();
@@ -139,7 +171,19 @@ r.post(
         (t as any).unread?.set?.(p, p === String(systemSender) ? 0 : (((t as any).unread?.get?.(p) ?? 0) + 1));
       }
       await t.save();
-      const sysPayload = { threadId: String(t._id), message: { id: String(sys._id), sender: String(systemSender), text: sys.text, clientId: null, createdAt: sys.createdAt, status: 'delivered', flag: 'red' } };
+      const sysPayload = {
+        threadId: String(t._id),
+        message: {
+          id: String(sys._id),
+          sender: String(systemSender),
+          text: sys.text,
+          clientId: null,
+          createdAt: sys.createdAt,
+          status: 'delivered',
+          flag: 'red',
+          flaggedCategories: (sys as any).flaggedCategories || [],
+        }
+      };
       sseHub.publishMany(participants, { type: 'chat:message', payload: sysPayload });
       for (const p of participants) {
         sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants, unread: (t as any).unread?.get?.(p) ?? 0, isPaused: true, safetyStatus: 'red' } });
@@ -176,7 +220,19 @@ r.post(
             (t as any).unread?.set?.(p, p === receiverId ? 0 : (((t as any).unread?.get?.(p) ?? 0) + 1));
           }
           await t.save();
-          const aiPayload = { threadId: String(t._id), message: { id: String(aiMessage._id), sender: receiverId, text: aiMessage.text, clientId: null, createdAt: aiMessage.createdAt, status: 'delivered', flag: 'green' } };
+          const aiPayload = {
+            threadId: String(t._id),
+            message: {
+              id: String(aiMessage._id),
+              sender: receiverId,
+              text: aiMessage.text,
+              clientId: null,
+              createdAt: aiMessage.createdAt,
+              status: 'delivered',
+              flag: 'green',
+              flaggedCategories: [],
+            }
+          };
           sseHub.publishMany(participants, { type: 'chat:message', payload: aiPayload });
           for (const p of participants) {
             sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants, unread: (t as any).unread?.get?.(p) ?? 0, isPaused: Boolean((t as any)?.isPaused), safetyStatus: String((t as any)?.safetyStatus || 'green') } });

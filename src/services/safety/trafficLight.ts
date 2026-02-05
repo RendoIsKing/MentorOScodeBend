@@ -1,56 +1,72 @@
+import { OpenAI } from "openai";
+
 export type SafetyFlag = "green" | "yellow" | "red";
 
-const RED_KEYWORDS = [
-  "suicide",
+export type SafetyAnalysis = {
+  status: SafetyFlag;
+  flaggedCategories: string[];
+};
+
+const OPENAI_KEY = (process.env.OPENAI_API_KEY || process.env.OPENAI_API_TOKEN || process.env.OPENAI_KEY || "").trim();
+
+function getOpenAI(): OpenAI {
+  if (!OPENAI_KEY) {
+    throw new Error("OPENAI_API_KEY is missing");
+  }
+  return new OpenAI({ apiKey: OPENAI_KEY });
+}
+
+const RED_CATEGORIES = [
   "self-harm",
-  "self harm",
-  "kill myself",
-  "end my life",
-  "overdose",
-  "die",
-  "kill",
-  "murder",
-  "rape",
-  "violent",
+  "self-harm/intent",
+  "self-harm/instructions",
   "violence",
-  "weapon",
-  "gun",
-  "knife",
-  "bomb",
-  "terror",
+  "violence/graphic",
+  "sexual/minors",
 ];
 
-const YELLOW_KEYWORDS = [
+const YELLOW_CATEGORIES = [
+  "harassment",
+  "harassment/threatening",
   "hate",
-  "angry",
-  "furious",
-  "panic",
-  "threat",
-  "abuse",
-  "harass",
-  "stalk",
-  "unsafe",
-  "scared",
-  "depressed",
-  "anxious",
+  "hate/threatening",
+  "sexual",
 ];
 
-function normalize(input: string): string {
-  return String(input || "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
+function getFlaggedCategories(categories: Record<string, boolean> | undefined): string[] {
+  if (!categories) return [];
+  return Object.entries(categories)
+    .filter(([, value]) => Boolean(value))
+    .map(([key]) => key);
 }
 
-function matchAny(text: string, keywords: string[]): boolean {
-  return keywords.some((k) => text.includes(k));
-}
+export async function analyzeSafety(text: string): Promise<SafetyAnalysis> {
+  try {
+    const input = String(text || "").trim();
+    if (!input) return { status: "green", flaggedCategories: [] };
 
-export async function analyzeSafety(text: string): Promise<SafetyFlag> {
-  const normalized = normalize(text);
-  if (!normalized) return "green";
-  if (matchAny(normalized, RED_KEYWORDS)) return "red";
-  if (matchAny(normalized, YELLOW_KEYWORDS)) return "yellow";
-  return "green";
+    const client = getOpenAI();
+    const response = await client.moderations.create({ input });
+    const result = response?.results?.[0];
+    const flagged = Boolean(result?.flagged);
+    const categories = (result?.categories ?? {}) as Record<string, boolean>;
+    const flaggedCategories = getFlaggedCategories(categories);
+
+    if (!flagged) {
+      return { status: "green", flaggedCategories };
+    }
+
+    if (RED_CATEGORIES.some((c) => categories[c])) {
+      return { status: "red", flaggedCategories };
+    }
+
+    if (YELLOW_CATEGORIES.some((c) => categories[c])) {
+      return { status: "yellow", flaggedCategories };
+    }
+
+    return { status: "yellow", flaggedCategories };
+  } catch (error) {
+    return { status: "yellow", flaggedCategories: ["moderation_error"] };
+  }
 }
 

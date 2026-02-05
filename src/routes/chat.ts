@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { ChatThread, ChatMessage } from '../models/chat';
+import { OpenAI } from 'openai';
+import { analyzeSafety } from '../services/safety/trafficLight';
+import { generateEmbedding } from '../services/ai/embeddingService';
+import { CoachKnowledge } from '../app/Models/CoachKnowledge';
+import { Types } from 'mongoose';
 import { sseAddClient, sseRemoveClient, ssePush } from '../lib/sseHub';
 import { Auth as ensureAuth, validateZod } from '../app/Middlewares';
 import { perUserIpLimiter } from '../app/Middlewares/rateLimiters';
@@ -14,9 +19,23 @@ const createThreadSchema = z.object({
   userId: objectId,
 }).strict();
 
+const previewChatSchema = z.object({
+  message: nonEmptyString,
+  history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1) })).optional(),
+  previewMode: z.boolean().optional(),
+}).strict();
+
 function me(req: Request) {
   // @ts-ignore
   return req.user?._id?.toString?.();
+}
+
+const OPENAI_KEY = (process.env.OPENAI_API_KEY || process.env.OPENAI_API_TOKEN || process.env.OPENAI_KEY || "").trim();
+function getOpenAI(): OpenAI {
+  if (!OPENAI_KEY) {
+    throw new Error("OPENAI_API_KEY is missing");
+  }
+  return new OpenAI({ apiKey: OPENAI_KEY });
 }
 
 r.post(
@@ -104,6 +123,85 @@ r.post(
   await thread.save();
   ssePush(myId, 'chat:thread', { id: thread._id.toString(), lastMessageAt: thread.lastMessageAt, lastMessageText: thread.lastMessageText, unread: 0 });
   return res.json({ ok: true });
+});
+
+r.post(
+  '/preview',
+  ensureAuth as any,
+  perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_CHAT_PER_MIN || 30) }),
+  validateZod({ body: previewChatSchema }),
+  async (req, res) => {
+  try {
+    const myId = me(req);
+    if (!myId) return res.status(401).json({ error: 'unauthorized' });
+
+    const { message, history = [] } = req.body as any;
+    const safety = await analyzeSafety(String(message));
+    if (safety.status === "red") {
+      return res.json({ reply: null, safety });
+    }
+
+    const { User } = await import('../app/Models/User');
+    const meUser = await (User as any).findById(myId).lean();
+    const systemPrompt = String(meUser?.mentorAiTrainingPhilosophy || '').trim();
+    let contextData = "";
+    const MAX_CONTEXT_CHARS = 3500;
+    try {
+      const queryVector = await generateEmbedding(String(message));
+      const mentorObjectId = new Types.ObjectId(myId);
+      const pipeline: any[] = [
+        {
+          $vectorSearch: {
+            index: "default",
+            path: "embedding",
+            queryVector,
+            numCandidates: 80,
+            limit: 3,
+            filter: { userId: { $eq: mentorObjectId } },
+          },
+        },
+        { $project: { content: 1, title: 1, score: { $meta: "vectorSearchScore" } } },
+      ];
+      const results = await CoachKnowledge.aggregate(pipeline);
+      const chunks = results
+        .map((item: { content?: string; title?: string }) => {
+          const title = String(item?.title || "").trim();
+          const body = String(item?.content || "").trim();
+          if (!body) return "";
+          return title ? `Title: ${title}\n${body}` : body;
+        })
+        .filter(Boolean);
+      const combined = chunks.join("\n\n");
+      contextData = combined.length > MAX_CONTEXT_CHARS ? combined.slice(0, MAX_CONTEXT_CHARS) : combined;
+    } catch {}
+
+    const baseSystem = systemPrompt
+      ? `You are a mentor's AI avatar. Use the mentor's coaching style below.\nCoaching style:\n${systemPrompt}`
+      : "You are a mentor's AI avatar. Be supportive, concrete, and helpful.";
+    const withContext = contextData
+      ? `${baseSystem}\n\nKnowledge base context:\n${contextData}`
+      : baseSystem;
+
+    const msgs: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      { role: "system", content: withContext },
+      ...((Array.isArray(history) ? history : []) as any[]).map((m) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: String(m.content || ""),
+      })),
+      { role: "user", content: String(message) },
+    ];
+
+    const client = getOpenAI();
+    const response = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: msgs as any,
+      temperature: 0.7,
+    });
+    const reply = response.choices?.[0]?.message?.content || "";
+    return res.json({ reply, safety });
+  } catch {
+    return res.status(500).json({ error: 'preview_failed' });
+  }
 });
 
 r.get('/sse', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_SSE_PER_MIN || 30) }), (req: any, res: Response) => {

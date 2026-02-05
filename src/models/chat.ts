@@ -18,6 +18,7 @@ export interface IChatMessage {
   sender: Types.ObjectId;
   text: string;
   flag: "green" | "yellow" | "red";
+  flaggedCategories?: string[];
   clientId?: string | null;
   createdAt: Date;
   readBy: Types.ObjectId[];
@@ -43,6 +44,7 @@ const ChatMessageSchema = new Schema<IChatMessage>(
     sender: { type: Schema.Types.ObjectId, ref: 'User', index: true, required: true },
     text: { type: String, required: true },
     flag: { type: String, enum: ["green", "yellow", "red"], default: "green" },
+    flaggedCategories: { type: [String], default: [] },
     // Optional client-provided id for optimistic UI dedupe.
     clientId: { type: String, required: false, index: true, default: null },
     readBy: [{ type: Schema.Types.ObjectId, ref: 'User' }],
