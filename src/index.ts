@@ -26,3 +26,4 @@ import { connectDatabase } from "./utils/dbConnection";
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 })();
+console.log("Force redeploy: Hybrid RAG fix active");
