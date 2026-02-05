@@ -145,6 +145,7 @@ r.post(
     const meUser = await (User as any).findById(myId).lean();
     const systemPrompt = String(meUser?.mentorAiTrainingPhilosophy || '').trim();
     let contextData = "";
+    let retrievedDocuments: Array<{ title: string; snippet: string }> = [];
     const MAX_CONTEXT_CHARS = 3500;
     try {
       const queryVector = await generateEmbedding(String(message));
@@ -163,6 +164,19 @@ r.post(
         { $project: { content: 1, title: 1, score: { $meta: "vectorSearchScore" } } },
       ];
       const results = await CoachKnowledge.aggregate(pipeline);
+      retrievedDocuments = results
+        .map((item: { content?: string; title?: string }) => {
+          const title = String(item?.title || "").trim();
+          const body = String(item?.content || "").trim();
+          if (!body) return null;
+          return {
+            title: title || "Untitled",
+            snippet: body.length > 220 ? `${body.slice(0, 220)}...` : body,
+            content: body,
+          };
+        })
+        .filter(Boolean)
+        .map((x: any) => ({ title: x.title, snippet: x.snippet }));
       const chunks = results
         .map((item: { content?: string; title?: string }) => {
           const title = String(item?.title || "").trim();
@@ -179,7 +193,7 @@ r.post(
       ? `You are a mentor's AI avatar. Use the mentor's coaching style below.\nCoaching style:\n${systemPrompt}`
       : "You are a mentor's AI avatar. Be supportive, concrete, and helpful.";
     const withContext = contextData
-      ? `${baseSystem}\n\nKnowledge base context:\n${contextData}`
+      ? `${baseSystem}\n\nUse the following context to answer the question. If the answer is not in the context, say you don't know.\n\nCONTEXT:\n${contextData}`
       : baseSystem;
 
     const rawHistory = Array.isArray(history) ? history : [];
@@ -202,7 +216,7 @@ r.post(
       temperature: 0.7,
     });
     const reply = response.choices?.[0]?.message?.content || "";
-    return res.json({ reply, safety });
+    return res.json({ reply, safety, retrievedDocuments });
   } catch {
     return res.status(500).json({ error: 'preview_failed' });
   }
