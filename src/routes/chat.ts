@@ -174,6 +174,10 @@ r.post(
     msgs.push({ role: "user", content: String(message) });
 
     const client = getOpenAI();
+    try {
+      console.log(`🤖 Sending to OpenAI. Context Included? ${Boolean(contextData)}`);
+      console.log(`📜 System Prompt used: ${withContext}`);
+    } catch {}
     const response = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: msgs as any,

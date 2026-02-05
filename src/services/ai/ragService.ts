@@ -23,6 +23,9 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
   if (!cleaned) return [];
 
   const mentorObjectId = new Types.ObjectId(mentorId);
+  try {
+    console.log(`🔍 RAG Lookup started for mentorId: ${mentorId} with query: ${cleaned}`);
+  } catch {}
   let vectorResults: Array<{ title?: string; content?: string }> = [];
   try {
     const queryVector = await generateEmbedding(cleaned);
@@ -40,6 +43,7 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
       { $project: { content: 1, title: 1, score: { $meta: "vectorSearchScore" } } },
     ];
     vectorResults = await CoachKnowledge.aggregate(pipeline);
+    try { console.log(`🧩 Vector Search found ${vectorResults.length} results.`); } catch {}
   } catch {
     vectorResults = [];
   }
@@ -53,6 +57,7 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
     })
       .limit(3)
       .lean()) as any;
+    try { console.log(`📝 Text/Fallback Search found ${textResults.length} results.`); } catch {}
   } catch {
     textResults = [];
   }
@@ -69,5 +74,10 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
     seen.add(key);
     docs.push({ title, content, snippet: toSnippet(content) });
   }
+  try {
+    const combinedPreview = docs.map((d) => d.content).join("\n\n");
+    const preview = combinedPreview.slice(0, 100);
+    console.log(`✅ Final Combined Context: ${preview}`);
+  } catch {}
   return docs;
 }
