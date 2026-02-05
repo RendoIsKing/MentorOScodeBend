@@ -54,13 +54,50 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
 
   let textResults: Array<{ title?: string; content?: string }> = [];
   try {
-    const q = escapeRegex(cleaned);
-    textResults = (await CoachKnowledge.find({
-      userId: userObjectId,
-      content: { $regex: q, $options: "i" },
-    })
-      .limit(3)
-      .lean()) as any;
+    const stopWords = new Set([
+      "hva",
+      "er",
+      "den",
+      "det",
+      "de",
+      "som",
+      "jeg",
+      "du",
+      "vi",
+      "i",
+      "på",
+      "til",
+      "av",
+      "og",
+      "eller",
+      "a",
+      "an",
+      "the",
+      "is",
+      "are",
+      "was",
+      "were",
+      "what",
+    ]);
+    const keywords = cleaned
+      .toLowerCase()
+      .split(/\s+/)
+      .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
+      .filter((w) => w && !stopWords.has(w) && w.length > 1);
+
+    if (keywords.length) {
+      const orClauses = keywords.map((word) => ({
+        content: { $regex: escapeRegex(word), $options: "i" },
+      }));
+      textResults = (await CoachKnowledge.find({
+        userId: userObjectId,
+        $or: orClauses,
+      })
+        .limit(3)
+        .lean()) as any;
+    } else {
+      textResults = [];
+    }
     try { console.log(`📝 Text/Fallback Search found ${textResults.length} results.`); } catch {}
   } catch {
     textResults = [];
