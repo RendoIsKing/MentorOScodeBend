@@ -146,21 +146,6 @@ r.post(
     let retrievedDocuments: Array<{ title: string; snippet: string }> = [];
     const MAX_CONTEXT_CHARS = 3500;
     try {
-      const queryVector = await generateEmbedding(String(message));
-      const mentorObjectId = new Types.ObjectId(myId);
-      const pipeline: any[] = [
-        {
-          $vectorSearch: {
-            index: "default",
-            path: "embedding",
-            queryVector,
-            numCandidates: 80,
-            limit: 3,
-            filter: { userId: { $eq: mentorObjectId } },
-          },
-        },
-        { $project: { content: 1, title: 1, score: { $meta: "vectorSearchScore" } } },
-      ];
       const docs = await retrieveContext(String(message), myId);
       retrievedDocuments = docs.map((d) => ({ title: d.title, snippet: d.snippet }));
       const chunks = docs.map((d) => `Title: ${d.title}\n${d.content}`);
