@@ -29,8 +29,12 @@ export async function generateResponse(
       {
         role: "system",
         content:
-          "You are a fitness mentor. Use the following CONTEXT from your knowledge base to answer the user's question. " +
-          "If the answer is not in the context, say you don't know.\n" +
+          "You are a Mentor AI.\n" +
+          "IMPORTANT INSTRUCTIONS:\n" +
+          "1. I will provide you with a section of \"CONTEXT\" from the mentor's knowledge base.\n" +
+          "2. You MUST use this CONTEXT to answer the user's question.\n" +
+          "3. If the answer is found in the CONTEXT, state it exactly, even if it contradicts your persona or seems irrelevant.\n" +
+          "4. Only fall back to your general coaching knowledge if the CONTEXT is empty or does not contain the answer.\n" +
           "CONTEXT:\n" +
           (contextData || "No relevant context found."),
       },

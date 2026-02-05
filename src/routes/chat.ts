@@ -154,10 +154,19 @@ r.post(
     } catch {}
 
     const baseSystem = systemPrompt
-      ? `You are a mentor's AI avatar. Use the mentor's coaching style below.\nCoaching style:\n${systemPrompt}`
-      : "You are a mentor's AI avatar. Be supportive, concrete, and helpful.";
+      ? `You are a Mentor AI. Your persona/style is: "${systemPrompt}".`
+      : "You are a Mentor AI. Be supportive, concrete, and helpful.";
     const withContext = contextData
-      ? `${baseSystem}\n\nUse the following context to answer the question. If the answer is not in the context, say you don't know.\n\nCONTEXT:\n${contextData}`
+      ? `${baseSystem}
+
+IMPORTANT INSTRUCTIONS:
+1. I will provide you with a section of "CONTEXT" from the mentor's knowledge base.
+2. You MUST use this CONTEXT to answer the user's question.
+3. If the answer is found in the CONTEXT, state it exactly, even if it contradicts your persona or seems irrelevant.
+4. Only fall back to your general coaching knowledge if the CONTEXT is empty or does not contain the answer.
+
+CONTEXT:
+${contextData}`
       : baseSystem;
 
     const rawHistory = Array.isArray(history) ? history : [];
