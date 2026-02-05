@@ -182,16 +182,18 @@ r.post(
       ? `${baseSystem}\n\nKnowledge base context:\n${contextData}`
       : baseSystem;
 
-    const historyItems =
-      (Array.isArray(history) ? history : []) as Array<{ role: "user" | "assistant"; content: string }>;
+    const rawHistory = Array.isArray(history) ? history : [];
+    const historyItems = rawHistory.filter(
+      (m: any) => m && (m.role === "user" || m.role === "assistant")
+    ) as Array<{ role: "user" | "assistant"; content: string }>;
+
     const msgs: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
       { role: "system", content: withContext },
-      ...historyItems.map((m) => ({
-        role: m.role === "assistant" ? "assistant" : "user",
-        content: String(m.content || ""),
-      })),
-      { role: "user", content: String(message) },
     ];
+    for (const m of historyItems) {
+      msgs.push({ role: m.role, content: String(m.content || "") });
+    }
+    msgs.push({ role: "user", content: String(message) });
 
     const client = getOpenAI();
     const response = await client.chat.completions.create({

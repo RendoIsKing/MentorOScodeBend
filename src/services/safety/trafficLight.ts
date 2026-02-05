@@ -49,7 +49,7 @@ export async function analyzeSafety(text: string): Promise<SafetyAnalysis> {
     const response = await client.moderations.create({ input });
     const result = response?.results?.[0];
     const flagged = Boolean(result?.flagged);
-    const rawCategories = result?.categories as Record<string, unknown> | undefined;
+    const rawCategories = result?.categories as unknown as Record<string, unknown> | undefined;
     const categories: Record<string, boolean> = rawCategories
       ? Object.fromEntries(
           Object.entries(rawCategories).map(([key, value]) => [key, Boolean(value)])
