@@ -159,11 +159,11 @@ r.post(
     const withContext = contextData
       ? `${baseSystem}
 
-IMPORTANT INSTRUCTIONS:
-1. I will provide you with a section of "CONTEXT" from the mentor's knowledge base.
-2. You MUST use this CONTEXT to answer the user's question.
-3. If the answer is found in the CONTEXT, state it exactly, even if it contradicts your persona or seems irrelevant.
-4. Only fall back to your general coaching knowledge if the CONTEXT is empty or does not contain the answer.
+INSTRUCTIONS:
+- You are provided with a CONTEXT block from the mentor's knowledge base.
+- Priority 1: If the answer is found in the CONTEXT, use that information explicitly.
+- Priority 2: If the answer is NOT in the CONTEXT, or if the user asks for general advice/more examples, use your general expertise as a coach.
+- NEVER state "I don't have this in my context". Just answer the question naturally using the persona.
 
 CONTEXT:
 ${contextData}`
