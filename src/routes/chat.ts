@@ -182,9 +182,11 @@ r.post(
       ? `${baseSystem}\n\nKnowledge base context:\n${contextData}`
       : baseSystem;
 
+    const historyItems =
+      (Array.isArray(history) ? history : []) as Array<{ role: "user" | "assistant"; content: string }>;
     const msgs: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
       { role: "system", content: withContext },
-      ...((Array.isArray(history) ? history : []) as any[]).map((m) => ({
+      ...historyItems.map((m) => ({
         role: m.role === "assistant" ? "assistant" : "user",
         content: String(m.content || ""),
       })),
