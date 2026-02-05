@@ -1,4 +1,4 @@
-import { Types } from "mongoose";
+import mongoose from "mongoose";
 import { CoachKnowledge } from "../../app/Models/CoachKnowledge";
 import { generateEmbedding } from "./embeddingService";
 
@@ -22,7 +22,11 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
   const cleaned = String(query || "").trim();
   if (!cleaned) return [];
 
-  const mentorObjectId = new Types.ObjectId(mentorId);
+  if (!mongoose.Types.ObjectId.isValid(mentorId)) {
+    try { console.log(`⚠️ Invalid mentorId for RAG: ${mentorId}`); } catch {}
+    return [];
+  }
+  const userObjectId = new mongoose.Types.ObjectId(mentorId);
   try {
     console.log(`🔍 RAG Lookup started for mentorId: ${mentorId} with query: ${cleaned}`);
   } catch {}
@@ -37,7 +41,7 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
           queryVector,
           numCandidates: 80,
           limit: 3,
-          filter: { userId: { $eq: mentorObjectId } },
+          filter: { userId: { $eq: userObjectId } },
         },
       },
       { $project: { content: 1, title: 1, score: { $meta: "vectorSearchScore" } } },
@@ -52,7 +56,7 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
   try {
     const q = escapeRegex(cleaned);
     textResults = (await CoachKnowledge.find({
-      userId: mentorObjectId,
+      userId: userObjectId,
       content: { $regex: q, $options: "i" },
     })
       .limit(3)
