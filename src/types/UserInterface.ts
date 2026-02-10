@@ -51,6 +51,8 @@ export interface UserInterface extends Document {
   isStripeCustomer: string;
   stripeClientId: string;
   fcm_token: string;
+  loginAttempts?: number;
+  lockUntil?: Date | null;
   isActive: boolean;
   activatedAt: Date;
   isDeleted: boolean;

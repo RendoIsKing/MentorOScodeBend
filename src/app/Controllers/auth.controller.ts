@@ -12,7 +12,7 @@ import { Subscription } from "../Models/Subscription";
 import { UserInterface } from "../../types/UserInterface";
 
 import { LoginInput } from "../Inputs/Login.input";
-import { generateAuthToken } from "../../utils/jwt";
+import { generateAccessToken, generateRefreshToken, verifyToken, TokenExpiredError } from "../../utils/jwt";
 import { RolesEnum } from "../../types/RolesEnum";
 import { CheckUserInput } from "../Inputs/checkUser.input";
 import { plainToClass } from "class-transformer";
@@ -29,6 +29,36 @@ import { PostType } from "../../types/enums/postTypeEnum";
 import { SubscriptionStatusEnum } from "../../types/enums/SubscriptionStatusEnum";
 import { sendMessage } from "../../utils/Twillio/sendMessage";
 import { OAuth2Client } from "google-auth-library";
+
+/**
+ * Build cookie options based on environment.
+ */
+function getCookieOptions(maxAgeMs: number): any {
+  const isProd = process.env.NODE_ENV === 'production';
+  const sameSiteEnv = String(process.env.SESSION_SAMESITE || (isProd ? 'none' : 'lax')).toLowerCase();
+  const cookieSameSite = (sameSiteEnv === 'none' ? 'none' : 'lax') as any;
+  const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
+  const cookieSecure = secureEnv === 'true' || secureEnv === '1';
+  const cookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
+  const opts: any = { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: maxAgeMs, path: '/' };
+  if (cookieDomain) opts.domain = cookieDomain;
+  return opts;
+}
+
+/**
+ * Set both access token and refresh token cookies on the response.
+ */
+function setAuthCookies(res: Response, user: UserInterface): { accessToken: string; refreshToken: string } {
+  const accessToken = generateAccessToken(user);
+  const refreshToken = generateRefreshToken(user);
+  try {
+    // Access token cookie: 15 minutes
+    res.cookie('auth_token', accessToken, getCookieOptions(1000 * 60 * 15));
+    // Refresh token cookie: 7 days
+    res.cookie('refresh_token', refreshToken, getCookieOptions(1000 * 60 * 60 * 24 * 7));
+  } catch {}
+  return { accessToken, refreshToken };
+}
 
 const getAdminEmailSet = () => {
   const raw = String(process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || "").toLowerCase();
@@ -86,21 +116,10 @@ class AuthController {
         isNewUser = true;
       }
 
-      const token = generateAuthToken(user as unknown as UserInterface);
-      try {
-        const isProd = process.env.NODE_ENV === 'production';
-        const sameSiteEnv = String(process.env.SESSION_SAMESITE || (isProd ? 'none' : 'lax')).toLowerCase();
-        const cookieSameSite = (sameSiteEnv === 'none' ? 'none' : 'lax') as any;
-        const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
-        const cookieSecure = secureEnv === 'true' || secureEnv === '1';
-        const cookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
-        const cookieOpts: any = { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 1000*60*60*24*30, path: '/' };
-        if (cookieDomain) cookieOpts.domain = cookieDomain;
-        res.cookie('auth_token', token, cookieOpts);
-      } catch {}
+      const { accessToken } = setAuthCookies(res, user as unknown as UserInterface);
 
       return res.json({
-        token,
+        token: accessToken,
         isNewUser,
         user: {
           id: user._id,
@@ -197,18 +216,7 @@ class AuthController {
                 .status(401)
                 .json({ error: "User is deleted.Please contact admin" });
             }
-            const token = generateAuthToken(user);
-            try {
-              const isProd = process.env.NODE_ENV === 'production';
-              const sameSiteEnv = String(process.env.SESSION_SAMESITE || (isProd ? 'none' : 'lax')).toLowerCase();
-              const cookieSameSite = (sameSiteEnv === 'none' ? 'none' : 'lax') as any;
-              const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
-              const cookieSecure = secureEnv === 'true' || secureEnv === '1';
-              const cookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
-              const cookieOpts: any = { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 1000*60*60*24*30, path: '/' };
-              if (cookieDomain) cookieOpts.domain = cookieDomain;
-              res.cookie('auth_token', token, cookieOpts);
-            } catch {}
+            const { accessToken } = setAuthCookies(res, user);
             return res.json({
               data: {
                 _id: user._id,
@@ -221,7 +229,7 @@ class AuthController {
                 phoneNumber: user.phoneNumber,
                 country: user.country,
                 dialCode: user.dialCode,
-                token,
+                token: accessToken,
               },
             });
           }
@@ -282,18 +290,7 @@ class AuthController {
             .status(401)
             .json({ error: "User is deleted.Please contact admin" });
         }
-        const token = generateAuthToken(user);
-        try {
-          const isProd = process.env.NODE_ENV === 'production';
-          const sameSiteEnv = String(process.env.SESSION_SAMESITE || (isProd ? 'none' : 'lax')).toLowerCase();
-          const cookieSameSite = (sameSiteEnv === 'none' ? 'none' : 'lax') as any;
-          const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
-          const cookieSecure = secureEnv === 'true' || secureEnv === '1';
-          const cookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
-          const cookieOpts: any = { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 1000*60*60*24*30, path: '/' };
-          if (cookieDomain) cookieOpts.domain = cookieDomain;
-          res.cookie('auth_token', token, cookieOpts);
-        } catch {}
+        const { accessToken } = setAuthCookies(res, user);
         return res.json({
           data: {
             _id: user._id,
@@ -306,7 +303,7 @@ class AuthController {
             phoneNumber: user?.phoneNumber,
             country: user?.country,
             dialCode: user?.dialCode,
-            token,
+            token: accessToken,
           },
         });
       }
@@ -494,8 +491,39 @@ class AuthController {
         isDeleted: false,
       });
 
+      // SECURITY: Account lockout — check if the account is currently locked
+      if (user?.lockUntil && new Date(user.lockUntil) > new Date()) {
+        const remainingMin = Math.ceil((new Date(user.lockUntil).getTime() - Date.now()) / 60000);
+        return res.status(423).json({
+          message: `Account is temporarily locked. Try again in ${remainingMin} minute(s).`,
+          code: 'ACCOUNT_LOCKED',
+        });
+      }
+
       if (!user || !user.password || !compareSync(password, user.password)) {
+        // SECURITY: Increment failed login attempts
+        if (user) {
+          const MAX_ATTEMPTS = 5;
+          const LOCK_DURATION_MIN = 15;
+          const attempts = (user.loginAttempts || 0) + 1;
+          const update: any = { loginAttempts: attempts };
+          if (attempts >= MAX_ATTEMPTS) {
+            update.lockUntil = addMinutes(new Date(), LOCK_DURATION_MIN);
+          }
+          await User.findByIdAndUpdate(user._id, update);
+          if (attempts >= MAX_ATTEMPTS) {
+            return res.status(423).json({
+              message: `Too many failed attempts. Account locked for ${LOCK_DURATION_MIN} minutes.`,
+              code: 'ACCOUNT_LOCKED',
+            });
+          }
+        }
         return res.status(400).json({ message: "Invalid login credentials" });
+      }
+
+      // SECURITY: Reset failed login attempts on successful login
+      if (user.loginAttempts && user.loginAttempts > 0) {
+        await User.findByIdAndUpdate(user._id, { loginAttempts: 0, lockUntil: null });
       }
 
       const adminEmails = getAdminEmailSet();
@@ -512,23 +540,11 @@ class AuthController {
         role: user.role,
       };
 
-      const token = generateAuthToken(user as unknown as UserInterface);
-      // Set cookie to support endpoints that read from cookies (student/interaction routes)
-      try {
-        const isProd = process.env.NODE_ENV === 'production';
-        const sameSiteEnv = String(process.env.SESSION_SAMESITE || (isProd ? 'none' : 'lax')).toLowerCase();
-        const cookieSameSite = (sameSiteEnv === 'none' ? 'none' : 'lax') as any;
-        const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
-        const cookieSecure = secureEnv === 'true' || secureEnv === '1';
-        const cookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
-        const cookieOpts: any = { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: 1000*60*60*24*30, path: '/' };
-        if (cookieDomain) cookieOpts.domain = cookieDomain;
-        res.cookie('auth_token', token, cookieOpts);
-      } catch {}
+      const { accessToken } = setAuthCookies(res, user as unknown as UserInterface);
 
       return res.json({
         message: "User login successfully",
-        token,
+        token: accessToken,
         user: {
           id: user._id,
           name: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim(),
@@ -627,31 +643,12 @@ class AuthController {
         { new: true }
       )) as UserInterface;
 
-      const token = await generateAuthToken(updatedUser);
-
-      // Set auth cookie so subsequent cross-site requests include credentials
-      try {
-        const isProd = process.env.NODE_ENV === 'production';
-        const sameSiteEnv = String(process.env.SESSION_SAMESITE || (isProd ? 'none' : 'lax')).toLowerCase();
-        const cookieSameSite = (sameSiteEnv === 'none' ? 'none' : 'lax') as any;
-        const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
-        const cookieSecure = secureEnv === 'true' || secureEnv === '1';
-        const cookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
-        const cookieOpts: any = {
-          httpOnly: true,
-          sameSite: cookieSameSite,
-          secure: cookieSecure,
-          maxAge: 1000 * 60 * 60 * 24 * 30,
-          path: '/',
-        };
-        if (cookieDomain) cookieOpts.domain = cookieDomain;
-        res.cookie('auth_token', token, cookieOpts);
-      } catch {}
+      const { accessToken } = setAuthCookies(res, updatedUser);
 
       return res.json({
         data: {
           ...updatedUser.toObject(),
-          token,
+          token: accessToken,
         },
         message: "User verified succesfully",
       });
@@ -1168,6 +1165,63 @@ class AuthController {
     } catch (error) {
       console.error("Error in resetting password:", error);
       return res.status(500).json({ message: "Failed to reset password." });
+    }
+  };
+  /**
+   * Refresh the access token using a valid refresh token from cookies.
+   */
+  static refreshToken = async (req: Request, res: Response): Promise<Response> => {
+    try {
+      // Extract refresh token from cookie
+      let refreshToken: string | undefined;
+      if (typeof req.headers.cookie === 'string') {
+        const match = req.headers.cookie.split(';').map(s => s.trim()).find(c => c.startsWith('refresh_token='));
+        if (match) {
+          const raw = match.split('=').slice(1).join('=');
+          try { refreshToken = decodeURIComponent(raw); } catch { refreshToken = raw; }
+          if (refreshToken && refreshToken.includes(' ')) refreshToken = refreshToken.replace(/\s/g, '+');
+        }
+      }
+
+      if (!refreshToken) {
+        return res.status(401).json({ error: { message: 'No refresh token', code: 'NO_REFRESH_TOKEN' } });
+      }
+
+      let payload: any;
+      try {
+        payload = verifyToken(refreshToken);
+      } catch (e) {
+        if (e instanceof TokenExpiredError) {
+          // Clear expired cookies so user must re-login
+          res.cookie('auth_token', '', { maxAge: 0, path: '/' });
+          res.cookie('refresh_token', '', { maxAge: 0, path: '/' });
+          return res.status(401).json({ error: { message: 'Refresh token expired', code: 'REFRESH_EXPIRED' } });
+        }
+        return res.status(401).json({ error: { message: 'Invalid refresh token', code: 'INVALID_REFRESH' } });
+      }
+
+      // Must be a refresh token, not an access token
+      if (payload?.type !== 'refresh') {
+        return res.status(401).json({ error: { message: 'Invalid token type', code: 'INVALID_TOKEN_TYPE' } });
+      }
+
+      const user = await User.findById(payload.id);
+      if (!user || user.isDeleted || !user.isActive) {
+        return res.status(401).json({ error: { message: 'User not found or inactive' } });
+      }
+
+      // Issue a new access token (keep the same refresh token until it expires)
+      const newAccessToken = generateAccessToken(user as unknown as UserInterface);
+      try {
+        res.cookie('auth_token', newAccessToken, getCookieOptions(1000 * 60 * 15));
+      } catch {}
+
+      return res.json({
+        message: 'Token refreshed',
+        token: newAccessToken,
+      });
+    } catch (error) {
+      return res.status(500).json({ error: { message: 'Something went wrong' } });
     }
   };
 }

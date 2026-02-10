@@ -61,6 +61,8 @@ import { initSentry } from './observability/sentry';
 import { withRequestId, httpLogger } from './observability/logging';
 import healthRouter from './routes/health';
 import rateLimit from 'express-rate-limit';
+import mongoSanitize from 'express-mongo-sanitize';
+import hpp from 'hpp';
 import { ensureIndexes } from './utils/ensureIndexes';
 
 const version = "0.0.1";
@@ -196,13 +198,32 @@ export class Server {
     );
     this.app.use(express.json({ limit: "50mb" }));
     this.app.use(express.urlencoded({ limit: "50mb", extended: true }));
-    // Allow assets to be embedded across subdomains (www.mentorio.no → api.mentorio.no)
+    // SECURITY: Sanitize user input to prevent NoSQL injection attacks ($gt, $ne, etc.)
+    this.app.use(mongoSanitize());
+    // SECURITY: HTTP security headers via Helmet with Content Security Policy
     this.app.use(helmet({
       // Allow assets from api.mentorio.no to be embedded on www.mentorio.no
       crossOriginResourcePolicy: { policy: 'cross-origin' },
       crossOriginEmbedderPolicy: false,
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+          styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+          imgSrc: ["'self'", "data:", "blob:", "https:", "http:"],
+          fontSrc: ["'self'", "https://fonts.gstatic.com"],
+          connectSrc: ["'self'", "https:", "wss:"],
+          frameSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+          formAction: ["'self'"],
+          upgradeInsecureRequests: [],
+        },
+      },
     }));
     this.app.use(compression());
+    // SECURITY: Prevent HTTP Parameter Pollution attacks
+    this.app.use(hpp());
     initSentry(this.app as unknown as import('express').Application);
     this.app.use(withRequestId as any, httpLogger as any);
 

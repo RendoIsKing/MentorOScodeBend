@@ -202,6 +202,15 @@ const UserSchema = new Schema(
       type: String,
       default: null,
     },
+    // SECURITY: Account lockout fields for brute-force protection
+    loginAttempts: {
+      type: Number,
+      default: 0,
+    },
+    lockUntil: {
+      type: Date,
+      default: null,
+    },
     isActive: {
       type: Boolean,
       default: true,
