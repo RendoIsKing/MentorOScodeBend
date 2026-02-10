@@ -3,7 +3,8 @@ import { User } from "../../app/Models/User";
 import { Post } from "../../app/Models/Post";
 import { Types } from "mongoose";
 import { genSaltSync, hashSync } from 'bcryptjs';
-import { generateAuthToken } from '../../utils/jwt';
+import { generateAccessToken, generateRefreshToken } from '../../utils/jwt';
+import { UserInterface } from '../../types/UserInterface';
 import { validateZod } from "../../app/Middlewares";
 import { z } from "zod";
 import { nonEmptyString, objectId } from "../../app/Validation/requestSchemas";
@@ -31,8 +32,10 @@ r.post("/dev/login-as", validateZod({ body: emailSchema }), async (req: any, res
     req.session = req.session || {};
     req.session.user = { id: user._id.toString() };
     try {
-      const token = generateAuthToken(user as any);
-      res.cookie('auth_token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*24*30, path: '/' });
+      const token = generateAccessToken(user as unknown as UserInterface);
+      const refresh = generateRefreshToken(user as unknown as UserInterface);
+      res.cookie('auth_token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*15, path: '/' });
+      res.cookie('refresh_token', refresh, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*24*7, path: '/' });
     } catch {}
     return res.json({ ok: true, userId: user._id.toString() });
   } catch (e) {
@@ -59,8 +62,10 @@ r.get("/dev/login-as", async (req: any, res) => {
     req.session = req.session || {};
     req.session.user = { id: user._id.toString() };
     try {
-      const token = generateAuthToken(user as any);
-      res.cookie('auth_token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*24*30, path: '/' });
+      const token = generateAccessToken(user as unknown as UserInterface);
+      const refresh = generateRefreshToken(user as unknown as UserInterface);
+      res.cookie('auth_token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*15, path: '/' });
+      res.cookie('refresh_token', refresh, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*24*7, path: '/' });
     } catch {}
     return res.json({ ok: true, userId: user._id.toString() });
   } catch (e) {

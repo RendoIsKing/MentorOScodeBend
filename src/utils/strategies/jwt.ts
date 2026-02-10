@@ -5,6 +5,7 @@ import {
 } from "passport-jwt";
 
 import { UserInterface } from "../../types/UserInterface";
+import { getJwtSecret } from "../jwt";
 
 const cookieExtractor = (req: any) => {
   if (!req) return null;
@@ -14,7 +15,7 @@ const cookieExtractor = (req: any) => {
 };
 
 const options: StrategyOptions = {
-  secretOrKey: process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me',
+  secretOrKey: getJwtSecret(),
   jwtFromRequest: ExtractJwt.fromExtractors([
     ExtractJwt.fromAuthHeaderAsBearerToken(),
     cookieExtractor,

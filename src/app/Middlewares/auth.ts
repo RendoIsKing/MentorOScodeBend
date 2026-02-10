@@ -4,7 +4,7 @@ import { Request, Response, NextFunction } from "express";
 
 import { UserInterface } from "../../types/UserInterface";
 import { User } from "../Models/User";
-import jwt from 'jsonwebtoken';
+import { verifyToken, TokenExpiredError } from "../../utils/jwt";
 
 export default async function Auth(
   req: Request,
@@ -54,11 +54,13 @@ export default async function Auth(
 
     if (token) {
       try {
-        const primary = process.env.APP_SECRET || process.env.JWT_SECRET || "dev_session_secret_change_me";
-        let payload: any;
-        try { payload = jwt.verify(token, primary); } catch (e) {
-          // If verification fails, fall through to passport JWT
+        const payload = verifyToken(token);
+
+        // Reject refresh tokens used as access tokens
+        if (payload?.type === 'refresh') {
+          return res.status(401).json({ error: { message: 'Invalid Token. Access Denied!', code: 'INVALID_TOKEN_TYPE' } });
         }
+
         if (!payload?.id) return res.status(401).json({ error: { message: 'Invalid Token. Access Denied!' } });
         const dbUser = await User.findById(payload.id);
         if (!dbUser) return res.status(401).json({ error: { message: 'User not found' } });
@@ -68,7 +70,11 @@ export default async function Auth(
         req.user = dbUser;
         return next();
       } catch (e) {
-        // fall through to passport jwt below
+        // If the access token is expired, tell the frontend to refresh
+        if (e instanceof TokenExpiredError) {
+          return res.status(401).json({ error: { message: 'Token expired', code: 'TOKEN_EXPIRED' } });
+        }
+        // For other JWT errors, fall through to passport
       }
     }
 

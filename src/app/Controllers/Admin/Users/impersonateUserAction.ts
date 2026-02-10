@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { User } from "../../../Models/User";
-import { generateAuthToken } from "../../../../utils/jwt";
+import { generateAccessToken } from "../../../../utils/jwt";
+import { UserInterface } from "../../../../types/UserInterface";
 
 export const impersonateUser = async (
   req: Request,
@@ -14,7 +15,7 @@ export const impersonateUser = async (
       return res.status(404).json({ error: { message: "User not found." } });
     }
 
-    const token = generateAuthToken(user as any);
+    const token = generateAccessToken(user as unknown as UserInterface);
 
     return res.json({
       data: {

@@ -1,13 +1,21 @@
-import {sign} from 'jsonwebtoken';
+import { sign, verify, TokenExpiredError, JsonWebTokenError } from 'jsonwebtoken';
 
-import {UserInterface} from '../types/UserInterface';
+import { UserInterface } from '../types/UserInterface';
 
-export function generateToken(data: any): string {
-    return sign(data, process.env.APP_SECRET as string);
+/**
+ * Get the JWT secret. Throws at startup if not configured -- never falls back to a hardcoded value.
+ */
+export function getJwtSecret(): string {
+    const secret = process.env.APP_SECRET || process.env.JWT_SECRET;
+    if (!secret) {
+        throw new Error('[FATAL] JWT secret is not configured. Set APP_SECRET or JWT_SECRET environment variable.');
+    }
+    return secret;
 }
 
-export function generateAuthToken(user: UserInterface): string {
-    const data = {
+/** Build the standard payload from a user object. */
+function buildUserPayload(user: UserInterface) {
+    return {
         id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
@@ -17,8 +25,46 @@ export function generateAuthToken(user: UserInterface): string {
         isActive: user.isActive,
         isVerified: user.isVerified,
         isDeleted: user.isDeleted,
-        date:new Date()
     };
-
-    return generateToken(data);
 }
+
+/**
+ * Generate a short-lived access token (15 minutes).
+ */
+export function generateAccessToken(user: UserInterface): string {
+    const payload = { ...buildUserPayload(user), type: 'access' };
+    return sign(payload, getJwtSecret(), { expiresIn: '15m' });
+}
+
+/**
+ * Generate a long-lived refresh token (7 days).
+ */
+export function generateRefreshToken(user: UserInterface): string {
+    const payload = { id: user._id, type: 'refresh' };
+    return sign(payload, getJwtSecret(), { expiresIn: '7d' });
+}
+
+/**
+ * Legacy function kept for backward compatibility.
+ * Now generates an access token with 15-minute expiry.
+ */
+export function generateAuthToken(user: UserInterface): string {
+    return generateAccessToken(user);
+}
+
+/**
+ * Legacy function kept for backward compatibility.
+ */
+export function generateToken(data: any): string {
+    return sign(data, getJwtSecret(), { expiresIn: '15m' });
+}
+
+/**
+ * Verify a token and return the decoded payload.
+ * Throws TokenExpiredError or JsonWebTokenError on failure.
+ */
+export function verifyToken(token: string): any {
+    return verify(token, getJwtSecret());
+}
+
+export { TokenExpiredError, JsonWebTokenError };

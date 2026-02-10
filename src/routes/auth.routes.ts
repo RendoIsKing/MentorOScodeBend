@@ -121,9 +121,15 @@ auth.post("/validate-otp", validateZod({ body: otpSchema }), AuthController.vali
 auth.put("/reset-password", validateZod({ body: resetPasswordSchema }), AuthController.resetPassword);
 
 auth.get("/me", Auth, AuthController.me);
+
+// Refresh access token using refresh token cookie
+auth.post('/refresh', AuthController.refreshToken);
+
 auth.post('/logout', validateZod({ body: z.object({}).strict() }), (req, res)=>{
   try {
+    // Clear both access and refresh token cookies
     res.cookie('auth_token', '', { maxAge: 0, path: '/', sameSite: 'lax' });
+    res.cookie('refresh_token', '', { maxAge: 0, path: '/', sameSite: 'lax' });
     try { (req as any).session?.destroy?.(()=>{}); } catch {}
     return res.json({ ok: true });
   } catch {
