@@ -958,6 +958,7 @@ class AuthController {
           payload.coverPhoto = userDoc.coverPhoto;
           payload.googleId = userDoc.googleId;
           payload.isMentor = Boolean(userDoc.isMentor);
+          payload.role = userDoc.role;
         }
         return res.json({ data: payload });
       }
