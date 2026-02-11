@@ -103,8 +103,12 @@ export const addKnowledgeAction = async (req: Request, res: Response) => {
     delete (knowledge as any).embedding;
 
     return res.json({ success: true, knowledge });
-  } catch (error) {
+  } catch (error: any) {
     console.error("[addKnowledge] Unexpected error:", error);
-    return res.status(500).json({ message: "failed_to_add_knowledge" });
+    const detail = String(error?.message || "").slice(0, 200);
+    return res.status(500).json({
+      message: "failed_to_add_knowledge",
+      detail: detail || undefined,
+    });
   }
 };
