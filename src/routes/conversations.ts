@@ -331,6 +331,76 @@ r.post(
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
+// ── Diagnostic endpoint: test the AI pipeline step-by-step ──
+// GET /chat/debug-ai?userName=Coach.Majen&testMessage=hello
+r.get('/debug-ai', async (req: any, res) => {
+  const steps: Array<{ step: string; ok: boolean; detail: string; ms?: number }> = [];
+  const userName = String(req.query?.userName || 'Coach.Majen');
+  const testMessage = String(req.query?.testMessage || 'Hei, kan du hjelpe meg?');
+
+  // Step 1: Find the mentor user
+  let mentorId = '';
+  try {
+    const start = Date.now();
+    const escaped = userName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const mentor = await User.findOne({ userName: { $regex: `^${escaped}$`, $options: 'i' } }).select('_id userName isMentor').lean();
+    steps.push({ step: '1_find_mentor', ok: !!mentor, detail: mentor ? `id=${String(mentor._id)}, userName=${(mentor as any).userName}, isMentor=${(mentor as any).isMentor}` : `No user found for "${userName}"`, ms: Date.now() - start });
+    if (mentor) mentorId = String(mentor._id);
+  } catch (err: any) {
+    steps.push({ step: '1_find_mentor', ok: false, detail: err?.message || String(err) });
+  }
+
+  if (!mentorId) return res.json({ steps });
+
+  // Step 2: Check KB documents
+  try {
+    const start = Date.now();
+    const count = await CoachKnowledge.countDocuments({ userId: mentorId });
+    const sample = await CoachKnowledge.find({ userId: mentorId }).select('title classification').limit(3).lean();
+    steps.push({ step: '2_kb_documents', ok: count > 0, detail: `${count} docs. Sample: ${sample.map((d: any) => `"${d.title}" (${d.classification || 'unclassified'})`).join(', ')}`, ms: Date.now() - start });
+  } catch (err: any) {
+    steps.push({ step: '2_kb_documents', ok: false, detail: err?.message || String(err) });
+  }
+
+  // Step 3: Test embedding generation
+  try {
+    const start = Date.now();
+    const { generateEmbedding } = await import('../services/ai/embeddingService');
+    const vec = await generateEmbedding('test query');
+    steps.push({ step: '3_embedding', ok: vec.length > 0, detail: `Embedding vector length: ${vec.length}`, ms: Date.now() - start });
+  } catch (err: any) {
+    steps.push({ step: '3_embedding', ok: false, detail: err?.message || String(err) });
+  }
+
+  // Step 4: Test RAG retrieval
+  try {
+    const start = Date.now();
+    const { retrieveContext } = await import('../services/ai/ragService');
+    const docs = await retrieveContext(testMessage, mentorId);
+    steps.push({ step: '4_rag_retrieval', ok: true, detail: `${docs.length} docs: [${docs.map(d => `"${d.title}"`).join(', ')}]`, ms: Date.now() - start });
+  } catch (err: any) {
+    steps.push({ step: '4_rag_retrieval', ok: false, detail: err?.message || String(err) });
+  }
+
+  // Step 5: Test OpenAI chat completion (short response)
+  try {
+    const start = Date.now();
+    const aiText = await generateMentorResponse('debug-user', mentorId, testMessage);
+    steps.push({ step: '5_openai_response', ok: !!aiText && aiText.trim().length > 0, detail: `${aiText.length} chars: "${aiText.slice(0, 120)}..."`, ms: Date.now() - start });
+  } catch (err: any) {
+    steps.push({ step: '5_openai_response', ok: false, detail: err?.message || String(err) });
+  }
+
+  // Step 6: Test safety analysis
+  try {
+    const start = Date.now();
+    const safety = await analyzeSafety(testMessage);
+    steps.push({ step: '6_safety_analysis', ok: true, detail: `status=${safety.status}, flagged=[${safety.flaggedCategories.join(',')}]`, ms: Date.now() - start });
+  } catch (err: any) {
+    steps.push({ step: '6_safety_analysis', ok: false, detail: err?.message || String(err) });
+  }
+
+  return res.json({ userName, mentorId, testMessage, steps });
+});
+
 export default r;
-
-
