@@ -42,7 +42,11 @@ export const addKnowledgeAction = async (req: Request, res: Response) => {
   try {
     const { title, content, type } = req.body || {};
     const file = (req as any).file as Express.Multer.File | undefined;
-    if (!title) {
+
+    // For file uploads, derive title from filename if not explicitly provided
+    const resolvedTitle = String(title || "").trim()
+      || (file ? file.originalname.replace(/\.[^.]+$/, "") : "");
+    if (!resolvedTitle) {
       return res.status(422).json({ message: "title is required" });
     }
 
@@ -88,7 +92,7 @@ export const addKnowledgeAction = async (req: Request, res: Response) => {
     const embedding = await generateEmbedding(resolvedContent);
     const doc = await CoachKnowledge.create({
       userId,
-      title,
+      title: resolvedTitle,
       content: resolvedContent,
       type: resolvedType,
       mentorName,
