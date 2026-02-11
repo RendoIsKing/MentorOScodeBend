@@ -198,8 +198,9 @@ export class UsersControllers {
 
       // Check if username is being changed to one that already exists
       if (userInput.userName) {
+        const escapedUserName = String(userInput.userName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const existingUserWithUsername = await User.findOne({ 
-          userName: { $regex: `^${userInput.userName}$`, $options: 'i' },
+          userName: { $regex: `^${escapedUserName}$`, $options: 'i' },
           _id: { $ne: userToAddOnboardingDetails._id } 
         });
         if (existingUserWithUsername) {
@@ -608,7 +609,8 @@ export class UsersControllers {
           .status(400)
           .json({ error: { message: "Username is required." } });
       }
-      const user = await User.findOne({ userName: username });
+      const escaped = String(username).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const user = await User.findOne({ userName: { $regex: `^${escaped}$`, $options: 'i' } });
 
       if (user) {
         return res.json({ isAvailable: false });
