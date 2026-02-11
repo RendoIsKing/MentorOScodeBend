@@ -1,24 +1,28 @@
 import { Request, Response } from "express";
-import { reRefineDocument, RefinedKnowledge, FeedbackMessage } from "../../../../services/ai/refiningService";
+import { feedbackChat, RefinedKnowledge, FeedbackMessage } from "../../../../services/ai/refiningService";
 
 /**
- * POST /mentor/knowledge/re-refine
+ * POST /mentor/knowledge/feedback-chat
  *
- * Called after the mentor has conversed with the AI about what's wrong
- * and confirmed the AI understands. Now the AI produces a new analysis
- * incorporating the full conversation history.
+ * Conversational endpoint: the mentor gives feedback about the analysis,
+ * and the AI responds in natural language to confirm understanding.
+ * No re-analysis happens here — just a conversation.
  */
-export const reRefineKnowledgeAction = async (req: Request, res: Response) => {
+export const feedbackChatAction = async (req: Request, res: Response) => {
   try {
     const userId = (req as any)?.user?._id || (req as any)?.user?.id;
     if (!userId) {
       return res.status(401).json({ message: "unauthorized" });
     }
 
-    const { content, fileName, previousAnalysis, conversationHistory } = req.body || {};
+    const { content, fileName, previousAnalysis, conversationHistory, message } = req.body || {};
 
     if (!content || !String(content).trim()) {
       return res.status(422).json({ message: "Document content is required." });
+    }
+
+    if (!message || !String(message).trim()) {
+      return res.status(422).json({ message: "Message text is required." });
     }
 
     if (!previousAnalysis) {
@@ -41,22 +45,23 @@ export const reRefineKnowledgeAction = async (req: Request, res: Response) => {
         }))
       : [];
 
-    const updatedAnalysis = await reRefineDocument(
+    const aiResponse = await feedbackChat(
       String(content),
       String(fileName || "document"),
       prevAnalysis,
-      history
+      history,
+      String(message)
     );
 
     return res.json({
       success: true,
-      analysis: updatedAnalysis,
+      response: aiResponse,
     });
   } catch (error: any) {
-    console.error("[reRefineKnowledge] Unexpected error:", error);
+    console.error("[feedbackChat] Unexpected error:", error);
     const detail = String(error?.message || "").slice(0, 200);
     return res.status(500).json({
-      message: "failed_to_re_refine_knowledge",
+      message: "failed_feedback_chat",
       detail: detail || undefined,
     });
   }

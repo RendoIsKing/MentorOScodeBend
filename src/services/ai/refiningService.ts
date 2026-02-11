@@ -23,6 +23,12 @@ export interface RefinedKnowledge {
   suggestedTitle: string;
 }
 
+/** A single message in the feedback conversation. */
+export interface FeedbackMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 /**
  * Maximum characters to send to GPT-4o-mini for refining.
  * The model supports ~128k tokens; we use a conservative char limit
@@ -64,6 +70,23 @@ Entities:
 
 Respond ONLY with the JSON object. No explanation, no markdown.`;
 
+const FEEDBACK_CHAT_SYSTEM_PROMPT = `You are a "Knowledge Refining Assistant" for a mentoring platform called Mentorio. You are having a conversation with a mentor about a document they uploaded.
+
+Your previous analysis of the document may have been incorrect or incomplete. The mentor is giving you feedback to help you understand the document better.
+
+Your role in this conversation:
+1. Listen carefully to the mentor's feedback
+2. Explain back to them HOW you now understand the document based on their feedback
+3. Ask clarifying questions if something is still unclear
+4. Be concise and friendly — keep responses to 2-4 sentences
+5. When you understand their feedback correctly, they will press a button to trigger a re-analysis
+
+IMPORTANT:
+- Do NOT produce JSON in this conversation. Just have a natural text conversation.
+- Always end your response by summarizing your new understanding and asking "Is this correct?" or similar
+- The mentor is the expert on their own content — defer to their knowledge
+- Be warm and professional`;
+
 function parseAndSanitize(raw: string, fallbackTitle: string): RefinedKnowledge {
   let parsed: any;
   try {
@@ -92,6 +115,13 @@ function parseAndSanitize(raw: string, fallbackTitle: string): RefinedKnowledge 
   };
 }
 
+function truncateText(rawText: string): string {
+  const trimmed = rawText.trim();
+  return trimmed.length > MAX_REFINE_CHARS
+    ? trimmed.slice(0, MAX_REFINE_CHARS) + "\n\n[...document truncated for analysis...]"
+    : trimmed;
+}
+
 /**
  * Send document text to GPT-4o-mini for structured analysis.
  * Returns a RefinedKnowledge object with summary, classification, keywords, etc.
@@ -105,10 +135,7 @@ export async function refineDocument(
     throw new Error("Cannot refine empty document");
   }
 
-  const textToAnalyze =
-    trimmed.length > MAX_REFINE_CHARS
-      ? trimmed.slice(0, MAX_REFINE_CHARS) + "\n\n[...document truncated for analysis...]"
-      : trimmed;
+  const textToAnalyze = truncateText(trimmed);
 
   const client = getOpenAI();
   const response = await client.chat.completions.create({
@@ -129,51 +156,98 @@ export async function refineDocument(
 }
 
 /**
- * Re-refine a document based on the mentor's feedback about the initial analysis.
- * The AI receives the original document, the previous analysis, and the mentor's
- * correction/context, then produces an updated analysis.
+ * Conversational feedback: the mentor says what's wrong, and the AI responds
+ * in natural language (NOT JSON) to confirm its understanding before re-analyzing.
+ */
+export async function feedbackChat(
+  rawText: string,
+  fileName: string,
+  previousAnalysis: RefinedKnowledge,
+  conversationHistory: FeedbackMessage[],
+  latestMessage: string
+): Promise<string> {
+  const textToAnalyze = truncateText(rawText.trim());
+
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: FEEDBACK_CHAT_SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: `I uploaded a document called "${fileName}". Here is the content:\n\n--- DOCUMENT CONTENT ---\n${textToAnalyze}\n\n--- YOUR PREVIOUS ANALYSIS ---\n${JSON.stringify(previousAnalysis, null, 2)}`,
+    },
+    {
+      role: "assistant",
+      content: `I've reviewed the document "${fileName}" and produced the analysis shown above. Let me know if anything needs to be corrected — I want to make sure I understand your content correctly.`,
+    },
+  ];
+
+  // Append prior conversation turns
+  for (const msg of conversationHistory) {
+    messages.push({ role: msg.role, content: msg.content });
+  }
+
+  // Append the latest mentor message
+  messages.push({ role: "user", content: latestMessage });
+
+  const client = getOpenAI();
+  const response = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0.5,
+    messages,
+  });
+
+  return response.choices?.[0]?.message?.content || "I understand. Shall I re-analyze the document now?";
+}
+
+/**
+ * Re-refine a document incorporating full conversation history.
+ * The AI sees the original analysis, the entire feedback conversation,
+ * and then produces an updated JSON analysis.
  */
 export async function reRefineDocument(
   rawText: string,
   fileName: string,
   previousAnalysis: RefinedKnowledge,
-  mentorFeedback: string
+  conversationHistory: FeedbackMessage[]
 ): Promise<RefinedKnowledge> {
   const trimmed = rawText.trim();
   if (!trimmed) {
     throw new Error("Cannot refine empty document");
   }
 
-  const textToAnalyze =
-    trimmed.length > MAX_REFINE_CHARS
-      ? trimmed.slice(0, MAX_REFINE_CHARS) + "\n\n[...document truncated for analysis...]"
-      : trimmed;
+  const textToAnalyze = truncateText(trimmed);
+
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: REFINE_SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: `File name: "${fileName}"\n\n--- DOCUMENT CONTENT ---\n${textToAnalyze}`,
+    },
+    {
+      role: "assistant",
+      content: JSON.stringify(previousAnalysis),
+    },
+  ];
+
+  // Include the full feedback conversation so the AI has all context
+  for (const msg of conversationHistory) {
+    messages.push({ role: msg.role, content: msg.content });
+  }
+
+  // Final instruction to produce updated analysis
+  messages.push({
+    role: "user",
+    content:
+      `Based on the feedback conversation above, please produce an UPDATED analysis of this document. ` +
+      `The mentor knows their content best — trust their guidance about the document's purpose and meaning. ` +
+      `Return the same JSON schema with corrected summary, classification, keywords, coreRules, entities, and suggestedTitle.`,
+  });
 
   const client = getOpenAI();
   const response = await client.chat.completions.create({
     model: "gpt-4o-mini",
     temperature: 0.3,
     response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: REFINE_SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `File name: "${fileName}"\n\n--- DOCUMENT CONTENT ---\n${textToAnalyze}`,
-      },
-      {
-        role: "assistant",
-        content: JSON.stringify(previousAnalysis),
-      },
-      {
-        role: "user",
-        content:
-          `The mentor reviewed your analysis and has the following feedback/correction:\n\n` +
-          `"${mentorFeedback}"\n\n` +
-          `Please produce an UPDATED analysis that incorporates this feedback. ` +
-          `The mentor knows their content best — trust their guidance about the document's purpose and meaning. ` +
-          `Return the same JSON schema with corrected summary, classification, keywords, coreRules, entities, and suggestedTitle.`,
-      },
-    ],
+    messages,
   });
 
   const raw = response.choices?.[0]?.message?.content || "";
