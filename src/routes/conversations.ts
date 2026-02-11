@@ -201,47 +201,62 @@ r.post(
     }
     // If receiver is a mentor, trigger AI auto-reply
     if (receiverId) {
+      console.log(`[mentor-ai] ── Auto-reply check START for thread=${String(t._id)}, sender=${me}, receiver=${receiverId} ──`);
       void (async () => {
         try {
           const receiver = await User.findById(receiverId).select('isMentor userName').lean();
-          console.log(`[mentor-ai] Checking receiver ${receiverId}: isMentor=${receiver?.isMentor}, userName=${(receiver as any)?.userName}`);
+          console.log(`[mentor-ai] Receiver lookup: id=${receiverId}, found=${!!receiver}, isMentor=${receiver?.isMentor}, userName=${(receiver as any)?.userName}`);
           let actAsMentor = Boolean(receiver?.isMentor);
           // Fallback: if the receiver has knowledge base documents, treat as a mentor
           if (!actAsMentor) {
             try {
               const kbCount = await CoachKnowledge.countDocuments({ userId: receiverId });
+              console.log(`[mentor-ai] KB fallback check: ${kbCount} documents found for receiver ${receiverId}`);
               if (kbCount > 0) {
                 actAsMentor = true;
-                console.log(`[mentor-ai] Receiver ${receiverId} has ${kbCount} KB docs — treating as mentor (auto-fixing isMentor flag)`);
-                // Auto-fix the isMentor flag
+                console.log(`[mentor-ai] Treating as mentor via KB fallback, auto-fixing isMentor flag`);
                 await User.updateOne({ _id: receiverId }, { $set: { isMentor: true } });
               }
-            } catch {}
+            } catch (kbErr: any) {
+              console.error(`[mentor-ai] KB fallback check failed:`, kbErr?.message || kbErr);
+            }
           }
           if (!actAsMentor) {
-            console.log(`[mentor-ai] Receiver ${receiverId} is NOT a mentor and has no KB docs, skipping AI reply.`);
+            console.log(`[mentor-ai] ── Receiver is NOT a mentor, skipping AI reply ──`);
             return;
           }
-          console.log(`[mentor-ai] Generating AI response for mentor ${receiverId}...`);
+          console.log(`[mentor-ai] Generating AI response for mentor ${receiverId}, message: "${String(m.text).slice(0, 60)}..."`);
+          const startTime = Date.now();
           const aiText = await generateMentorResponse(me, receiverId, m.text);
-          console.log(`[mentor-ai] AI response generated (${String(aiText || '').length} chars)`);
-          if (!aiText || !String(aiText).trim()) return;
+          const elapsed = Date.now() - startTime;
+          console.log(`[mentor-ai] AI response generated in ${elapsed}ms (${String(aiText || '').length} chars)`);
+          if (!aiText || !String(aiText).trim()) {
+            console.log(`[mentor-ai] ── AI returned empty response, not saving ──`);
+            return;
+          }
+          // Re-fetch the thread to avoid stale data race conditions
+          const freshThread = await DMThread.findById(t._id);
+          if (!freshThread) {
+            console.error(`[mentor-ai] Thread ${String(t._id)} no longer exists`);
+            return;
+          }
           const aiMessage = await DMMessage.create({
-            thread: t._id,
+            thread: freshThread._id,
             sender: receiverId,
             text: String(aiText).trim(),
             readBy: [receiverId],
             flag: 'green',
           } as any);
-          t.lastMessageText = aiMessage.text;
-          t.lastMessageAt = new Date();
+          freshThread.lastMessageText = aiMessage.text;
+          freshThread.lastMessageAt = new Date();
           for (const p of participants) {
-            if ((t as any).unread?.get?.(p) === undefined) (t as any).unread?.set?.(p, 0);
-            (t as any).unread?.set?.(p, p === receiverId ? 0 : (((t as any).unread?.get?.(p) ?? 0) + 1));
+            if ((freshThread as any).unread?.get?.(p) === undefined) (freshThread as any).unread?.set?.(p, 0);
+            (freshThread as any).unread?.set?.(p, p === receiverId ? 0 : (((freshThread as any).unread?.get?.(p) ?? 0) + 1));
           }
-          await t.save();
+          await freshThread.save();
+          console.log(`[mentor-ai] AI message saved: id=${String(aiMessage._id)}`);
           const aiPayload = {
-            threadId: String(t._id),
+            threadId: String(freshThread._id),
             message: {
               id: String(aiMessage._id),
               sender: receiverId,
@@ -255,10 +270,12 @@ r.post(
           };
           sseHub.publishMany(participants, { type: 'chat:message', payload: aiPayload });
           for (const p of participants) {
-            sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants, unread: (t as any).unread?.get?.(p) ?? 0, isPaused: Boolean((t as any)?.isPaused), safetyStatus: String((t as any)?.safetyStatus || 'green') } });
+            sseHub.publish(p, { type: 'chat:thread', payload: { id: String(freshThread._id), lastMessageText: freshThread.lastMessageText, lastMessageAt: freshThread.lastMessageAt, participants, unread: (freshThread as any).unread?.get?.(p) ?? 0, isPaused: Boolean((freshThread as any)?.isPaused), safetyStatus: String((freshThread as any)?.safetyStatus || 'green') } });
           }
+          console.log(`[mentor-ai] ── Auto-reply COMPLETE for thread=${String(freshThread._id)} ──`);
         } catch (err: any) {
-          console.error('[mentor-ai] auto-reply FAILED for receiver', receiverId, ':', err?.message || err);
+          console.error('[mentor-ai] ── Auto-reply FAILED ──', receiverId, ':', err?.message || err);
+          console.error('[mentor-ai] Stack:', err?.stack);
         }
       })();
     }

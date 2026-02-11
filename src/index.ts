@@ -21,12 +21,18 @@ import { connectDatabase } from "./utils/dbConnection";
     // Match both "Coach.Majen" and "coach-majen" variants (case-insensitive)
     const mentorUserNames = ["Coach.Majen", "coach-majen"];
     for (const uname of mentorUserNames) {
-      const result = await MigUser.updateMany(
-        { userName: { $regex: `^${uname.replace(/\./g, "\\.")}$`, $options: "i" }, isMentor: { $ne: true } },
-        { $set: { isMentor: true } }
-      );
-      if (result.modifiedCount > 0) {
-        console.log(`[MIGRATION] Set isMentor=true for ${result.modifiedCount} user(s) matching "${uname}"`);
+      // First, check if the user exists at all
+      const existing = await MigUser.findOne(
+        { userName: { $regex: `^${uname.replace(/\./g, "\\.")}$`, $options: "i" } }
+      ).select("_id userName isMentor").lean();
+      if (existing) {
+        console.log(`[MIGRATION] Found user "${(existing as any).userName}" (${String(existing._id)}), isMentor=${(existing as any).isMentor}`);
+        if (!(existing as any).isMentor) {
+          await MigUser.updateOne({ _id: existing._id }, { $set: { isMentor: true } });
+          console.log(`[MIGRATION] ✅ Set isMentor=true for "${(existing as any).userName}"`);
+        }
+      } else {
+        console.log(`[MIGRATION] No user found matching "${uname}"`);
       }
     }
   } catch (e) {
@@ -44,4 +50,4 @@ import { connectDatabase } from "./utils/dbConnection";
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 })();
-console.log("Force redeploy: Hybrid RAG fix active");
+console.log("Force redeploy: AI auto-reply diagnostic logging v2");

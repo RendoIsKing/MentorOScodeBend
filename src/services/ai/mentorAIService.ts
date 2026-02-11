@@ -34,11 +34,26 @@ export async function generateResponse(
   mentorId: string,
   userMessage: string
 ): Promise<string> {
-  // Fetch mentor profile and RAG context in parallel
-  const [docs, mentorProfile] = await Promise.all([
-    retrieveContext(userMessage, mentorId),
-    getMentorProfile(mentorId),
-  ]);
+  console.log(`[mentorAI] generateResponse called for mentor=${mentorId}, msg="${userMessage.slice(0, 80)}..."`);
+
+  // Fetch mentor profile and RAG context in parallel (with individual error handling)
+  let docs: Awaited<ReturnType<typeof retrieveContext>> = [];
+  let mentorProfile: any = null;
+  try {
+    const [d, p] = await Promise.all([
+      retrieveContext(userMessage, mentorId).catch((err) => {
+        console.error("[mentorAI] retrieveContext failed:", err?.message || err);
+        return [] as Awaited<ReturnType<typeof retrieveContext>>;
+      }),
+      getMentorProfile(mentorId),
+    ]);
+    docs = d;
+    mentorProfile = p;
+  } catch (err: any) {
+    console.error("[mentorAI] Failed to fetch context/profile:", err?.message || err);
+  }
+
+  console.log(`[mentorAI] RAG docs: ${docs.length}, profile: ${mentorProfile ? "found" : "null"}`);
 
   const contextData = docs
     .map((item) => `Title: ${item.title}\n${item.content}`)
@@ -91,15 +106,19 @@ export async function generateResponse(
     (contextData || "No relevant context found.")
   );
 
+  console.log(`[mentorAI] Calling OpenAI gpt-4o...`);
   const client = getOpenAI();
   const response = await client.chat.completions.create({
     model: "gpt-4o",
     temperature: 0.7,
+    max_tokens: 1024,
     messages: [
       { role: "system", content: parts.join("\n\n") },
       { role: "user", content: userMessage },
     ],
   });
 
-  return response.choices?.[0]?.message?.content || "";
+  const result = response.choices?.[0]?.message?.content || "";
+  console.log(`[mentorAI] OpenAI returned ${result.length} chars`);
+  return result;
 }
