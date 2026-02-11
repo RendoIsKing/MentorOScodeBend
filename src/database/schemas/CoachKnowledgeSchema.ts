@@ -4,7 +4,7 @@ export interface ICoachKnowledge {
   userId: Types.ObjectId;
   title: string;
   content: string;
-  type?: 'text' | 'pdf';
+  type?: 'text' | 'pdf' | 'docx';
   mentorName?: string;
   embedding: number[];
   createdAt?: Date;
@@ -14,7 +14,7 @@ export const CoachKnowledgeSchema = new Schema<ICoachKnowledge>({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   title: { type: String, required: true },
   content: { type: String, required: true },
-  type: { type: String, enum: ['text', 'pdf'], default: 'text' },
+  type: { type: String, enum: ['text', 'pdf', 'docx'], default: 'text' },
   mentorName: { type: String, required: false },
   embedding: {
     type: [Number],
