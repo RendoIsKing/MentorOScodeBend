@@ -27,6 +27,7 @@ export interface UserInterface extends Document {
   mentorAiNutritionPhilosophy?: string;
   mentorAiMacroApproach?: string;
   mentorAiDietaryNotes?: string;
+  coreInstructions?: string;
   lastLogin: Date;
   photoId: Types.ObjectId | FileInterface;
   coverPhotoId: Types.ObjectId | FileInterface;

@@ -52,6 +52,32 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
     vectorResults = [];
   }
 
+  // Keyword-boosted search: match against stored keywords array from Smart Ingestion Pipeline
+  let keywordResults: Array<{ title?: string; content?: string }> = [];
+  try {
+    const queryTokens = cleaned
+      .toLowerCase()
+      .split(/\s+/)
+      .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
+      .filter((w) => w && w.length > 1);
+
+    if (queryTokens.length) {
+      const keywordOrClauses = queryTokens.map((word) => ({
+        keywords: { $regex: escapeRegex(word), $options: "i" },
+      }));
+      keywordResults = (await CoachKnowledge.find({
+        userId: userObjectId,
+        $or: keywordOrClauses,
+      })
+        .limit(3)
+        .lean()) as any;
+      try { console.log(`🏷️ Keyword Tag Search found ${keywordResults.length} results.`); } catch {}
+    }
+  } catch {
+    keywordResults = [];
+  }
+
+  // Text/fallback search on content field
   let textResults: Array<{ title?: string; content?: string }> = [];
   try {
     const stopWords = new Set([
@@ -103,7 +129,8 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
     textResults = [];
   }
 
-  const combined = [...vectorResults, ...textResults];
+  // Combine all sources: keyword matches get priority (appear first)
+  const combined = [...keywordResults, ...vectorResults, ...textResults];
   const seen = new Set<string>();
   const docs: RetrievedDoc[] = [];
   for (const item of combined) {

@@ -202,6 +202,12 @@ const UserSchema = new Schema(
       type: String,
       default: null,
     },
+    // Core instructions for the mentor's AI agent (permanent system prompt).
+    // Appended via the Smart Ingestion Pipeline when classification = "system_prompt".
+    coreInstructions: {
+      type: String,
+      default: "",
+    },
     // SECURITY: Account lockout fields for brute-force protection
     loginAttempts: {
       type: Number,

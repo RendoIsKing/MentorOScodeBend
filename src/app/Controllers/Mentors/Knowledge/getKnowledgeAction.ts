@@ -9,7 +9,7 @@ export const getKnowledgeAction = async (req: Request, res: Response) => {
     }
 
     const docs = await CoachKnowledge.find({ userId })
-      .select("_id title content type createdAt mentorName")
+      .select("_id title content type createdAt mentorName summary classification keywords coreRules entities")
       .sort({ createdAt: -1 })
       .lean();
 
