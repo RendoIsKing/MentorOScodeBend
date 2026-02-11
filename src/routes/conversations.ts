@@ -5,6 +5,7 @@ import { sseHub } from '../lib/sseHub';
 import { ChatThread as DMThread } from '../models/chat';
 import { ChatMessage as DMMessage } from '../models/chat';
 import { User } from '../app/Models/User';
+import { CoachKnowledge } from '../app/Models/CoachKnowledge';
 import { z } from 'zod';
 import { nonEmptyString, objectId, objectIdParam } from '../app/Validation/requestSchemas';
 import { generateResponse as generateMentorResponse } from '../services/ai/mentorAIService';
@@ -202,9 +203,28 @@ r.post(
     if (receiverId) {
       void (async () => {
         try {
-          const receiver = await User.findById(receiverId).select('isMentor').lean();
-          if (!receiver?.isMentor) return;
+          const receiver = await User.findById(receiverId).select('isMentor userName').lean();
+          console.log(`[mentor-ai] Checking receiver ${receiverId}: isMentor=${receiver?.isMentor}, userName=${(receiver as any)?.userName}`);
+          let actAsMentor = Boolean(receiver?.isMentor);
+          // Fallback: if the receiver has knowledge base documents, treat as a mentor
+          if (!actAsMentor) {
+            try {
+              const kbCount = await CoachKnowledge.countDocuments({ userId: receiverId });
+              if (kbCount > 0) {
+                actAsMentor = true;
+                console.log(`[mentor-ai] Receiver ${receiverId} has ${kbCount} KB docs — treating as mentor (auto-fixing isMentor flag)`);
+                // Auto-fix the isMentor flag
+                await User.updateOne({ _id: receiverId }, { $set: { isMentor: true } });
+              }
+            } catch {}
+          }
+          if (!actAsMentor) {
+            console.log(`[mentor-ai] Receiver ${receiverId} is NOT a mentor and has no KB docs, skipping AI reply.`);
+            return;
+          }
+          console.log(`[mentor-ai] Generating AI response for mentor ${receiverId}...`);
           const aiText = await generateMentorResponse(me, receiverId, m.text);
+          console.log(`[mentor-ai] AI response generated (${String(aiText || '').length} chars)`);
           if (!aiText || !String(aiText).trim()) return;
           const aiMessage = await DMMessage.create({
             thread: t._id,
@@ -237,8 +257,8 @@ r.post(
           for (const p of participants) {
             sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants, unread: (t as any).unread?.get?.(p) ?? 0, isPaused: Boolean((t as any)?.isPaused), safetyStatus: String((t as any)?.safetyStatus || 'green') } });
           }
-        } catch (err) {
-          try { console.error('[mentor-ai] auto-reply failed', err); } catch {}
+        } catch (err: any) {
+          console.error('[mentor-ai] auto-reply FAILED for receiver', receiverId, ':', err?.message || err);
         }
       })();
     }

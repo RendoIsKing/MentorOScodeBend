@@ -15,6 +15,24 @@ import { connectDatabase } from "./utils/dbConnection";
     console.error('Database connection error: ', err);
     process.exit(1);
   }
+  // ── Startup migration: ensure Coach.Majen has isMentor=true ──
+  try {
+    const { User: MigUser } = await import("./app/Models/User");
+    // Match both "Coach.Majen" and "coach-majen" variants (case-insensitive)
+    const mentorUserNames = ["Coach.Majen", "coach-majen"];
+    for (const uname of mentorUserNames) {
+      const result = await MigUser.updateMany(
+        { userName: { $regex: `^${uname.replace(/\./g, "\\.")}$`, $options: "i" }, isMentor: { $ne: true } },
+        { $set: { isMentor: true } }
+      );
+      if (result.modifiedCount > 0) {
+        console.log(`[MIGRATION] Set isMentor=true for ${result.modifiedCount} user(s) matching "${uname}"`);
+      }
+    }
+  } catch (e) {
+    console.error("[MIGRATION] Failed to ensure mentor flags:", e);
+  }
+
   const server = new Server((process.env.PORT || '3006') as String);
   server.start();
 
