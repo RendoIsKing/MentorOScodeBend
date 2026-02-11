@@ -64,6 +64,34 @@ Entities:
 
 Respond ONLY with the JSON object. No explanation, no markdown.`;
 
+function parseAndSanitize(raw: string, fallbackTitle: string): RefinedKnowledge {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.error("[refiningService] Failed to parse GPT response:", raw.slice(0, 500));
+    throw new Error("AI analysis returned invalid JSON");
+  }
+
+  return {
+    summary: String(parsed.summary || "").trim() || "No summary generated.",
+    classification:
+      parsed.classification === "system_prompt" ? "system_prompt" : "rag",
+    keywords: Array.isArray(parsed.keywords)
+      ? parsed.keywords.map((k: any) => String(k).trim()).filter(Boolean).slice(0, 20)
+      : [],
+    coreRules: Array.isArray(parsed.coreRules)
+      ? parsed.coreRules.map((r: any) => String(r).trim()).filter(Boolean).slice(0, 10)
+      : [],
+    entities: Array.isArray(parsed.entities)
+      ? parsed.entities.map((e: any) => String(e).trim()).filter(Boolean).slice(0, 20)
+      : [],
+    suggestedTitle:
+      String(parsed.suggestedTitle || "").trim() ||
+      fallbackTitle.replace(/\.[^.]+$/, ""),
+  };
+}
+
 /**
  * Send document text to GPT-4o-mini for structured analysis.
  * Returns a RefinedKnowledge object with summary, classification, keywords, etc.
@@ -77,7 +105,6 @@ export async function refineDocument(
     throw new Error("Cannot refine empty document");
   }
 
-  // Truncate very long documents to keep latency and cost manageable
   const textToAnalyze =
     trimmed.length > MAX_REFINE_CHARS
       ? trimmed.slice(0, MAX_REFINE_CHARS) + "\n\n[...document truncated for analysis...]"
@@ -98,32 +125,57 @@ export async function refineDocument(
   });
 
   const raw = response.choices?.[0]?.message?.content || "";
-  let parsed: any;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    console.error("[refiningService] Failed to parse GPT response:", raw.slice(0, 500));
-    throw new Error("AI analysis returned invalid JSON");
+  return parseAndSanitize(raw, fileName);
+}
+
+/**
+ * Re-refine a document based on the mentor's feedback about the initial analysis.
+ * The AI receives the original document, the previous analysis, and the mentor's
+ * correction/context, then produces an updated analysis.
+ */
+export async function reRefineDocument(
+  rawText: string,
+  fileName: string,
+  previousAnalysis: RefinedKnowledge,
+  mentorFeedback: string
+): Promise<RefinedKnowledge> {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    throw new Error("Cannot refine empty document");
   }
 
-  // Validate and sanitize the response
-  const result: RefinedKnowledge = {
-    summary: String(parsed.summary || "").trim() || "No summary generated.",
-    classification:
-      parsed.classification === "system_prompt" ? "system_prompt" : "rag",
-    keywords: Array.isArray(parsed.keywords)
-      ? parsed.keywords.map((k: any) => String(k).trim()).filter(Boolean).slice(0, 20)
-      : [],
-    coreRules: Array.isArray(parsed.coreRules)
-      ? parsed.coreRules.map((r: any) => String(r).trim()).filter(Boolean).slice(0, 10)
-      : [],
-    entities: Array.isArray(parsed.entities)
-      ? parsed.entities.map((e: any) => String(e).trim()).filter(Boolean).slice(0, 20)
-      : [],
-    suggestedTitle:
-      String(parsed.suggestedTitle || "").trim() ||
-      fileName.replace(/\.[^.]+$/, ""),
-  };
+  const textToAnalyze =
+    trimmed.length > MAX_REFINE_CHARS
+      ? trimmed.slice(0, MAX_REFINE_CHARS) + "\n\n[...document truncated for analysis...]"
+      : trimmed;
 
-  return result;
+  const client = getOpenAI();
+  const response = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0.3,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: REFINE_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: `File name: "${fileName}"\n\n--- DOCUMENT CONTENT ---\n${textToAnalyze}`,
+      },
+      {
+        role: "assistant",
+        content: JSON.stringify(previousAnalysis),
+      },
+      {
+        role: "user",
+        content:
+          `The mentor reviewed your analysis and has the following feedback/correction:\n\n` +
+          `"${mentorFeedback}"\n\n` +
+          `Please produce an UPDATED analysis that incorporates this feedback. ` +
+          `The mentor knows their content best — trust their guidance about the document's purpose and meaning. ` +
+          `Return the same JSON schema with corrected summary, classification, keywords, coreRules, entities, and suggestedTitle.`,
+      },
+    ],
+  });
+
+  const raw = response.choices?.[0]?.message?.content || "";
+  return parseAndSanitize(raw, fileName);
 }

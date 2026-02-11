@@ -7,6 +7,7 @@ import { deleteKnowledgeAction } from "../app/Controllers/Mentors/Knowledge/dele
 import { searchKnowledgeAction } from "../app/Controllers/Mentors/Knowledge/searchKnowledgeAction";
 import { refineKnowledgeAction } from "../app/Controllers/Mentors/Knowledge/refineKnowledgeAction";
 import { confirmKnowledgeAction } from "../app/Controllers/Mentors/Knowledge/confirmKnowledgeAction";
+import { reRefineKnowledgeAction } from "../app/Controllers/Mentors/Knowledge/reRefineKnowledgeAction";
 
 const mentorRoutes: Router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -19,6 +20,7 @@ mentorRoutes.post("/knowledge/search", Auth, searchKnowledgeAction);
 
 // Smart Ingestion Pipeline endpoints
 mentorRoutes.post("/knowledge/refine", Auth, upload.single("file"), refineKnowledgeAction);
+mentorRoutes.post("/knowledge/re-refine", Auth, reRefineKnowledgeAction);
 mentorRoutes.post("/knowledge/confirm", Auth, confirmKnowledgeAction);
 
 export default mentorRoutes;
