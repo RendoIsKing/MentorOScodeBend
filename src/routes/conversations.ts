@@ -75,10 +75,31 @@ r.post(
         t = await DMThread.create({
           participants: pair,
           unread: Object.fromEntries([[String(partnerId), 0], [me, 0]]),
+          // Populate legacy fields to satisfy old unique index {userId, partner}
+          userId: meOid,
+          partner: String(partnerOid),
         } as any);
       } catch (createErr: any) {
         console.error('[chat:create] DMThread.create failed:', createErr?.message, createErr?.stack);
-        return res.status(500).json({ error: 'create_failed', debug: { message: createErr?.message } });
+        // If it's a duplicate key error on the legacy index, try to drop the index and retry
+        if (createErr?.code === 11000) {
+          console.log('[chat:create] Duplicate key error — attempting to drop legacy userId_partner index...');
+          try {
+            await DMThread.collection.dropIndex('userId_1_partner_1');
+            console.log('[chat:create] Legacy index dropped, retrying create...');
+            t = await DMThread.create({
+              participants: pair,
+              unread: Object.fromEntries([[String(partnerId), 0], [me, 0]]),
+              userId: meOid,
+              partner: String(partnerOid),
+            } as any);
+          } catch (retryErr: any) {
+            console.error('[chat:create] Retry after index drop also failed:', retryErr?.message);
+            return res.status(500).json({ error: 'create_failed', debug: { message: retryErr?.message } });
+          }
+        } else {
+          return res.status(500).json({ error: 'create_failed', debug: { message: createErr?.message } });
+        }
       }
     }
 

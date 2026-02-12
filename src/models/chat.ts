@@ -89,4 +89,27 @@ const ChatMessageSchema = new Schema<IChatMessage>(
 export const ChatThread = (mongoose.models.ChatThread as mongoose.Model<IChatThread>) || mongoose.model<IChatThread>('ChatThread', ChatThreadSchema);
 export const ChatMessage = (mongoose.models.ChatMessage as mongoose.Model<IChatMessage>) || mongoose.model<IChatMessage>('ChatMessage', ChatMessageSchema);
 
+// Drop the legacy unique index {userId, partner} that blocks DM thread creation.
+// The old ChatThreadSchema had: ChatThreadSchema.index({ userId: 1, partner: 1 }, { unique: true })
+// which prevents multiple DM threads (they all have null userId/partner → duplicate key).
+// The new index is { userId: 1, partner: 1, sparse: true } which allows nulls.
+void (async () => {
+  try {
+    const indexes = await ChatThread.collection.indexes();
+    const legacy = indexes.find((i: any) =>
+      i.key?.userId === 1 && i.key?.partner === 1 && i.unique === true
+    );
+    if (legacy) {
+      console.log('[chat:init] Dropping legacy unique index:', legacy.name);
+      await ChatThread.collection.dropIndex(legacy.name);
+      console.log('[chat:init] Legacy index dropped successfully');
+    }
+  } catch (err: any) {
+    // Non-fatal: index might not exist or DB might not be connected yet
+    if (!String(err?.message || '').includes('not found')) {
+      console.error('[chat:init] Index cleanup error (non-fatal):', err?.message);
+    }
+  }
+})();
+
 
