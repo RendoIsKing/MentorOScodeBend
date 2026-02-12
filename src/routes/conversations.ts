@@ -34,12 +34,15 @@ r.post(
   try {
     const me = String(req.user._id);
     const { partnerId } = req.body || {};
+    console.log(`[chat:create] POST /conversations → me=${me}, userName=${req.user?.userName || 'unknown'}, partnerId=${partnerId}`);
     if (!partnerId || partnerId === me) return res.status(400).json({ error: 'invalid partner' });
     const pair = [new Types.ObjectId(me), new Types.ObjectId(String(partnerId))].sort((a,b)=>a.toString().localeCompare(b.toString()));
     let t = await DMThread.findOne({ participants: pair });
+    const isNew = !t;
     if (!t) {
       t = await DMThread.create({ participants: pair, unread: new Map([[String(partnerId), 0], [me, 0]]) } as any);
     }
+    console.log(`[chat:create] → threadId=${String(t?._id)}, isNew=${isNew}, participants=[${(t?.participants||[]).map(String).join(',')}]`);
     // Ensure unread map has keys for both participants
     try {
       const ids = (t?.participants || []).map(String);
@@ -107,7 +110,11 @@ r.post(
     const { text, clientId } = req.body || {};
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'text_required' });
     const t = await DMThread.findById(id);
-    if (!t || !isParticipant(t, me)) return res.status(403).json({ error: 'forbidden' });
+    if (!t || !isParticipant(t, me)) {
+      const participants = t ? (t.participants || []).map(String) : [];
+      console.error(`[chat:403] POST /conversations/${id}/messages → FORBIDDEN. me=${me}, thread=${t ? 'found' : 'null'}, participants=[${participants.join(',')}], includes_me=${participants.includes(me)}, userName=${req.user?.userName || 'unknown'}`);
+      return res.status(403).json({ error: 'forbidden', debug: { threadFound: !!t, me, participants } });
+    }
     const isMentorSender = Boolean(req.user?.isMentor);
     if ((t as any)?.isPaused && !isMentorSender) {
       return res.status(423).json({ error: 'conversation_paused' });
