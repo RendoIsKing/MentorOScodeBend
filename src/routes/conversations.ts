@@ -41,17 +41,49 @@ r.post(
   validateZod({ body: createConversationSchema }),
   async (req: any, res) => {
   try {
-    const me = String(req.user._id);
+    const me = String(req.user?._id || '');
     const { partnerId } = req.body || {};
     console.log(`[chat:create] POST /conversations → me=${me}, userName=${req.user?.userName || 'unknown'}, partnerId=${partnerId}`);
+    if (!me) return res.status(401).json({ error: 'not_authenticated' });
     if (!partnerId || partnerId === me) return res.status(400).json({ error: 'invalid partner' });
-    const pair = [new Types.ObjectId(me), new Types.ObjectId(String(partnerId))].sort((a,b)=>a.toString().localeCompare(b.toString()));
-    let t = await DMThread.findOne({ participants: pair });
+
+    let meOid: Types.ObjectId, partnerOid: Types.ObjectId;
+    try {
+      meOid = new Types.ObjectId(me);
+      partnerOid = new Types.ObjectId(String(partnerId));
+    } catch (idErr: any) {
+      console.error('[chat:create] Invalid ObjectId:', { me, partnerId, error: idErr?.message });
+      return res.status(400).json({ error: 'invalid_id', debug: { me, partnerId } });
+    }
+
+    const pair = [meOid, partnerOid].sort((a, b) => a.toString().localeCompare(b.toString()));
+    console.log(`[chat:create] Looking for thread with participants: [${pair.map(String).join(',')}]`);
+
+    let t: any;
+    try {
+      t = await DMThread.findOne({ participants: pair });
+    } catch (findErr: any) {
+      console.error('[chat:create] findOne failed:', findErr?.message, findErr?.stack);
+      // Fallback: try finding with $all (order-independent)
+      t = await DMThread.findOne({ participants: { $all: pair, $size: 2 } });
+    }
+
     const isNew = !t;
     if (!t) {
-      t = await DMThread.create({ participants: pair, unread: new Map([[String(partnerId), 0], [me, 0]]) } as any);
+      console.log('[chat:create] Creating new thread...');
+      try {
+        t = await DMThread.create({
+          participants: pair,
+          unread: Object.fromEntries([[String(partnerId), 0], [me, 0]]),
+        } as any);
+      } catch (createErr: any) {
+        console.error('[chat:create] DMThread.create failed:', createErr?.message, createErr?.stack);
+        return res.status(500).json({ error: 'create_failed', debug: { message: createErr?.message } });
+      }
     }
-    console.log(`[chat:create] → threadId=${String(t?._id)}, isNew=${isNew}, participants=[${(t?.participants||[]).map(String).join(',')}]`);
+
+    console.log(`[chat:create] → threadId=${String(t?._id)}, isNew=${isNew}, participants=[${(t?.participants || []).map(String).join(',')}]`);
+
     // Ensure unread map has keys for both participants
     try {
       const ids = (t?.participants || []).map(String);
@@ -59,12 +91,24 @@ r.post(
         if ((t as any).unread?.get?.(p) === undefined) (t as any).unread?.set?.(p, 0);
       }
       await t.save();
-    } catch {}
-    const payload = { id: String(t?._id), lastMessageText: t?.lastMessageText || '', lastMessageAt: t?.lastMessageAt || null, participants: (t?.participants||[]).map(String), unread: (t as any)?.unread?.get?.(me) ?? 0 };
+    } catch (saveErr: any) {
+      console.error('[chat:create] unread save failed (non-fatal):', saveErr?.message);
+    }
+
+    const payload = {
+      id: String(t?._id),
+      lastMessageText: t?.lastMessageText || '',
+      lastMessageAt: t?.lastMessageAt || null,
+      participants: (t?.participants || []).map(String),
+      unread: (t as any)?.unread?.get?.(me) ?? 0,
+    };
     sseHub.publishMany(payload.participants, { type: 'chat:thread', payload });
     try { Sentry.addBreadcrumb({ category: 'chat', message: 'conversation-created', level: 'info', data: { threadId: payload.id, isNew } }); } catch {}
     return res.json({ conversationId: payload.id });
-  } catch (e) { return res.status(500).json({ error: 'internal' }); }
+  } catch (e: any) {
+    console.error('[chat:create] Unhandled 500 error:', e?.message || e, e?.stack);
+    return res.status(500).json({ error: 'internal', debug: { message: e?.message || String(e) } });
+  }
 });
 
 r.get('/conversations', ensureAuth as any, async (req: any, res) => {
