@@ -28,6 +28,12 @@ export interface IChatThread {
  *  - "thread + sender(ObjectId)" flow  (conversations.ts / chat.ts)
  *  - "threadId + sender(string)"  flow  (thread.controller.ts)
  * ────────────────────────────────────────────────────────── */
+export interface IChatAttachment {
+  url: string;
+  type: string;      // mime type (image/jpeg, image/png, etc.)
+  filename: string;
+}
+
 export interface IChatMessage {
   _id: Types.ObjectId;
   thread?: Types.ObjectId;
@@ -37,6 +43,7 @@ export interface IChatMessage {
   flag: "green" | "yellow" | "red";
   flaggedCategories?: string[];
   clientId?: string | null;
+  attachments?: IChatAttachment[];
   createdAt: Date;
   readBy: Types.ObjectId[];
 }
@@ -69,6 +76,11 @@ const ChatMessageSchema = new Schema<IChatMessage>(
     flag:     { type: String, enum: ["green", "yellow", "red"], default: "green" },
     flaggedCategories: { type: [String], default: [] },
     clientId: { type: String, required: false, index: true, default: null },
+    attachments: [{
+      url: { type: String, required: true },
+      type: { type: String, required: true },
+      filename: { type: String, required: true },
+    }],
     readBy:   [{ type: Schema.Types.ObjectId, ref: 'User' }],
   },
   { timestamps: { createdAt: true, updatedAt: false } }

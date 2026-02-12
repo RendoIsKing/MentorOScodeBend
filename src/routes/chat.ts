@@ -10,6 +10,7 @@ import { perUserIpLimiter } from '../app/Middlewares/rateLimiters';
 import { chatMessageSchema } from '../app/Validation/schemas';
 import { z } from 'zod';
 import { nonEmptyString, objectId, objectIdParam } from '../app/Validation/requestSchemas';
+import * as Sentry from '@sentry/node';
 
 const r = Router();
 
@@ -101,6 +102,7 @@ r.post(
     ssePush(p, 'chat:message', { threadId: thread._id.toString(), message: { id: msg._id.toString(), text: msg.text, sender: myId, createdAt: msg.createdAt } });
     ssePush(p, 'chat:thread', { id: thread._id.toString(), lastMessageAt: thread.lastMessageAt, lastMessageText: thread.lastMessageText, unread: thread.unread.get(p) ?? 0 });
   }
+  try { Sentry.addBreadcrumb({ category: 'chat', message: 'thread-message-sent', level: 'info', data: { threadId: thread._id.toString(), sender: myId } }); } catch {}
   return res.json({ ok: true, id: msg._id.toString() });
 });
 

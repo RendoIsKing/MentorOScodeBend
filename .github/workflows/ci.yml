@@ -1,0 +1,66 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:6
+        ports: ["27017:27017"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Unit tests (Jest)
+        env:
+          DB_URL: mongodb://127.0.0.1:27017/mentoros_test
+          SESSION_SECRET: ci_test_secret
+          JWT_SECRET: ci_test_jwt
+        run: npm test
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: test
+    services:
+      mongo:
+        image: mongo:6
+        ports: ["27017:27017"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Start server
+        env:
+          DB_URL: mongodb://127.0.0.1:27017/mentoros_smoke
+          SESSION_SECRET: ci_smoke_secret
+          JWT_SECRET: ci_smoke_jwt
+          PORT: 3006
+        run: |
+          npm run dev &
+          sleep 8
+      - name: Smoke tests
+        run: npm run smoke
+      - name: Burst tests
+        run: npm run burst || true
+      - name: Upload smoke results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-results
+          path: smoke-results/
+          retention-days: 7
+          if-no-files-found: ignore

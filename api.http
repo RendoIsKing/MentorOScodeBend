@@ -1,0 +1,106 @@
+### MentorOS Backend API — VS Code REST Client
+### Requires REST Client extension (humao.rest-client)
+
+@base = http://localhost:3006
+@v1   = {{base}}/api/backend/v1
+
+# ── Health ─────────────────────────────────────────────────
+
+### Health check
+GET {{base}}/api/backend/health
+
+# ── Auth / Dev Login ───────────────────────────────────────
+
+### Dev login (returns auth cookies)
+GET {{v1}}/dev/login-as?email=demo@mentoros.app
+
+### Dev login as specific user
+GET {{v1}}/dev/login-as?email=blooty@mentoros.app
+
+# ── Chat (DM conversations) ───────────────────────────────
+
+### Create / find conversation (requires auth cookie)
+POST {{v1}}/chat/conversations
+Content-Type: application/json
+
+{
+  "partnerId": "REPLACE_WITH_PARTNER_MONGO_ID"
+}
+
+### Send message in conversation
+POST {{v1}}/chat/conversations/REPLACE_WITH_CONVERSATION_ID/messages
+Content-Type: application/json
+
+{
+  "text": "Hello from REST Client"
+}
+
+### List conversations
+GET {{v1}}/chat/conversations
+
+# ── Chat (thread-based) ───────────────────────────────────
+
+### Create / get thread
+POST {{v1}}/chat/threads
+Content-Type: application/json
+
+{
+  "userId": "REPLACE_WITH_USER_ID"
+}
+
+### Send thread message
+POST {{v1}}/chat/threads/REPLACE_WITH_THREAD_ID/messages
+Content-Type: application/json
+
+{
+  "text": "Hello from thread"
+}
+
+# ── Actions ────────────────────────────────────────────────
+
+### Apply action (weight log)
+POST {{v1}}/interaction/actions/apply
+Content-Type: application/json
+
+{
+  "type": "WEIGHT_LOG",
+  "payload": { "value": 82.5, "unit": "kg" }
+}
+
+### Apply action — invalid (should return 422)
+POST {{v1}}/interaction/actions/apply
+Content-Type: application/json
+
+{
+  "bad": "payload"
+}
+
+# ── Feed / Posts ───────────────────────────────────────────
+
+### Get all posts (feed)
+GET {{v1}}/posts/
+
+### Get single post
+GET {{v1}}/posts/REPLACE_WITH_POST_ID
+
+# ── Payments ───────────────────────────────────────────────
+
+### Create payment session
+POST {{v1}}/payments/create-session
+Content-Type: application/json
+
+{
+  "amount": 999,
+  "currency": "usd"
+}
+
+### Get payment status
+GET {{v1}}/payments/status
+
+# ── Seed ───────────────────────────────────────────────────
+
+### Seed Coach Majen data
+POST {{v1}}/dev/seed/coach-majen
+Content-Type: application/json
+
+{}

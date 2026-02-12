@@ -46,4 +46,10 @@ export function ssePush(userId: string, event: string, data: any) {
   }
 }
 
-
+/** Check which user IDs have at least one active SSE connection. */
+export function getOnlineUserIds(userIds: string[]): string[] {
+  return userIds.filter((id) => {
+    const set = clients.get(id);
+    return set && set.size > 0;
+  });
+}

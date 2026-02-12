@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { Auth as ensureAuth, validateZod } from '../app/Middlewares';
 import { Types } from 'mongoose';
-import { sseHub } from '../lib/sseHub';
+import { sseHub, ssePush, getOnlineUserIds } from '../lib/sseHub';
+import { createMulterInstance } from '../app/Middlewares/fileUpload';
 import { ChatThread as DMThread } from '../models/chat';
 import { ChatMessage as DMMessage } from '../models/chat';
 import { User } from '../app/Models/User';
@@ -10,6 +11,7 @@ import { z } from 'zod';
 import { nonEmptyString, objectId, objectIdParam } from '../app/Validation/requestSchemas';
 import { generateResponse as generateMentorResponse } from '../services/ai/mentorAIService';
 import { analyzeSafety } from '../services/safety/trafficLight';
+import * as Sentry from '@sentry/node';
 
 const r = Router();
 
@@ -17,9 +19,16 @@ const createConversationSchema = z.object({
   partnerId: objectId,
 }).strict();
 
+const attachmentSchema = z.object({
+  url: z.string(),
+  type: z.string(),
+  filename: z.string(),
+});
+
 const sendMessageSchema = z.object({
   text: nonEmptyString,
   clientId: nonEmptyString.optional(),
+  attachments: z.array(attachmentSchema).optional(),
 }).strict();
 
 function isParticipant(doc: any, userId: string): boolean {
@@ -53,6 +62,7 @@ r.post(
     } catch {}
     const payload = { id: String(t?._id), lastMessageText: t?.lastMessageText || '', lastMessageAt: t?.lastMessageAt || null, participants: (t?.participants||[]).map(String), unread: (t as any)?.unread?.get?.(me) ?? 0 };
     sseHub.publishMany(payload.participants, { type: 'chat:thread', payload });
+    try { Sentry.addBreadcrumb({ category: 'chat', message: 'conversation-created', level: 'info', data: { threadId: payload.id, isNew } }); } catch {}
     return res.json({ conversationId: payload.id });
   } catch (e) { return res.status(500).json({ error: 'internal' }); }
 });
@@ -94,6 +104,7 @@ r.get('/conversations/:id/messages', ensureAuth as any, async (req: any, res) =>
         createdAt: m.createdAt,
         flag: (m as any).flag || 'green',
         flaggedCategories: (m as any).flaggedCategories || [],
+        attachments: (m as any).attachments || [],
       }))
     });
   } catch { return res.status(500).json({ error: 'internal' }); }
@@ -107,7 +118,7 @@ r.post(
   try {
     const me = String(req.user._id);
     const { id } = req.params;
-    const { text, clientId } = req.body || {};
+    const { text, clientId, attachments: bodyAttachments } = req.body || {};
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'text_required' });
     const t = await DMThread.findById(id);
     if (!t || !isParticipant(t, me)) {
@@ -129,6 +140,7 @@ r.post(
       readBy: [me],
       flag,
       flaggedCategories: safety.flaggedCategories || [],
+      attachments: Array.isArray(bodyAttachments) ? bodyAttachments : [],
     } as any);
     t.lastMessageText = m.text;
     t.lastMessageAt = new Date();
@@ -149,9 +161,11 @@ r.post(
         status: 'delivered',
         flag,
         flaggedCategories: (m as any).flaggedCategories || [],
+        attachments: (m as any).attachments || [],
       }
     };
     sseHub.publishMany((t.participants||[]).map(String), { type: 'chat:message', payload });
+    try { Sentry.addBreadcrumb({ category: 'chat', message: 'message-sent', level: 'info', data: { threadId: String(t._id), flag, sender: me } }); } catch {}
     // send per-user unread with chat:thread
     for (const p of (t.participants || []).map(String)) {
       sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants: (t.participants||[]).map(String), unread: (t as any).unread?.get?.(p) ?? 0, isPaused: Boolean((t as any)?.isPaused), safetyStatus: String((t as any)?.safetyStatus || 'green') } });
@@ -334,6 +348,55 @@ r.post(
     sseHub.publishMany((t.participants||[]).map(String), { type: 'chat:read', payload: { threadId: id, by: me } });
     // Push updated thread unread to reader
     sseHub.publish(me, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText || '', lastMessageAt: t.lastMessageAt || null, participants: (t.participants||[]).map(String), unread: 0 } });
+    return res.json({ ok: true });
+  } catch { return res.status(500).json({ error: 'internal' }); }
+});
+
+// ── Chat image upload ──
+const chatUpload = createMulterInstance('public/uploads/chat');
+r.post(
+  '/chat-upload',
+  ensureAuth as any,
+  chatUpload.single('image'),
+  (req: any, res) => {
+    try {
+      const file = req.file;
+      if (!file) return res.status(400).json({ error: 'no_file' });
+      const url = file.location || `uploads/chat/${file.filename}`;
+      return res.json({
+        url: url.startsWith('http') ? url : `/api/backend/${url}`,
+        type: file.mimetype,
+        filename: file.originalname,
+      });
+    } catch { return res.status(500).json({ error: 'upload_failed' }); }
+  }
+);
+
+// ── Online status (in-memory check, no DB) ──
+r.get('/online-status', ensureAuth as any, (req: any, res) => {
+  try {
+    const raw = String(req.query?.userIds || '');
+    const ids = raw.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 100);
+    const online = getOnlineUserIds(ids);
+    return res.json({ online });
+  } catch { return res.status(500).json({ error: 'internal' }); }
+});
+
+// ── Typing indicator (fire-and-forget, no DB write) ──
+r.post(
+  '/conversations/:id/typing',
+  ensureAuth as any,
+  async (req: any, res) => {
+  try {
+    const me = String(req.user._id);
+    const { id } = req.params;
+    const t = await DMThread.findById(id).select('participants').lean();
+    if (!t || !isParticipant(t, me)) return res.status(403).json({ error: 'forbidden' });
+    const others = (t.participants || []).map(String).filter((p) => p !== me);
+    const payload = { threadId: String(t._id), userId: me };
+    for (const uid of others) {
+      ssePush(uid, 'chat:typing', payload);
+    }
     return res.json({ ok: true });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });

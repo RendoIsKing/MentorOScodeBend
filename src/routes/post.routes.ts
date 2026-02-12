@@ -9,6 +9,7 @@ import { MediaType } from "../types/enums/mediaTypeEnum";
 import { PostStatusEnum } from "../types/enums/postStatuseEnum";
 import { Privacy } from "../types/enums/privacyEnums";
 import { PostType } from "../types/enums/postTypeEnum";
+import * as Sentry from '@sentry/node';
 
 const PostRoutes: Router = Router();
 PostRoutes.get("/test", PostsController.getFirstPost)
@@ -78,7 +79,7 @@ PostRoutes.post(
 );
 PostRoutes.post("/:id", Auth, validateZod({ params: objectIdParam("id"), body: updatePostSchema }), PostsController.updatePost);
 PostRoutes.delete("/:id", Auth, validateZod({ params: objectIdParam("id"), body: z.object({}).strict() }), PostsController.deletePost);
-PostRoutes.get("/", Auth, PostsController.getAllPosts);
+PostRoutes.get("/", Auth, (req: any, _res, next) => { try { Sentry.addBreadcrumb({ category: 'feed', message: 'feed-load', level: 'info', data: { userId: req.user?._id?.toString() } }); } catch {} next(); }, PostsController.getAllPosts);
 PostRoutes.get("/:id", Auth, PostsController.getPostById);
 PostRoutes.get("/tagged/:id", Auth, PostsController.getTaggedUsers);
 

@@ -77,6 +77,46 @@ async function post(path, body, cookie) {
   const fakeId = '000000000000000000000000';
   const res4 = await fetch(`http://localhost:3006/api/backend/v1/chat/threads/${fakeId}/messages`, { headers: { Cookie: cookie } });
   console.log('conv non-member or not-found status:', res4.status);
-})().catch(()=>{});
+
+  // ── Negative tests: Zod validation ──────────────────────
+
+  // 6) Actions with wrong type field → expect 400/422
+  const r6 = await post('/api/backend/v1/interaction/actions/apply', { type: 'INVALID_TYPE', payload: {} }, cookie);
+  console.log('actions invalid type:', r6.status, '(expect 400 or 422)');
+
+  // 7) Actions with missing required field → expect 400/422
+  const r7 = await post('/api/backend/v1/interaction/actions/apply', { payload: { value: 1 } }, cookie);
+  console.log('actions missing type:', r7.status, '(expect 400 or 422)');
+
+  // 8) Actions with excessively long text → expect 400/422
+  const longText = 'x'.repeat(50000);
+  const r8 = await post('/api/backend/v1/interaction/chat/engh', { message: longText }, cookie);
+  console.log('chat long message:', r8.status, '(expect 400 or 422)');
+
+  // 9) Create conversation with invalid partnerId → expect 400/422
+  const r9 = await post('/api/backend/v1/chat/conversations', { partnerId: 'not-a-valid-id' }, cookie);
+  console.log('conv invalid partnerId:', r9.status, '(expect 400 or 422)');
+
+  // 10) Create conversation with missing partnerId → expect 400
+  const r10 = await post('/api/backend/v1/chat/conversations', {}, cookie);
+  console.log('conv missing partnerId:', r10.status, '(expect 400)');
+
+  // ── Negative tests: Auth ────────────────────────────────
+
+  // 11) Protected endpoint without cookie → expect 401
+  const r11 = await post('/api/backend/v1/interaction/actions/apply', { type: 'WEIGHT_LOG', payload: { value: 80 } }, '');
+  console.log('actions no auth:', r11.status, '(expect 401)');
+
+  // 12) Chat without cookie → expect 401
+  const r12 = await post('/api/backend/v1/interaction/chat/engh', { message: 'hi' }, '');
+  console.log('chat no auth:', r12.status, '(expect 401)');
+
+  // 13) Conversations without cookie → expect 401
+  const r13 = await post('/api/backend/v1/chat/conversations', { partnerId: fakeId }, '');
+  console.log('conv no auth:', r13.status, '(expect 401)');
+
+  // ── Summary ─────────────────────────────────────────────
+  console.log('\n--- Smoke test complete ---');
+})().catch((e)=>{ console.error('Smoke test crashed:', e); process.exitCode = 1; });
 
 

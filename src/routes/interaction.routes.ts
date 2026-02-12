@@ -2,6 +2,7 @@ import { Router } from "express";
 // zod not used directly in this file (schemas are imported from Validation)
 import { ActionSchema, type ActionBody, DaysPerWeekSchema, NutritionCaloriesSchema, SwapExerciseSchema, WeightDeleteSchema, WeightLogSchema } from '../app/Validation/schemas';
 import { Auth as ensureAuth, validateZod } from "../app/Middlewares";
+import * as Sentry from '@sentry/node';
 import { perUserIpLimiter } from "../app/Middlewares/rateLimiters";
 import { InteractionController } from "../app/Controllers/Interaction";
 import { chatWithCoachEngh, chatWithCoachMajen } from "../app/Controllers/Interaction/chat.controller";
@@ -127,6 +128,7 @@ function validateActionBody(body: any, userId: string): { ok: true; data: Action
   return { ok: true, data: { ...parsed.data, userId } } as const;
 }
 InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
+  try { Sentry.addBreadcrumb({ category: 'actions', message: 'action-apply', level: 'info', data: { type: req.body?.type } }); } catch {}
   try {
     let userId: any = (req as any).user?._id || req.body.userId || (req as any).session?.user?.id;
     if (!userId) {
