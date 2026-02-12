@@ -1,10 +1,5 @@
-import { model, Model } from 'mongoose';
-import { ChatThreadSchema, IChatThread } from '../../database/schemas/ChatThreadSchema';
-import { ChatMessageSchema, IChatMessage } from '../../database/schemas/ChatMessageSchema';
-
-const ChatThread: Model<IChatThread> = model<IChatThread>('ChatThread', ChatThreadSchema);
-const ChatMessage: Model<IChatMessage> = model<IChatMessage>('ChatMessage', ChatMessageSchema);
-
-export { ChatThread, ChatMessage };
+// Re-export from the unified schema so only ONE ChatThread / ChatMessage
+// Mongoose model is ever registered, regardless of import order.
+export { ChatThread, ChatMessage } from '../../models/chat';
 
 
