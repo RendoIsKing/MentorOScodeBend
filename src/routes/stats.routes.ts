@@ -16,6 +16,7 @@ StatsRoutes.post("/user-earning", Auth, validateZod({ body: dateRangeSchema }), 
 StatsRoutes.post("/user-chart", Auth, validateZod({ body: dateRangeSchema }), StatsController.getEarningChart);
 
 StatsRoutes.get("/subscribers/:id", StatsController.getSubscribers);
+StatsRoutes.get("/coach-clients", Auth, StatsController.getCoachClients);
 StatsRoutes.post("/creator", Auth, validateZod({ body: dateRangeSchema }), StatsController.creatorStats);
 
 export default StatsRoutes;

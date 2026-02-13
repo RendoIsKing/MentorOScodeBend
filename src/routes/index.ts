@@ -19,6 +19,7 @@ import moreActionRoutes from "./moreAction.routes";
 import userDataRoutes from "./userData.routes";
 import StudentRoutes from "./student.routes";
 import MentorRoutes from "./mentor.routes";
+import CoachNotesRoutes from "./coachNotes.routes";
 
 export {
   AuthRoutes,
@@ -42,4 +43,5 @@ export {
   userDataRoutes,
   StudentRoutes,
   MentorRoutes,
+  CoachNotesRoutes,
 };
