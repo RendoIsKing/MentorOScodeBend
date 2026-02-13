@@ -15,7 +15,7 @@ const createPaymentIntent = async (params: {
 }) => {
   try {
     if (!process.env.STRIPE_CURRENCY) {
-      throw new Error("STRIPE_CURRENCY is mising");
+      throw new Error("STRIPE_CURRENCY is missing");
     }
     if (params.amount === 0) {
       let intentInstance = await stripeInstance.setupIntents.create(

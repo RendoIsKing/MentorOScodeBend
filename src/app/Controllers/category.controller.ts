@@ -63,7 +63,8 @@ export class CategoryController {
 
             if (_req.query.title) {
                 dataToFind.title = _req.query.title;
-                dataToFind = {...dataToFind, title: {$regex: new RegExp(".*" + _req.query.title + ".*", "i")}}
+                const escapedTitle = String(_req.query.title).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                dataToFind = {...dataToFind, title: {$regex: new RegExp(".*" + escapedTitle + ".*", "i")}}
                 skip = 0;
             }
 

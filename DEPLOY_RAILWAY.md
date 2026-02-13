@@ -10,7 +10,7 @@ This service is Node/Express + TypeScript. It builds to `dist/` and binds to `pr
 - CORS_ALLOW_ORIGINS (comma-separated, e.g. `http://localhost:3002,https://your-frontend.vercel.app`)
 - STRIPE_SECRET_KEY
 - STRIPE_WEBHOOK_SECRET
-- STRIPE_CURRENCY (e.g. `usd`)
+- STRIPE_CURRENCY (e.g. `nok`)
 - SENTRY_DSN (optional)
 - DEV_LOGIN_ENABLED (`false` in prod)
 

@@ -91,24 +91,18 @@ export const createSubscription = async (
     console.log("subscription ",subscription)
 
     const latestInvoice = subscription.latest_invoice;
-    console.log("latestInvoice ",latestInvoice)
 
     if (!latestInvoice || typeof latestInvoice === "string") {
-      throw new Error("Failed to retrieve latest invoice.");
+      throw new Error("Kunne ikke hente faktura for abonnementet.");
     }
 
-    // const paymentIntent = latestInvoice.payment_intent;
-    // console.log("paymentIntent ",paymentIntent)
+    // Extract payment intent from the expanded invoice
+    const paymentIntent = latestInvoice.payment_intent;
+    let clientSecret: string | null = null;
 
-    // if (!paymentIntent) {
-    //   console.error(
-    //     "Payment intent is null for subscription:",
-    //     subscription.id
-    //   );
-    //   return res.status(400).send({
-    //     error: { message: "Payment intent is null. Please try again." },
-    //   });
-    // }
+    if (paymentIntent && typeof paymentIntent !== "string") {
+      clientSecret = paymentIntent.client_secret ?? null;
+    }
 
     const newSubscription = new Subscription({
       userId: user?.id,
@@ -123,7 +117,7 @@ export const createSubscription = async (
 
     const newDebitTransaction = new Transaction({
       userId: user?.id,
-      // stripePaymentIntentId: paymentIntent.id,
+      stripePaymentIntentId: typeof paymentIntent === "object" && paymentIntent?.id ? paymentIntent.id : undefined,
       type: TransactionType.DEBIT,
       productType: ProductType.SUBSCRIPTION,
       stripeProductId: plan.stripeProductId,
@@ -134,27 +128,10 @@ export const createSubscription = async (
 
     await newDebitTransaction.save();
 
-    // Comment for now
-    // const newCreditTransaction = new Transaction({
-    //   userId: plan?.userId,
-    //   stripePaymentIntentId: paymentIntent.id,
-    //   type: TransactionType.CREDIT,
-    //   productType: ProductType.SUBSCRIPTION,
-    //   stripeProductId: plan.stripeProductId,
-    //   productId: plan.id,
-    //   amount: plan.price,
-    //   status: TransactionStatus.PENDING,
-    // });
-
-    // await newCreditTransaction.save();
-
     return res.status(200).send({
       status: true,
       subscriptionId: subscription.id,
-      // clientSecret: paymentIntent.client_secret,
-      //@ts-ignore
-      //comment for now
-      // clientSecret: subscription.latest_invoice.payment_intent.client_secret,
+      clientSecret,
     });
   } catch (error) {
     console.error("Error creating subscription:", error);

@@ -66,7 +66,7 @@ user.get(
 );
 
 user.get("/", Auth, UsersControllers.index);
-user.get("/:id", UsersControllers.show);
+user.get("/:id", Auth, UsersControllers.show);
 user.post("/:id", OnlyAdmins, validateZod({ params: objectIdParam("id"), body: userInputSchema }), upload.single("image"), UsersControllers.update);
 user.delete("/:id", OnlyAdmins, validateZod({ params: objectIdParam("id"), body: z.object({}).strict() }), UsersControllers.destroy);
 user.delete("/file-remove/:id", Auth, validateZod({ params: objectIdParam("id"), body: z.object({}).strict() }), UsersControllers.deleteFile);

@@ -91,7 +91,7 @@ Content-Type: application/json
 
 {
   "amount": 999,
-  "currency": "usd"
+  "currency": "nok"
 }
 
 ### Get payment status

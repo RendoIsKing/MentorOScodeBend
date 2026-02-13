@@ -50,7 +50,7 @@ StudentRoutes.get('/me/changes', ensureAuth as any, perUserIpLimiter({ windowMs:
           const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
-        } catch {}
+        } catch { /* JWT decode failed – treated as unauthenticated */ }
       }
     }
     const limRaw = (req.query.limit as string) || '10';
@@ -128,7 +128,7 @@ StudentRoutes.get('/:userId/snapshot', ensureAuth as any, perUserIpLimiter({ win
             const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
             const decoded: any = jwt.verify(token, secret);
             resolvedUserId = decoded?.id || decoded?._id;
-          } catch {}
+          } catch { /* JWT decode failed – treated as unauthenticated */ }
         }
       }
       if (resolvedUserId && Types.ObjectId.isValid(resolvedUserId)) {
@@ -142,7 +142,7 @@ StudentRoutes.get('/:userId/snapshot', ensureAuth as any, perUserIpLimiter({ win
           .lean();
         dbWeights = entries as any;
       }
-    } catch {}
+    } catch (err) { console.error('[snapshot] Failed to load weight entries:', err); }
 
     const merged = days.map(d => dbWeights.find(w => w.date === d)).filter(Boolean) as {date:string; kg:number}[];
 
@@ -157,7 +157,7 @@ StudentRoutes.get('/:userId/snapshot', ensureAuth as any, perUserIpLimiter({ win
           const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserIdForPlans = decoded?.id || decoded?._id;
-        } catch {}
+        } catch { /* JWT decode failed – treated as unauthenticated */ }
       }
     }
     let currentTraining = resolvedUserIdForPlans && Types.ObjectId.isValid(resolvedUserIdForPlans)
@@ -223,7 +223,7 @@ StudentRoutes.get('/:userId/snapshot', ensureAuth as any, perUserIpLimiter({ win
           payload.currentGoal = currentGoal;
         }
       }
-    } catch {}
+    } catch (err) { console.error('[snapshot] Failed to load goals:', err); }
 
     res.status(200).json(payload);
   } catch (err) {
@@ -245,7 +245,7 @@ StudentRoutes.get('/me/snapshot', ensureAuth as any, perUserIpLimiter({ windowMs
           const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
-        } catch {}
+        } catch { /* JWT decode failed – treated as unauthenticated */ }
       }
     }
     if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId)) {
@@ -267,7 +267,7 @@ StudentRoutes.get('/me/snapshot', ensureAuth as any, perUserIpLimiter({ windowMs
         .select('date kg -_id')
         .lean();
       dbWeights = entries as any;
-    } catch {}
+    } catch (err) { console.error('[me/snapshot] Failed to load weights:', err); }
     const merged = days.map((d) => dbWeights.find((w) => w.date === d)).filter(Boolean) as any;
 
     // plans/goals
@@ -328,7 +328,7 @@ StudentRoutes.get('/me/snapshot', ensureAuth as any, perUserIpLimiter({ windowMs
         payload.goals = goals.length ? goals : undefined;
         if (goals.length) payload.glance.activeGoals = goals;
       }
-    } catch {}
+    } catch (err) { console.error('[me/snapshot] Failed to load goals:', err); }
 
     return res.json(payload);
   } catch (err) {
@@ -373,7 +373,7 @@ StudentRoutes.get('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({
           const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
-        } catch {}
+        } catch { /* JWT decode failed – treated as unauthenticated */ }
       }
     }
     if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId)) {
@@ -412,7 +412,7 @@ StudentRoutes.post(
           const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
-        } catch {}
+        } catch { /* JWT decode failed – treated as unauthenticated */ }
       }
     }
     const parsed = ExerciseProgressSchema.safeParse(req.body || {});
@@ -449,7 +449,7 @@ StudentRoutes.put(
           const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
-        } catch {}
+        } catch { /* JWT decode failed – treated as unauthenticated */ }
       }
     }
     const parsed = ExerciseProgressSchema.safeParse(req.body || {});
@@ -486,7 +486,7 @@ StudentRoutes.delete(
           const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
-        } catch {}
+        } catch { /* JWT decode failed – treated as unauthenticated */ }
       }
     }
     const exercise = req.query.exercise as string | undefined;
@@ -527,7 +527,7 @@ StudentRoutes.post(
     try {
       await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight ${kg}kg on ${date}` , actor: (req as any)?.user?._id, after: { date, kg } });
       await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId), date, kg });
-    } catch {}
+    } catch (err) { console.error('[weights] Failed to log change event:', err); }
     return res.status(200).json({ ok: true });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to record weight' });
@@ -559,7 +559,7 @@ StudentRoutes.put(
     try {
       await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight updated to ${kg}kg on ${date}`, actor: (req as any)?.user?._id, after: { date, kg } });
       await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(userId), date, kg });
-    } catch {}
+    } catch (err) { console.error('[weights] Failed to log change event:', err); }
     return res.status(200).json({ ok: true });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to update weight' });
@@ -581,7 +581,7 @@ StudentRoutes.delete(
     try {
       await ChangeEvent.create({ user: new Types.ObjectId(userId), type: "WEIGHT_LOG", summary: `Weight entry deleted for ${date}` });
       await publish({ type: "WEIGHT_DELETED", user: new Types.ObjectId(userId), date });
-    } catch {}
+    } catch (err) { console.error('[weights] Failed to log change event:', err); }
     return res.status(200).json({ ok: true });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to delete weight' });
@@ -667,7 +667,7 @@ StudentRoutes.post('/me/workouts', validateZod({ body: WorkoutLogSchema }), asyn
           const secret = process.env.APP_SECRET || process.env.JWT_SECRET || 'dev_session_secret_change_me';
           const decoded: any = jwt.verify(token, secret);
           resolvedUserId = decoded?.id || decoded?._id;
-        } catch {}
+        } catch { /* JWT decode failed – treated as unauthenticated */ }
       }
     }
     if (!resolvedUserId || !Types.ObjectId.isValid(resolvedUserId)) {

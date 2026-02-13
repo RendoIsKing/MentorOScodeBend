@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
 import { createSessionAction } from "./Actions/createSessionAction";
+import { createCoachMajenCheckout } from "./Actions/createCoachMajenCheckout";
+import { verifyCoachMajenPayment } from "./Actions/verifyCoachMajenPayment";
 
 class PaymentsController {
   static createSession(req: Request, res: Response) {
@@ -15,6 +17,12 @@ class PaymentsController {
     } catch (e) {
       return res.status(500).json({ error: { message: 'status failed' } });
     }
+  }
+  static coachMajenCheckout(req: Request, res: Response) {
+    return createCoachMajenCheckout(req, res);
+  }
+  static coachMajenVerify(req: Request, res: Response) {
+    return verifyCoachMajenPayment(req, res);
   }
 }
 

@@ -1,1 +1,1 @@
-export const stripe_currency =  "usd"
+export const stripe_currency = "nok";
