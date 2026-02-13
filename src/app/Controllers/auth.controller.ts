@@ -245,13 +245,46 @@ class AuthController {
     try {
       const { email, password } = req.body;
 
-      const { data: session, error } =
+      // Try direct sign-in first
+      let { data: session, error } =
         await supabaseAdmin.auth.signInWithPassword({ email, password });
 
-      if (error || !session.session) {
+      // If direct sign-in fails, the user may have registered via phone OTP
+      // and the Supabase Auth email is a placeholder. Look up by email in
+      // public.users and migrate their Auth credentials.
+      if (error && email) {
+        console.log("[login] direct sign-in failed, checking public.users for:", email);
+        const { data: publicUser } = await supabaseAdmin
+          .from("users")
+          .select("auth_id, email, is_deleted, is_active")
+          .eq("email", email)
+          .eq("is_deleted", false)
+          .limit(1)
+          .maybeSingle();
+
+        if (publicUser?.auth_id) {
+          console.log("[login] found public.users entry with auth_id:", publicUser.auth_id);
+          // Update the Supabase Auth user's email and password to the real ones
+          const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
+            publicUser.auth_id,
+            { email, password, email_confirm: true },
+          );
+          if (updateErr) {
+            console.error("[login] failed to update auth user credentials:", updateErr.message);
+          } else {
+            // Retry sign-in with the updated credentials
+            const retry = await supabaseAdmin.auth.signInWithPassword({ email, password });
+            session = retry.data;
+            error = retry.error;
+            console.log("[login] retry sign-in result:", error ? error.message : "success");
+          }
+        }
+      }
+
+      if (error || !session?.session) {
         return res
           .status(401)
-          .json({ error: { message: error?.message || "Invalid credentials" } });
+          .json({ error: { message: "Invalid login credentials" } });
       }
 
       // Look up user
@@ -274,6 +307,17 @@ class AuthController {
         return res
           .status(401)
           .json({ error: "User not active. Please contact admin." });
+      }
+
+      // Auto-promote admin if email matches
+      const adminEmails = getAdminEmailSet();
+      if (user.email && adminEmails.has(user.email.toLowerCase()) && user.role !== "admin") {
+        console.log("[login] promoting user to admin:", user.email);
+        await supabaseAdmin
+          .from("users")
+          .update({ role: "admin" })
+          .eq("id", user.id);
+        user.role = "admin";
       }
 
       setAuthCookies(
