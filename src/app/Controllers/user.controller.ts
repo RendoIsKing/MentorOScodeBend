@@ -35,18 +35,15 @@ import { SubscriptionPlanType } from "../../types/enums/subscriptionPlanEnum";
 import { userActionType } from "../../types/enums/userActionTypeEnum";
 const JWT_SECRET = process.env.JWT_SECRET || "secret_secret";
 
-// Optional S3 support (enabled when MEDIA_STORAGE=s3)
+// Optional S3 support (enabled when MEDIA_STORAGE=s3) – kept for getFile/deleteFile legacy paths
 let S3ClientCtor: any;
 let GetObjectCommandCtor: any;
 let DeleteObjectCommandCtor: any;
-let PutObjectCommandCtor: any;
 let getSignedUrlFn: any;
 try {
-  // Dynamic import so build works even without S3 deps locally
   S3ClientCtor = require("@aws-sdk/client-s3").S3Client;
   GetObjectCommandCtor = require("@aws-sdk/client-s3").GetObjectCommand;
   DeleteObjectCommandCtor = require("@aws-sdk/client-s3").DeleteObjectCommand;
-  PutObjectCommandCtor = require("@aws-sdk/client-s3").PutObjectCommand;
   getSignedUrlFn = require("@aws-sdk/s3-request-presigner").getSignedUrl;
 } catch {}
 
