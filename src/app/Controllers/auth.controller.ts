@@ -509,18 +509,53 @@ class AuthController {
         });
       }
 
-      if (!user || !user.email) {
+      if (!user) {
+        return res.status(400).json({ message: "Invalid login credentials" });
+      }
+
+      // Determine the email to use for Supabase Auth sign-in
+      let authEmail = user.email;
+
+      // If the user has no email in public.users, try to get the Auth email
+      if (!authEmail && user.auth_id) {
+        const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(user.auth_id);
+        authEmail = authUser?.user?.email || null;
+      }
+
+      if (!authEmail) {
         return res.status(400).json({ message: "Invalid login credentials" });
       }
 
       // Sign in with Supabase Auth
-      const { data: session, error: signInError } =
+      let { data: session, error: signInError } =
         await supabaseAdmin.auth.signInWithPassword({
-          email: user.email,
+          email: authEmail,
           password,
         });
 
-      if (signInError || !session.session) {
+      // If sign-in fails and user was created via phone OTP, the Supabase Auth
+      // credentials may not match. Sync them and retry.
+      if (signInError && user.auth_id) {
+        console.log("[userLogin] direct sign-in failed for", user.user_name, "- syncing auth credentials");
+        const syncEmail = user.email || authEmail;
+        const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
+          user.auth_id,
+          { email: syncEmail!, password, email_confirm: true },
+        );
+        if (!updateErr) {
+          const retry = await supabaseAdmin.auth.signInWithPassword({
+            email: syncEmail!,
+            password,
+          });
+          session = retry.data;
+          signInError = retry.error;
+          console.log("[userLogin] retry sign-in:", signInError ? signInError.message : "success");
+        } else {
+          console.error("[userLogin] failed to sync auth credentials:", updateErr.message);
+        }
+      }
+
+      if (signInError || !session?.session) {
         // Increment failed attempts
         const MAX_ATTEMPTS = 5;
         const LOCK_DURATION_MIN = 15;
