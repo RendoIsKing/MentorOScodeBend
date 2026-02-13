@@ -112,7 +112,7 @@ export const getSubscriptionPlan = async (
   try {
     const { id: queryId } = _req.query;
     const user = _req.user as UserInterface;
-    const userId = queryId ? (queryId as string) : user.id;
+    const userId: string = queryId ? (queryId as string) : String(user.id);
     const isFetchingOwnPlans = !queryId || queryId === user.id;
 
     let query = db
