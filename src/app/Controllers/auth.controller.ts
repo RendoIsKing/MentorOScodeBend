@@ -632,29 +632,27 @@ class AuthController {
         isNewUser = true;
       }
 
-      // Generate a session for the user (admin API)
-      // We need to sign in — use a workaround by generating tokens
-      await supabaseAdmin.auth.admin.generateLink({
-        type: "magiclink",
-        email: googleEmail,
-      });
-
-      // Use signInWithPassword won't work for Google users, so we use admin API
-      // to create a session directly
+      // Generate real Supabase Auth tokens for Google users
       let accessToken = "";
       let refreshToken = "";
 
-      // Get the auth user and create a session
-      const { data: authUserList } = await supabaseAdmin.auth.admin.listUsers();
-      const authUser = authUserList?.users?.find(
-        (u: any) => u.email === googleEmail,
-      );
-
-      if (authUser) {
-        // For Google users, we generate a magic link token but set cookies directly
-        // The frontend will use Supabase client for proper session management
-        accessToken = `google_session_${authUser.id}`;
-        refreshToken = `google_refresh_${authUser.id}`;
+      if (user?.email) {
+        // Set a temp password, sign in to get real tokens
+        const authId = user.auth_id;
+        if (authId) {
+          const tempPw = `google_verified_${authId}_${Date.now()}`;
+          await supabaseAdmin.auth.admin.updateUserById(authId, {
+            password: tempPw,
+          });
+          const { data: session } = await supabaseAdmin.auth.signInWithPassword({
+            email: user.email,
+            password: tempPw,
+          });
+          if (session?.session) {
+            accessToken = session.session.access_token;
+            refreshToken = session.session.refresh_token;
+          }
+        }
       }
 
       if (accessToken) {
@@ -724,19 +722,24 @@ class AuthController {
         .select("*")
         .single();
 
-      // Generate tokens via Supabase (sign in with the user's email)
+      // Generate real Supabase Auth tokens
       let accessToken = "";
       let refreshToken = "";
 
-      if (updatedUser?.auth_id) {
-        // Try to generate a session
-        const { data: _sessionData } = await supabaseAdmin.auth.admin.generateLink({
-          type: "magiclink",
-          email: updatedUser.email,
+      if (updatedUser?.auth_id && updatedUser?.email) {
+        // Set a temp password, sign in to get real tokens, then clear it
+        const tempPw = `otp_verified_${updatedUser.auth_id}_${Date.now()}`;
+        await supabaseAdmin.auth.admin.updateUserById(updatedUser.auth_id, {
+          password: tempPw,
         });
-        // For OTP flow, set basic tokens
-        accessToken = `otp_session_${updatedUser.auth_id}`;
-        refreshToken = `otp_refresh_${updatedUser.auth_id}`;
+        const { data: session } = await supabaseAdmin.auth.signInWithPassword({
+          email: updatedUser.email,
+          password: tempPw,
+        });
+        if (session?.session) {
+          accessToken = session.session.access_token;
+          refreshToken = session.session.refresh_token;
+        }
       }
 
       if (accessToken) {
