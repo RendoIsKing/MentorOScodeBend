@@ -20,7 +20,7 @@ async function autoSeedCoachMajenPlan(
   userId: string
 ): Promise<any | null> {
   // Only seed for Coach.Majen (case-insensitive check)
-  const { data: user, error: userErr } = await db
+  const { data: user } = await db
     .from(Tables.USERS)
     .select("id, user_name")
     .eq("id", userId)
