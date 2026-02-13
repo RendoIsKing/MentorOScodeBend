@@ -55,13 +55,25 @@ export const getCoachClientDetail = async (
 
     const plan = coachPlans.find((p) => String(p._id) === String((subscription as any).planId));
 
-    // 2. Fetch client user info
+    // 2. Fetch client user info (with photo)
     const client = await User.findById(clientId).select(
       "fullName userName email photoId status"
     ).lean();
 
     if (!client) {
       return res.status(404).json({ error: "Klient ikke funnet." });
+    }
+
+    // 2b. Resolve profile photo path
+    let photoUrl: string | null = null;
+    if ((client as any).photoId) {
+      try {
+        const File = (await import("../../../Models/File")).default;
+        const file = await File.findById((client as any).photoId).select("path").lean();
+        if (file) photoUrl = (file as any).path;
+      } catch (err) {
+        console.error("[coach-client-detail] Photo lookup failed:", err);
+      }
     }
 
     // 3. Fetch current training plan
@@ -136,6 +148,7 @@ export const getCoachClientDetail = async (
         userName: (client as any).userName || "",
         email: (client as any).email || "",
         status: (client as any).status || "VISITOR",
+        photoUrl,
       },
       subscription: {
         plan: plan

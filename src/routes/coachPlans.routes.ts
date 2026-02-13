@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Auth as ensureAuth, validateZod } from "../app/Middlewares";
 import { Types } from "mongoose";
 import { UserInterface } from "../types/UserInterface";
-import { TrainingPlan, NutritionPlan } from "../app/Models/PlanModels";
+import { TrainingPlan, NutritionPlan, Goal } from "../app/Models/PlanModels";
 import { SubscriptionPlan } from "../app/Models/SubscriptionPlan";
 import { Subscription } from "../app/Models/Subscription";
 import { WeightEntry } from "../app/Models/WeightEntry";
@@ -416,6 +416,81 @@ CoachPlansRoutes.delete(
     } catch (err) {
       console.error("[coach-plans] Failed to delete weight:", err);
       return res.status(500).json({ message: "Kunne ikke slette vektregistrering." });
+    }
+  }
+);
+
+/* ─── Goal Management Endpoints ────────────────────── */
+
+const goalSchema = z.object({
+  targetWeightKg: z.number().min(20).max(500).optional(),
+  strengthTargets: z.string().max(500).optional(),
+  horizonWeeks: z.number().int().min(1).max(260).optional(),
+});
+
+// PUT /coach-plans/:clientId/goal — Create or update goal
+CoachPlansRoutes.put(
+  "/:clientId/goal",
+  ensureAuth as any,
+  validateZod({ params: objectIdParam("clientId"), body: goalSchema }),
+  async (req: Request, res: Response) => {
+    try {
+      const coachId = (req.user as UserInterface)?.id;
+      const { clientId } = req.params;
+      if (!coachId) return res.status(401).json({ message: "Unauthorized" });
+
+      const isCoach = await verifyCoachClient(coachId, clientId);
+      if (!isCoach) return res.status(403).json({ message: "Ikke din klient." });
+
+      const { targetWeightKg, strengthTargets, horizonWeeks } = req.body;
+
+      const latest = await Goal.findOne({ userId: new Types.ObjectId(clientId) })
+        .sort({ version: -1 })
+        .select("version")
+        .lean();
+      const nextVersion = ((latest as any)?.version || 0) + 1;
+
+      await Goal.updateMany(
+        { userId: new Types.ObjectId(clientId), isCurrent: true },
+        { $set: { isCurrent: false } }
+      );
+
+      const goal = await Goal.create({
+        userId: new Types.ObjectId(clientId),
+        version: nextVersion,
+        isCurrent: true,
+        targetWeightKg,
+        strengthTargets,
+        horizonWeeks,
+      });
+
+      try {
+        const parts: string[] = [];
+        if (targetWeightKg) parts.push(`${targetWeightKg} kg`);
+        if (strengthTargets) parts.push(strengthTargets);
+        if (horizonWeeks) parts.push(`${horizonWeeks} uker`);
+        await ChangeEvent.create({
+          user: new Types.ObjectId(clientId),
+          type: "GOAL_EDIT",
+          summary: `Mål oppdatert av coach: ${parts.join(", ")}`,
+          actor: new Types.ObjectId(coachId),
+          after: { targetWeightKg, strengthTargets, horizonWeeks },
+        });
+      } catch (err) {
+        console.error("[coach-plans] Failed to log goal change:", err);
+      }
+
+      return res.json({
+        goal: {
+          targetWeightKg: (goal as any).targetWeightKg,
+          strengthTargets: (goal as any).strengthTargets,
+          horizonWeeks: (goal as any).horizonWeeks,
+          version: nextVersion,
+        },
+      });
+    } catch (err) {
+      console.error("[coach-plans] Failed to save goal:", err);
+      return res.status(500).json({ message: "Kunne ikke lagre mål." });
     }
   }
 );
