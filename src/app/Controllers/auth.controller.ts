@@ -1037,16 +1037,24 @@ class AuthController {
         totalLikes,
         subscriberCount,
         platformSubscription,
-        // Top-level convenience fields
+        // Top-level convenience fields (must mirror what frontend middleware checks)
         _id: userRow.id,
         fullName: userRow.full_name,
         userName: userRow.user_name,
         email: userRow.email,
         photo,
         coverPhoto,
+        photoId: userRow.photo_id,
+        coverPhotoId: userRow.cover_photo_id,
         googleId: userRow.google_id,
         isMentor: Boolean(userRow.is_mentor),
         role: userRow.role,
+        hasPersonalInfo: Boolean(userRow.has_personal_info),
+        hasPhotoInfo: Boolean(userRow.has_photo_info),
+        hasConfirmedAge: Boolean(userRow.has_confirmed_age),
+        hasSelectedInterest: Boolean(userRow.has_selected_interest),
+        hasDocumentUploaded: Boolean(userRow.has_document_uploaded),
+        hasDocumentVerified: Boolean(userRow.has_document_verified),
       };
 
       return res.json({ data: payload });
