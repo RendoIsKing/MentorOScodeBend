@@ -1,8 +1,7 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
 import stripeInstance from "../../../../utils/stripe";
-import { User } from "../../../Models/User";
-import { Transaction } from "../../../Models/Transaction";
+import { supabaseAdmin } from "../../../../lib/supabase";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
 import { ProductType } from "../../../../types/enums/productEnum";
@@ -28,37 +27,41 @@ export const createCoachMajenCheckout = async (
       return res.status(401).json({ error: { message: "Unauthorized" } });
     }
 
-    const user = await User.findOne({
-      _id: reqUser.id,
-      isDeleted: false,
-      deletedAt: null,
-    });
+    const { data: user, error: userError } = await supabaseAdmin
+      .from("users")
+      .select("*")
+      .eq("id", reqUser.id)
+      .eq("is_deleted", false)
+      .single();
 
-    if (!user) {
+    if (userError || !user) {
       return res.status(404).json({ error: { message: "User not found" } });
     }
 
     // Ensure the user has a Stripe customer ID
-    let stripeCustomerId = user.stripeClientId;
+    let stripeCustomerId = user.stripe_client_id;
     if (!stripeCustomerId) {
       const customer = await stripeInstance.customers.create({
         email: user.email,
-        name: user.fullName,
-        metadata: { userId: String(user._id) },
+        name: user.full_name,
+        metadata: { userId: String(user.id) },
       });
       stripeCustomerId = customer.id;
-      await User.findByIdAndUpdate(user._id, {
-        stripeClientId: customer.id,
-        isStripeCustomer: true,
-      });
+      await supabaseAdmin
+        .from("users")
+        .update({ stripe_client_id: customer.id, is_stripe_customer: true })
+        .eq("id", user.id);
     }
 
     // Check if user has already paid for Coach Majen
-    const existingPayment = await Transaction.findOne({
-      userId: user._id,
-      productType: ProductType.COACHING,
-      status: TransactionStatus.SUCCESS,
-    });
+    const { data: existingPayment } = await supabaseAdmin
+      .from("transactions")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("product_type", ProductType.COACHING)
+      .eq("status", TransactionStatus.SUCCESS)
+      .limit(1)
+      .maybeSingle();
 
     if (existingPayment) {
       return res.status(200).json({
@@ -69,7 +72,7 @@ export const createCoachMajenCheckout = async (
 
     // Derive the frontend origin for redirect URLs
     const frontendOrigin =
-      process.env.FRONTEND_ORIGIN || "http://localhost:3002";
+      process.env.FRONTEND_ORIGIN || "https://mentorio.no";
 
     // Create a Stripe Checkout Session
     const session = await stripeInstance.checkout.sessions.create({
@@ -91,7 +94,7 @@ export const createCoachMajenCheckout = async (
         },
       ],
       metadata: {
-        userId: String(user._id),
+        userId: String(user.id),
         productType: ProductType.COACHING,
         type: "coach_majen_onboarding",
       },
@@ -100,12 +103,12 @@ export const createCoachMajenCheckout = async (
     });
 
     // Create a pending transaction
-    await Transaction.create({
-      userId: user._id,
+    await supabaseAdmin.from("transactions").insert({
+      user_id: user.id,
       amount: COACH_MAJEN_AMOUNT_ORE,
       type: TransactionType.DEBIT,
-      productType: ProductType.COACHING,
-      stripePaymentIntentId: session.payment_intent || session.id,
+      product_type: ProductType.COACHING,
+      stripe_payment_intent_id: session.payment_intent || session.id,
       status: TransactionStatus.PENDING,
     });
 

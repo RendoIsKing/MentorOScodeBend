@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
 import stripeInstance from "../../../../utils/stripe";
-import { Transaction } from "../../../Models/Transaction";
+import { supabaseAdmin } from "../../../../lib/supabase";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { ProductType } from "../../../../types/enums/productEnum";
 
@@ -24,11 +24,14 @@ export const verifyCoachMajenPayment = async (
     }
 
     // 1. Quick check: does the user already have a successful coaching transaction?
-    const existingSuccess = await Transaction.findOne({
-      userId: reqUser.id,
-      productType: ProductType.COACHING,
-      status: TransactionStatus.SUCCESS,
-    });
+    const { data: existingSuccess } = await supabaseAdmin
+      .from("transactions")
+      .select("id")
+      .eq("user_id", reqUser.id)
+      .eq("product_type", ProductType.COACHING)
+      .eq("status", TransactionStatus.SUCCESS)
+      .limit(1)
+      .maybeSingle();
 
     if (existingSuccess) {
       return res.status(200).json({ paid: true });
@@ -58,28 +61,24 @@ export const verifyCoachMajenPayment = async (
           ? session.payment_intent
           : session.id;
 
-      // Update by session-linked payment intent or session id
-      const updated = await Transaction.updateMany(
-        {
-          userId: reqUser.id,
-          productType: ProductType.COACHING,
-          status: TransactionStatus.PENDING,
-          $or: [
-            { stripePaymentIntentId: paymentIntentId },
-            { stripePaymentIntentId: session.id },
-          ],
-        },
-        { status: TransactionStatus.SUCCESS }
-      );
+      // Update pending transactions for this user's coaching payment
+      const { data: updated } = await supabaseAdmin
+        .from("transactions")
+        .update({ status: TransactionStatus.SUCCESS })
+        .eq("user_id", reqUser.id)
+        .eq("product_type", ProductType.COACHING)
+        .eq("status", TransactionStatus.PENDING)
+        .or(`stripe_payment_intent_id.eq.${paymentIntentId},stripe_payment_intent_id.eq.${session.id}`)
+        .select("id");
 
       // If no pending transaction was found, create a success record
-      if (updated.modifiedCount === 0) {
-        await Transaction.create({
-          userId: reqUser.id,
+      if (!updated || updated.length === 0) {
+        await supabaseAdmin.from("transactions").insert({
+          user_id: reqUser.id,
           amount: session.amount_total || 50000,
           type: "debit",
-          productType: ProductType.COACHING,
-          stripePaymentIntentId: paymentIntentId,
+          product_type: ProductType.COACHING,
+          stripe_payment_intent_id: paymentIntentId,
           status: TransactionStatus.SUCCESS,
         });
       }
