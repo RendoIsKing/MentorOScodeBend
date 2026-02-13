@@ -48,7 +48,7 @@ export const getAllStoriesActions = async (req: Request, res: Response) => {
     }
 
     // Fetch stories from followed users within 24h
-    const { data: stories, count: total } = await db
+    const { data: stories, count: _total } = await db
       .from(Tables.POSTS)
       .select("*", { count: "exact" })
       .eq("type", PostType.STORY)

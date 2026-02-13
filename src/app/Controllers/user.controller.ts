@@ -3,8 +3,6 @@ import {
   db,
   Tables,
   findById,
-  findOne,
-  findMany,
   insertOne,
   updateById,
   count,

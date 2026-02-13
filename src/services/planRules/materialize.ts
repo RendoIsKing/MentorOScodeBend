@@ -1,4 +1,4 @@
-import { db, insertOne, upsert, Tables } from "../../lib/db";
+import { insertOne, upsert, Tables } from "../../lib/db";
 import { publish } from "../events/publish";
 import {
   nextTrainingVersion,

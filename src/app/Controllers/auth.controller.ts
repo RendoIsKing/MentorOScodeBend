@@ -111,7 +111,6 @@ class AuthController {
         password,
         phoneNumber,
         dialCode,
-        country,
       } = req.body;
 
       // Check if user already exists
@@ -559,11 +558,10 @@ class AuthController {
 
       // Generate a session for the user (admin API)
       // We need to sign in — use a workaround by generating tokens
-      const { data: tokenData, error: tokenError } =
-        await supabaseAdmin.auth.admin.generateLink({
-          type: "magiclink",
-          email: googleEmail,
-        });
+      await supabaseAdmin.auth.admin.generateLink({
+        type: "magiclink",
+        email: googleEmail,
+      });
 
       // Use signInWithPassword won't work for Google users, so we use admin API
       // to create a session directly
@@ -656,7 +654,7 @@ class AuthController {
 
       if (updatedUser?.auth_id) {
         // Try to generate a session
-        const { data: sessionData } = await supabaseAdmin.auth.admin.generateLink({
+        const { data: _sessionData } = await supabaseAdmin.auth.admin.generateLink({
           type: "magiclink",
           email: updatedUser.email,
         });
@@ -772,8 +770,8 @@ class AuthController {
     res: Response,
   ): Promise<Response> => {
     try {
-      const { email, phoneNumber, dialCode, country } = req.body;
-      const completePhone = `${country}--${dialCode}--${phoneNumber}`;
+      const { email, phoneNumber, dialCode } = req.body;
+      const completePhone = `${dialCode}--${phoneNumber}`;
 
       const { data: user } = await supabaseAdmin
         .from("users")

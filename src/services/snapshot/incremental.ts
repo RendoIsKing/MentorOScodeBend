@@ -1,4 +1,4 @@
-import { findOne, findMany, upsert, updateById, db, Tables } from "../../lib/db";
+import { findOne, upsert, updateById, db, Tables } from "../../lib/db";
 
 export async function onWeightLogged(userId: string, date: string, kg: number) {
   let snap = await findOne(Tables.STUDENT_SNAPSHOTS, { user_id: userId });

@@ -34,7 +34,7 @@ export const addNestedComment = async (req: Request, res: Response) => {
     }
 
     // Create child comment with parent_id (replaces pushing to replies[])
-    const newChildComment = await insertOne(Tables.INTERACTIONS, {
+    await insertOne(Tables.INTERACTIONS, {
       type: InteractionType.COMMENT,
       post_id: parentComment.post_id,
       interacted_by: user._id || user.id,

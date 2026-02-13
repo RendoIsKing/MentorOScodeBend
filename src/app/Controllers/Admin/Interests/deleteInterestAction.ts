@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { db, findOne, updateById, Tables } from "../../../../lib/db";
+import { db, updateById, Tables } from "../../../../lib/db";
 
 export const deleteInterest = async (
   req: Request,

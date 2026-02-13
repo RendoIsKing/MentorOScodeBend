@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import { z } from 'zod';
 import { Auth as ensureAuth, validateZod } from '../app/Middlewares';
 import { perUserIpLimiter } from '../app/Middlewares/rateLimiters';
-import { db, findOne, findMany, insertOne, upsert, Tables } from "../lib/db";
+import { db, findMany, insertOne, upsert, Tables } from "../lib/db";
 import { publish } from "../services/events/publish";
 import jwt from 'jsonwebtoken';
 
@@ -33,8 +33,6 @@ const WeightLogSchema = z.object({ date: IsoDate, kg: z.number().min(30).max(400
 const ExerciseProgressSchema = z.object({ exercise: NonEmptyString, date: IsoDate, value: z.number() });
 const ExerciseProgressQuerySchema = z.object({ exercise: NonEmptyString, date: IsoDate }).strict();
 const WorkoutLogSchema = z.object({ date: IsoDate.optional() }).strict();
-const UuidParam = z.object({ userId: z.string().uuid() });
-
 type Period = '7d' | '30d' | '90d' | 'ytd';
 
 function generateDates(period: Period): string[] {

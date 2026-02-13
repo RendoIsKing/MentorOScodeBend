@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { db, findOne, findMany, insertOne, deleteById, Tables } from '../../../lib/db';
+import { db, findOne, findMany, insertOne, Tables } from '../../../lib/db';
 
 function resolveUserId(req: any): string | undefined {
   if (req?.user?._id) return String(req.user._id);

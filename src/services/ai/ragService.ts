@@ -88,10 +88,6 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
   try {
     if (searchTokens.length) {
       // Use Supabase ilike + or for keyword matching across the keywords array
-      const orConditions = searchTokens
-        .map((word) => `keywords.cs.{${word}}`)
-        .join(",");
-
       const { data } = await db
         .from(Tables.COACH_KNOWLEDGE)
         .select("title, content")

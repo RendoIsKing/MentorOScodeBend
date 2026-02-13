@@ -38,16 +38,16 @@ export class CategoryController {
             return res.status(400).json({error: {message: 'VALIDATIONS_ERROR', info: "title is required"}});
         }
         try {
-            if (!isValidUUID(input.moduleId)) {
+            if (!isValidUUID(String(input.moduleId))) {
                 return res.status(400).json({error: {message: 'Invalid moduleId.'}});
             }
-            const module = await findById(Tables.MODULES, input.moduleId);
+            const module = await findById(Tables.MODULES, String(input.moduleId));
             if (!module) {
                 return res.status(400).json({error: {message: 'Invalid moduleId.'}});
             }
             const dataToSave = {
                 title: input.title,
-                module_id: input.moduleId,
+                module_id: String(input.moduleId),
                 is_active: true,
             };
 
@@ -196,16 +196,16 @@ export class CategoryController {
         }
 
         try {
-            if (!isValidUUID(input.categoryId)) {
+            if (!isValidUUID(String(input.categoryId))) {
                 return res.status(400).json({error: {message: 'Invalid categoryId.'}});
             }
-            const category = await findById(Tables.CATEGORIES, input.categoryId);
+            const category = await findById(Tables.CATEGORIES, String(input.categoryId));
             if (!category) {
                 return res.status(400).json({error: {message: 'Invalid categoryId.'}});
             }
             const subCategory = await insertOne(Tables.CATEGORIES, {
                 title: input.title,
-                parent_id: input.categoryId,
+                parent_id: String(input.categoryId),
                 module_id: (category as any).module_id ?? null,
                 is_active: true,
             });

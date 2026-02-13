@@ -60,7 +60,7 @@ export const toggleFollow = async (
             sentTo: [followedUser.id],
             type: FirebaseNotificationEnum.FOLLOW,
             notificationOnPost: null,
-            notificationFromUser: user.id,
+            notificationFromUser: user.id ?? null,
           });
         } else {
           console.error("FCM token for the user not found");

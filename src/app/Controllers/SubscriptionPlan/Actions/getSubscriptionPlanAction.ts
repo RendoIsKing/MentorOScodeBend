@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
 import { SubscriptionPlanType } from "../../../../types/enums/subscriptionPlanEnum";
-import { db, findOne, findMany, Tables } from "../../../../lib/db";
+import { db, findOne, Tables } from "../../../../lib/db";
 
 export const getSubscriptionPlan = async (
   _req: Request,

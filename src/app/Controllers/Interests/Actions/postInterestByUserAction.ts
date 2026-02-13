@@ -14,7 +14,7 @@ export const postInterest = async (
     }
 
     const user = req.user as UserInterface;
-    const userId = user.id;
+    const userId = user.id || '';
 
     const interests = await findMany(Tables.INTERESTS, {
       is_deleted: false,

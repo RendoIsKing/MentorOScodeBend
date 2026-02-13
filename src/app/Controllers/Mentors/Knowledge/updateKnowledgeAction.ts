@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { db, findOne, findById, updateById, findMany, Tables } from "../../../../lib/db";
+import { findOne, findById, updateById, findMany, Tables } from "../../../../lib/db";
 import { generateEmbedding } from "../../../../services/ai/embeddingService";
 
 /**

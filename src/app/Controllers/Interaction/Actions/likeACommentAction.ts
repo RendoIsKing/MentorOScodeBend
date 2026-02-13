@@ -78,7 +78,7 @@ export const likeAComment = async (req: Request, res: Response) => {
     // Send notification
     try {
       const userComment = await findById(Tables.USERS, comment.user_id);
-      const interactedByUser = await findById(Tables.USERS, user.id);
+      const interactedByUser = await findById(Tables.USERS, user.id || '');
       if (!interactedByUser) {
         return res
           .status(404)

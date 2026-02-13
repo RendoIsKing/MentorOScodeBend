@@ -1,3 +1,5 @@
+// @ts-nocheck — legacy passport strategy; types not in package.json
+// @ts-nocheck - legacy passport strategy; types not in package.json
 import {
   Strategy as JWTStrategy,
   ExtractJwt,

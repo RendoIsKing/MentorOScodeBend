@@ -188,11 +188,11 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
     const buildIdSet = (rows: any[]) =>
       new Set((rows || []).map((r: any) => r.post_id));
 
-    const likeCountMap = buildCountMap(likesResult.data);
-    const commentCountMap = buildCountMap(commentsResult.data);
-    const savedCountMap = buildCountMap(savedResult.data);
-    const userLikeSet = buildIdSet(userLikesResult.data);
-    const userSavedSet = buildIdSet(userSavedResult.data);
+    const likeCountMap = buildCountMap(likesResult.data || []);
+    const commentCountMap = buildCountMap(commentsResult.data || []);
+    const savedCountMap = buildCountMap(savedResult.data || []);
+    const userLikeSet = buildIdSet(userLikesResult.data || []);
+    const userSavedSet = buildIdSet(userSavedResult.data || []);
 
     const photoMap: Record<string, any> = {};
     for (const photo of userPhotoResult.data || []) {

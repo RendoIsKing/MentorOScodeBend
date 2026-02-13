@@ -3,7 +3,7 @@ import stripeInstance from "../../../../utils/stripe";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
 import * as Sentry from "@sentry/node";
-import { db, findOne, updateById, upsert, insertOne, Tables } from "../../../../lib/db";
+import { db, findOne, updateById, upsert, Tables } from "../../../../lib/db";
 
 /**
  * Handle Stripe webhook events for payment/subscription updates.

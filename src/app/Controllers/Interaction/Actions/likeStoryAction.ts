@@ -65,7 +65,7 @@ export const toggleLikeStoryAction = async (
 
     try {
       const userStory = await findById(Tables.USERS, storyExists.user_id);
-      const interactedByUser = await findById(Tables.USERS, user.id);
+      const interactedByUser = await findById(Tables.USERS, user.id || '');
       if (!interactedByUser) {
         return res
           .status(404)

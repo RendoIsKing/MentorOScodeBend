@@ -35,7 +35,7 @@ export const provideTipToCreator = async (
       });
     }
 
-    const tip = await insertOne(Tables.TIPS, {
+    await insertOne(Tables.TIPS, {
       message: message,
       tip_to: creatorId,
       tip_by: user.id,
@@ -84,7 +84,7 @@ export const provideTipToCreator = async (
       currency: stripe_currency,
     });
 
-    const newTransaction = await insertOne(Tables.TRANSACTIONS, {
+    await insertOne(Tables.TRANSACTIONS, {
       user_id: user.id,
       stripe_product_id: creator.stripe_product_id,
       product_id: tipOn ?? creator.id,
@@ -95,7 +95,7 @@ export const provideTipToCreator = async (
       status: TransactionStatus.PENDING,
     });
 
-    const newCreditTransaction = await insertOne(Tables.TRANSACTIONS, {
+    await insertOne(Tables.TRANSACTIONS, {
       user_id: creator.id,
       stripe_payment_intent_id: paymentIntent.id,
       type: TransactionType.CREDIT,

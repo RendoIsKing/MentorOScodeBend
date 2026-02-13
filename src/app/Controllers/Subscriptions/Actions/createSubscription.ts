@@ -43,7 +43,7 @@ export const createSubscription = async (
         .json({ error: { message: "User not registerd on stripe" } });
     }
 
-    const cancelParams = { userId: reqUser?.id };
+    const cancelParams = { userId: reqUser?.id || '' };
     await cancelSubscriptions(cancelParams);
 
     console.log("user.id ", user.id);
@@ -86,7 +86,7 @@ export const createSubscription = async (
       throw new Error("Failed to retrieve latest invoice.");
     }
 
-    const newSubscription = await insertOne(Tables.SUBSCRIPTIONS, {
+    await insertOne(Tables.SUBSCRIPTIONS, {
       user_id: user.id,
       plan_id: plan.id,
       stripe_subscription_id: subscription.id,
@@ -95,7 +95,7 @@ export const createSubscription = async (
       stripe_subscription_object: JSON.stringify(subscription),
     });
 
-    const newDebitTransaction = await insertOne(Tables.TRANSACTIONS, {
+    await insertOne(Tables.TRANSACTIONS, {
       user_id: user.id,
       type: TransactionType.DEBIT,
       product_type: ProductType.SUBSCRIPTION,

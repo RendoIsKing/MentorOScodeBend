@@ -18,17 +18,17 @@ export const postDocument = async (
 
     const user = req.user as UserInterface;
     if (user) {
-      await updateById(Tables.USERS, user.id, {
+      await updateById(Tables.USERS, user.id || '', {
         has_document_uploaded: true,
       });
     }
 
     const newDocument = await insertOne(Tables.DOCUMENTS, {
-      title: req.body.title,
-      description: req.body.description,
+      title: req.body.title || '',
+      description: req.body.description || '',
       document_media_id: req.body.documentMediaId,
       type: req.body.type,
-      user_id: user.id,
+      user_id: user.id || '',
     });
 
     return res.json({

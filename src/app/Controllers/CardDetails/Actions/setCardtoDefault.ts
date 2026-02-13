@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { db, findOne, updateById, Tables } from "../../../../lib/db";
+import { db, updateById, Tables } from "../../../../lib/db";
 import { setDefaultCardOnStripe } from "../../../../utils/stripe/setDefaultCardOnStripe";
 
 export const setDefaultCard = async (

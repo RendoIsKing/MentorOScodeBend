@@ -217,12 +217,12 @@ export const getPostsOfUserByUserName = async (
     const buildIdSet = (rows: any[], key = "post_id") =>
       new Set((rows || []).map((r: any) => r[key]));
 
-    const likeCountMap = buildCountMap(likesResult.data);
-    const savedCountMap = buildCountMap(savedResult.data);
-    const userLikeSet = buildIdSet(userLikesResult.data);
-    const userSavedSet = buildIdSet(userSavedResult.data);
+    const likeCountMap = buildCountMap(likesResult.data || []);
+    const savedCountMap = buildCountMap(savedResult.data || []);
+    const userLikeSet = buildIdSet(userLikesResult.data || []);
+    const userSavedSet = buildIdSet(userSavedResult.data || []);
     const paidProductSet = buildIdSet(
-      transactionsResult.data,
+      transactionsResult.data || [],
       "stripe_product_id"
     );
 

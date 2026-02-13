@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { db, count, findMany, Tables } from "../../../../lib/db";
+import { db, count, Tables } from "../../../../lib/db";
 import { DocumentStatusEnum } from "../../../../types/DocumentStatusEnum";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 

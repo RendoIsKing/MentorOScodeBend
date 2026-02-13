@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { db, count, findMany, Tables } from "../../../../lib/db";
+import { db, Tables } from "../../../../lib/db";
 import { isValidDateFormat } from "../../../../utils/regx/isValidDate";
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
 import { TransactionType } from "../../../../types/enums/transactionTypeEnum";

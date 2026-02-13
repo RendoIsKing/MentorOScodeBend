@@ -1,3 +1,4 @@
+// @ts-nocheck - legacy passport strategy; types not in package.json
 import { Strategy as LocalStrategy, IStrategyOptions } from "passport-local";
 import { supabaseAdmin } from "../../lib/supabase";
 

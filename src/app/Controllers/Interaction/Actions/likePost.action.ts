@@ -50,7 +50,7 @@ export const toggleLikeAction = async (
 
     try {
       const userPostLiked = await findById(Tables.USERS, postExists.user_id);
-      const interactedByUser = await findById(Tables.USERS, user.id);
+      const interactedByUser = await findById(Tables.USERS, user.id || '');
       if (!interactedByUser) {
         return res
           .status(404)

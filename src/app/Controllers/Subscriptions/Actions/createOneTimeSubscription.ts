@@ -66,7 +66,7 @@ export const createOneTimeSubscription = async (
       currency: stripe_currency,
     });
 
-    const newTransaction = await insertOne(Tables.TRANSACTIONS, {
+    await insertOne(Tables.TRANSACTIONS, {
       user_id: user.id,
       stripe_payment_intent_id: paymentIntent.id,
       stripe_product_id: post.stripe_product_id,
@@ -77,7 +77,7 @@ export const createOneTimeSubscription = async (
       status: TransactionStatus.PENDING,
     });
 
-    const newCreditTransaction = await insertOne(Tables.TRANSACTIONS, {
+    await insertOne(Tables.TRANSACTIONS, {
       user_id: post.user_id,
       stripe_payment_intent_id: paymentIntent.id,
       type: TransactionType.CREDIT,
