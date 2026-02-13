@@ -5,17 +5,64 @@ import { supabaseAdmin } from "../../../../lib/supabase";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
 import { ProductType } from "../../../../types/enums/productEnum";
+import { SubscriptionPlanType } from "../../../../types/enums/subscriptionPlanEnum";
 
 /**
- * Coach Majen onboarding fee: 500 kr (one-time).
- * Stripe requires amounts in the smallest currency unit (500 kr * 100 = 50 000).
+ * Defaults — used when auto-creating the plan for the first time.
+ * Once the plan exists in the DB, the mentor can edit it from the dashboard.
  */
-const COACH_MAJEN_AMOUNT_ORE = 50000; // 500 kr
+const DEFAULT_PLAN_TITLE = "Bli min klient";
+const DEFAULT_PLAN_PRICE_ORE = 50000; // 500 kr
+const DEFAULT_PLAN_DESCRIPTION =
+  "Personlig trenings- og kostholdsplan, aktivitetssporing, ubegrenset chat og AI-tilpasning.";
+const COACH_MAJEN_USERNAME = "Coach.Majen";
 const COACH_MAJEN_CURRENCY = "nok";
 
 /**
- * Create a Stripe Checkout Session for the Coach Majen onboarding fee.
- * Returns the checkout URL so the frontend can redirect the user.
+ * Find-or-create the mentor's subscription plan.
+ * Returns the plan row (with id, title, price, description).
+ */
+async function ensureMentorPlan(mentorUserId: string) {
+  // Try to find an existing plan
+  const { data: existingPlan } = await supabaseAdmin
+    .from("subscription_plans")
+    .select("*")
+    .eq("user_id", mentorUserId)
+    .eq("is_deleted", false)
+    .in("plan_type", [SubscriptionPlanType.CUSTOM, SubscriptionPlanType.FIXED])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existingPlan) return existingPlan;
+
+  // Auto-create the plan so it shows up in the Mentor Dashboard
+  const { data: newPlan, error } = await supabaseAdmin
+    .from("subscription_plans")
+    .insert({
+      user_id: mentorUserId,
+      title: DEFAULT_PLAN_TITLE,
+      price: DEFAULT_PLAN_PRICE_ORE,
+      plan_type: SubscriptionPlanType.CUSTOM,
+      description: DEFAULT_PLAN_DESCRIPTION,
+    })
+    .select("*")
+    .single();
+
+  if (error) {
+    console.error("[ensureMentorPlan] Failed to create plan:", error);
+    return null;
+  }
+  return newPlan;
+}
+
+/**
+ * Create a Stripe Checkout Session for a mentor's onboarding fee.
+ * The price is read from the mentor's subscription plan in the DB.
+ * If no plan exists yet, one is auto-created with defaults (500 kr).
+ *
+ * Body (optional): { mentorId?: string }
+ *   — If omitted, falls back to looking up Coach.Majen by username.
  */
 export const createCoachMajenCheckout = async (
   req: Request,
@@ -38,6 +85,30 @@ export const createCoachMajenCheckout = async (
       return res.status(404).json({ error: { message: "User not found" } });
     }
 
+    // ── Resolve the mentor ──────────────────────────────────────────
+    let mentorUserId: string | undefined = req.body?.mentorId;
+
+    if (!mentorUserId) {
+      // Fallback: look up Coach.Majen by username
+      const { data: mentorUser } = await supabaseAdmin
+        .from("users")
+        .select("id")
+        .eq("user_name", COACH_MAJEN_USERNAME)
+        .eq("is_deleted", false)
+        .limit(1)
+        .maybeSingle();
+      mentorUserId = mentorUser?.id;
+    }
+
+    // ── Find or create the mentor's subscription plan ───────────────
+    let plan: any = null;
+    if (mentorUserId) {
+      plan = await ensureMentorPlan(mentorUserId);
+    }
+    const checkoutAmountOre = plan?.price || DEFAULT_PLAN_PRICE_ORE;
+    const planTitle = plan?.title || DEFAULT_PLAN_TITLE;
+    const planDescription = plan?.description || DEFAULT_PLAN_DESCRIPTION;
+
     // Ensure the user has a Stripe customer ID
     let stripeCustomerId = user.stripe_client_id;
     if (!stripeCustomerId) {
@@ -53,7 +124,7 @@ export const createCoachMajenCheckout = async (
         .eq("id", user.id);
     }
 
-    // Check if user has already paid for Coach Majen
+    // Check if user has already paid for this mentor
     const { data: existingPayment } = await supabaseAdmin
       .from("transactions")
       .select("id")
@@ -66,7 +137,7 @@ export const createCoachMajenCheckout = async (
     if (existingPayment) {
       return res.status(200).json({
         alreadyPaid: true,
-        message: "Du har allerede betalt for Coach Majen onboarding.",
+        message: "Du har allerede betalt for onboarding.",
       });
     }
 
@@ -74,7 +145,7 @@ export const createCoachMajenCheckout = async (
     const frontendOrigin =
       process.env.FRONTEND_ORIGIN || "https://mentorio.no";
 
-    // Create a Stripe Checkout Session
+    // Create a Stripe Checkout Session using the plan's price
     const session = await stripeInstance.checkout.sessions.create({
       customer: stripeCustomerId,
       mode: "payment",
@@ -83,11 +154,10 @@ export const createCoachMajenCheckout = async (
         {
           price_data: {
             currency: COACH_MAJEN_CURRENCY,
-            unit_amount: COACH_MAJEN_AMOUNT_ORE,
+            unit_amount: checkoutAmountOre,
             product_data: {
-              name: "Coach Majen – Onboarding",
-              description:
-                "Personlig trenings- og kostholdsplan, aktivitetssporing, ubegrenset chat og AI-tilpasning.",
+              name: `${planTitle} – Onboarding`,
+              description: planDescription,
             },
           },
           quantity: 1,
@@ -95,6 +165,8 @@ export const createCoachMajenCheckout = async (
       ],
       metadata: {
         userId: String(user.id),
+        mentorId: mentorUserId || "",
+        planId: plan?.id || "",
         productType: ProductType.COACHING,
         type: "coach_majen_onboarding",
       },
@@ -105,7 +177,7 @@ export const createCoachMajenCheckout = async (
     // Create a pending transaction
     await supabaseAdmin.from("transactions").insert({
       user_id: user.id,
-      amount: COACH_MAJEN_AMOUNT_ORE,
+      amount: checkoutAmountOre,
       type: TransactionType.DEBIT,
       product_type: ProductType.COACHING,
       stripe_payment_intent_id: session.payment_intent || session.id,

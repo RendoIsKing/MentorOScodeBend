@@ -19,6 +19,12 @@ const subscriptionPlanSchema = z.object({
   planType: z.nativeEnum(SubscriptionPlanType).optional(),
   entitlements: z.array(entitlementSchema).optional(),
 }).strict();
+// Public endpoint — no auth required (returns only non-sensitive plan info)
+subscriptionPlan.get(
+  "/public/:mentorId",
+  SubscriptionPlanController.getMentorPublicPlans
+);
+
 subscriptionPlan.post(
   "/product",
   Auth,

@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { postSubscriptionPlan } from "./Actions/createSubscriptionPlanAction";
-import { getSubscriptionPlan, getOneSubscriptionPlanForAllUsers } from "./Actions/getSubscriptionPlanAction";
+import { getSubscriptionPlan, getOneSubscriptionPlanForAllUsers, getMentorPublicPlans } from "./Actions/getSubscriptionPlanAction";
 import { updateSubscriptionPlan } from "./Actions/updateSubscriptionPlanAction";
 import { softDeleteSubscriptionPlan } from "./Actions/deleteSubscriptionPlanAction";
 
@@ -32,6 +32,7 @@ export class SubscriptionPlanController {
     getOneSubscriptionPlanForAllUsers(req, res);
   }
 
-
-
+  static getMentorPublicPlans = (req: Request, res: Response) => {
+    getMentorPublicPlans(req, res);
+  }
 }

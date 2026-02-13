@@ -3,6 +3,47 @@ import { UserInterface } from "../../../../types/UserInterface";
 import { SubscriptionPlanType } from "../../../../types/enums/subscriptionPlanEnum";
 import { db, findOne, Tables } from "../../../../lib/db";
 
+/**
+ * Public endpoint — returns a mentor's subscription plans.
+ * No auth required; only non-sensitive plan info is returned.
+ * GET /plans/public/:mentorId
+ */
+export const getMentorPublicPlans = async (
+  req: Request,
+  res: Response
+): Promise<Response> => {
+  try {
+    const mentorId = req.params.mentorId;
+    if (!mentorId) {
+      return res
+        .status(400)
+        .json({ error: { message: "mentorId is required." } });
+    }
+
+    const { data: results, error } = await db
+      .from(Tables.SUBSCRIPTION_PLANS)
+      .select("id, title, price, description, plan_type, created_at")
+      .eq("user_id", mentorId)
+      .eq("is_deleted", false)
+      .in("plan_type", [SubscriptionPlanType.CUSTOM, SubscriptionPlanType.FIXED])
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[getMentorPublicPlans] Error:", error);
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong." } });
+    }
+
+    return res.json({ data: results || [] });
+  } catch (err) {
+    console.error("[getMentorPublicPlans] Error:", err);
+    return res
+      .status(500)
+      .json({ error: { message: "Something went wrong." } });
+  }
+};
+
 export const getSubscriptionPlan = async (
   _req: Request,
   res: Response
