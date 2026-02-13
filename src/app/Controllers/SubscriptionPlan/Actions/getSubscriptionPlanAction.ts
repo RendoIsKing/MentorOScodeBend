@@ -17,19 +17,30 @@ const DEFAULT_PLAN_DESCRIPTION =
  * Returns the newly created plan row, or null if the user isn't Coach.Majen.
  */
 async function autoSeedCoachMajenPlan(
-  userId: string,
-  selectColumns = "*"
+  userId: string
 ): Promise<any | null> {
-  // Only seed for Coach.Majen
-  const { data: user } = await db
+  // Only seed for Coach.Majen (case-insensitive check)
+  const { data: user, error: userErr } = await db
     .from(Tables.USERS)
     .select("id, user_name")
     .eq("id", userId)
     .eq("is_deleted", false)
     .maybeSingle();
 
-  if (!user || user.user_name !== COACH_MAJEN_USERNAME) return null;
+  console.log("[autoSeedCoachMajenPlan] user lookup:", {
+    userId,
+    found: !!user,
+    user_name: user?.user_name,
+  });
 
+  if (!user) return null;
+
+  // Case-insensitive username match
+  if ((user.user_name || "").toLowerCase() !== COACH_MAJEN_USERNAME.toLowerCase()) {
+    return null;
+  }
+
+  // Insert with simple select (joins like feature_ids(*) fail on fresh inserts)
   const { data: newPlan, error } = await db
     .from(Tables.SUBSCRIPTION_PLANS)
     .insert({
@@ -39,13 +50,15 @@ async function autoSeedCoachMajenPlan(
       plan_type: SubscriptionPlanType.CUSTOM,
       description: DEFAULT_PLAN_DESCRIPTION,
     })
-    .select(selectColumns)
+    .select("*")
     .single();
 
   if (error) {
     console.error("[autoSeedCoachMajenPlan] Failed to create plan:", error);
     return null;
   }
+
+  console.log("[autoSeedCoachMajenPlan] Created plan:", newPlan?.id);
   return newPlan;
 }
 
@@ -86,7 +99,7 @@ export const getMentorPublicPlans = async (
 
     // Auto-seed Coach.Majen's plan if she has none yet
     if (!results || results.length === 0) {
-      const seeded = await autoSeedCoachMajenPlan(mentorId, publicCols);
+      const seeded = await autoSeedCoachMajenPlan(mentorId);
       if (seeded) results = [seeded];
     }
 
@@ -138,7 +151,7 @@ export const getSubscriptionPlan = async (
 
     // Auto-seed Coach.Majen's plan when she opens her Mentor Dashboard
     if (isFetchingOwnPlans && (!results || results.length === 0)) {
-      const seeded = await autoSeedCoachMajenPlan(userId, "*, features:feature_ids(*)");
+      const seeded = await autoSeedCoachMajenPlan(userId);
       if (seeded) results = [seeded];
     }
 
