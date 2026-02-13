@@ -7,6 +7,7 @@ import { creatorStats } from "./Actions/creatorStats";
 import { getUserEarningChart } from "./Actions/getUserEarningChartAction";
 import { getUserEarningStats } from "./Actions/getUserEarningStats.action";
 import { getCoachClients } from "./Actions/getCoachClientsAction";
+import { getCoachClientDetail } from "./Actions/getCoachClientDetailAction";
 
 export class StatsController {
   static getFollowers = (req: Request, res: Response) => {
@@ -39,5 +40,9 @@ export class StatsController {
 
   static getCoachClients = (req: Request, res: Response) => {
     getCoachClients(req, res);
+  };
+
+  static getCoachClientDetail = (req: Request, res: Response) => {
+    getCoachClientDetail(req, res);
   };
 }
