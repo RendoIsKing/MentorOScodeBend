@@ -1,14 +1,11 @@
 import { Request, Response } from "express";
 import { validate } from "class-validator";
 import { UserInterface } from "../../../../types/UserInterface";
-import { Post } from "../../../Models/Post";
-import { PostType } from "../../../../types/enums/postTypeEnum";
-import { MoreAction } from "../../../Models/MoreAction";
 import { MoreActionInput } from "../Inputs/moreActionInput";
 import { userActionType } from "../../../../types/enums/userActionTypeEnum";
-import { User } from "../../../Models/User";
-import mongoose from "mongoose";
 import { ReportStatusEnum } from "../../../../types/enums/reportingStatusEnum";
+import { findOne, insertOne, Tables } from "../../../../lib/db";
+import { PostType } from "../../../../types/enums/postTypeEnum";
 
 export const notInterested = async (
   req: Request,
@@ -25,43 +22,37 @@ export const notInterested = async (
     let moreAction;
 
     if (req.body.actionType === userActionType.NOT_INTERESTED) {
-      const post = Post.findOne({
-        _id: new mongoose.Types.ObjectId(req.body.actionOnPost),
+      const post = await findOne(Tables.POSTS, {
+        id: req.body.actionOnPost,
         type: PostType.POST,
-        isDeleted: false,
-        deletedAt: null,
+        is_deleted: false,
       });
 
       if (!post) {
         return res.status(404).json({ error: { message: "Post not found" } });
       }
 
-      moreAction = new MoreAction({
-        actionByUser: user.id,
-        actionOnPost: req.body.actionOnPost,
-        actionType: userActionType.NOT_INTERESTED,
+      moreAction = await insertOne(Tables.MORE_ACTIONS, {
+        action_by_user: user.id,
+        action_on_post: req.body.actionOnPost,
+        action_type: userActionType.NOT_INTERESTED,
       });
-
-      await moreAction.save();
     } else {
-      const userToReport = await User.findOne({
-        _id: new mongoose.Types.ObjectId(req.body.actionToUser),
-        isDeleted: false,
-        deletedAt: null,
+      const userToReport = await findOne(Tables.USERS, {
+        id: req.body.actionToUser,
+        is_deleted: false,
       });
 
       if (!userToReport) {
-        return res.status(404).json({ error: { message: "Post not found" } });
+        return res.status(404).json({ error: { message: "User not found" } });
       }
-      moreAction = new MoreAction({
-        actionByUser: user.id,
-        actionToUser: userToReport.id,
-        actionType: userActionType.REPORT,
+      moreAction = await insertOne(Tables.MORE_ACTIONS, {
+        action_by_user: user.id,
+        action_to_user: userToReport.id,
+        action_type: userActionType.REPORT,
         reason: req.body.reason,
-        rreportStatus: ReportStatusEnum.PENDING,
+        report_status: ReportStatusEnum.PENDING,
       });
-
-      await moreAction.save();
     }
 
     return res.json({

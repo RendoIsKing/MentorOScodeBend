@@ -1,13 +1,16 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { Post } from "../../../Models/Post";
-import { IPostSchema } from "../../../../types/interfaces/postsInterface";
-import { Interaction } from "../../../Models/Interaction";
 import { InteractionType } from "../../../../types/enums/InteractionTypeEnum";
-import { User } from "../../../Models/User";
 import { sendNotification } from "../../../../utils/Notifications/notificationService";
 import { FirebaseNotificationEnum } from "../../../../types/enums/FirebaseNotificationEnum";
 import { saveNotification } from "../../Notifications/Actions/saveNotification";
+import {
+  findById,
+  findOne,
+  insertOne,
+  deleteById,
+  Tables,
+} from "../../../../lib/db";
 
 export const toggleLikeAction = async (
   req: Request,
@@ -16,21 +19,21 @@ export const toggleLikeAction = async (
   try {
     const user = req.user as UserInterface;
     const postId = req.params.id;
-    const postExists = (await Post.findById(postId)) as IPostSchema;
+    const postExists = await findById(Tables.POSTS, postId);
 
-    if (!postExists || postExists?.isDeleted) {
+    if (!postExists || postExists.is_deleted) {
       return res.status(400).json({ error: { message: "Post not exist" } });
     }
 
-    const intreactionExist = await Interaction.findOne({
-      user: postExists.user,
-      interactedBy: user.id,
+    const interactionExist = await findOne(Tables.INTERACTIONS, {
+      user_id: postExists.user_id,
+      interacted_by: user.id,
       type: InteractionType.LIKE_POST,
-      post: postId,
+      post_id: postId,
     });
 
-    if (intreactionExist) {
-      await Interaction.deleteOne({ _id: intreactionExist.id });
+    if (interactionExist) {
+      await deleteById(Tables.INTERACTIONS, interactionExist.id);
       return res.json({
         data: {
           message: "Post disliked",
@@ -38,16 +41,16 @@ export const toggleLikeAction = async (
       });
     }
 
-    const like = await Interaction.create({
-      user: postExists.user,
-      interactedBy: user.id,
+    const like = await insertOne(Tables.INTERACTIONS, {
+      user_id: postExists.user_id,
+      interacted_by: user.id,
       type: InteractionType.LIKE_POST,
-      post: postId,
+      post_id: postId,
     });
 
     try {
-      const userPostLiked = await User.findById(postExists.user);
-      const interactedByUser = await User.findById(user.id);
+      const userPostLiked = await findById(Tables.USERS, postExists.user_id);
+      const interactedByUser = await findById(Tables.USERS, user.id);
       if (!interactedByUser) {
         return res
           .status(404)
@@ -57,7 +60,7 @@ export const toggleLikeAction = async (
         const notificationToken = userPostLiked.fcm_token;
         if (notificationToken) {
           const notificationTitle = "New Like on your post";
-          const notificationDescription = `${interactedByUser.userName} liked your post`;
+          const notificationDescription = `${interactedByUser.user_name} liked your post`;
           await sendNotification(
             notificationToken,
             notificationTitle,
@@ -68,11 +71,10 @@ export const toggleLikeAction = async (
           await saveNotification({
             title: notificationTitle,
             description: notificationDescription,
-            sentTo: [userPostLiked._id],
+            sentTo: [userPostLiked.id],
             type: FirebaseNotificationEnum.LIKE_POST,
             notificationOnPost: postExists.id,
-            notificationFromUser: null
-
+            notificationFromUser: null,
           });
         } else {
           console.error("FCM token for the user not found");
@@ -86,9 +88,9 @@ export const toggleLikeAction = async (
       data: like,
       message: "Post liked",
     });
-  } catch (error) {
+  } catch (error: any) {
     console.log(error, "Error in liking the post");
-    if (error.code === 11000) {
+    if (error.code === "23505") {
       return res
         .status(500)
         .json({ error: { message: "User already liked the post", error } });

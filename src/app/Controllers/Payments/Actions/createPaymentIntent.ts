@@ -1,15 +1,17 @@
-import { Types } from "mongoose";
 import stripeInstance from "../../../../utils/stripe";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
-import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
-import { Transaction } from "../../../Models/Transaction";
+import { insertOne, Tables } from "../../../../lib/db";
+
+// Map TS enum to Supabase transaction_status enum (PENDING, COMPLETED, FAILED, REFUNDED)
+const toDbStatus = (s: TransactionStatus) =>
+  s === TransactionStatus.SUCCESS ? "COMPLETED" : s.toUpperCase();
 
 /**
  * Create a Stripe payment or setup intent and record transaction state.
  */
 const createPaymentIntent = async (params: {
   amount: number;
-  userId: Types.ObjectId;
+  userId: string;
   clientStripeId: string;
   idempotencyKey?: string;
 }) => {
@@ -28,13 +30,13 @@ const createPaymentIntent = async (params: {
         params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined as any
       );
 
-      await Transaction.create({
-        userId: params.userId,
+      await insertOne(Tables.TRANSACTIONS, {
+        user_id: params.userId,
         amount: 0,
-        type: TransactionType.CARD_ADD,
-        status: TransactionStatus.SUCCESS,
-        description: "Card added successfully",
-        referenceId: intentInstance.id,
+        type: null, // CARD_ADD not in Supabase enum; use null
+        status: toDbStatus(TransactionStatus.SUCCESS),
+        title: "Card added successfully",
+        stripe_payment_intent_id: intentInstance.id,
       });
 
       return intentInstance;
@@ -50,22 +52,22 @@ const createPaymentIntent = async (params: {
         params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined as any
       );
 
-      await Transaction.create({
-        userId: params.userId,
+      await insertOne(Tables.TRANSACTIONS, {
+        user_id: params.userId,
         amount: params.amount,
-        status: TransactionStatus.PENDING,
-        description: "Balance adding transaction initiated",
-        referenceId: paymentInstanceIntent.id,
+        status: toDbStatus(TransactionStatus.PENDING),
+        title: "Balance adding transaction initiated",
+        stripe_payment_intent_id: paymentInstanceIntent.id,
       });
       return paymentInstanceIntent;
     }
   } catch (err) {
-    await Transaction.create({
-      userId: params.userId,
+    await insertOne(Tables.TRANSACTIONS, {
+      user_id: params.userId,
       amount: params.amount,
-      status: TransactionStatus.FAILED,
-      description: `Transaction failed: ${err.message}`,
-      referenceId: null,
+      status: toDbStatus(TransactionStatus.FAILED),
+      title: `Transaction failed: ${(err as Error).message}`,
+      stripe_payment_intent_id: null,
     });
 
     throw err;

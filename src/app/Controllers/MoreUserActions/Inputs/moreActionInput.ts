@@ -1,14 +1,15 @@
-import { IsEnum, IsNotEmpty, IsOptional } from "class-validator";
-import { Types } from "mongoose";
+import { IsEnum, IsNotEmpty, IsOptional, IsString } from "class-validator";
 import { userActionType } from "../../../../types/enums/userActionTypeEnum";
 import { ReasonEnum } from "../../../../types/enums/reportReasonEnum";
 
 export class MoreActionInput {
   @IsOptional()
-  actionToUser: Types.ObjectId;
+  @IsString()
+  actionToUser: string;
 
   @IsOptional()
-  actionOnPost: Types.ObjectId;
+  @IsString()
+  actionOnPost: string;
 
   @IsNotEmpty({ message: "actionType is required." })
   @IsEnum(userActionType)

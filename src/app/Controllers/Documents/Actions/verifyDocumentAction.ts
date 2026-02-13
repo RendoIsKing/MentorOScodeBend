@@ -1,8 +1,7 @@
 import { Request, Response } from "express";
-import { Document } from "../../../Models/Document";
-import { User } from "../../../Models/User";
 import { UserInterface } from "../../../../types/UserInterface";
 import { DocumentStatusEnum } from "../../../../types/DocumentStatusEnum";
+import { findById, updateById, Tables } from "../../../../lib/db";
 
 export const verifyDocument = async (
   req: Request,
@@ -10,28 +9,24 @@ export const verifyDocument = async (
 ): Promise<Response> => {
   const { id } = req.params;
   const adminUser = req.user as UserInterface;
-  const document = await Document.findById(id);
+  const document = await findById(Tables.DOCUMENTS, id);
   if (!document) {
     return res.status(400).json({ error: { message: "No Document found" } });
   }
 
   try {
-    const data = await Document.findByIdAndUpdate(id, {
-      verifiedBy: id,
-      verifiedAt: new Date(),
+    const data = await updateById(Tables.DOCUMENTS, id, {
+      verified_by: adminUser.id,
+      verified_at: new Date().toISOString(),
       status: DocumentStatusEnum.Approved,
-    },
-  {
-    new: true,
-  });
+    });
 
-    const user = await User.findById(data?.userId);
-    if (user) {
-      await User.findByIdAndUpdate(user.id, {
-        verifiedBy: adminUser.id,
-        verifiedAt: new Date(),
-        hasDocumentVerified: true,
-        isMentor: true,
+    if (data?.user_id) {
+      await updateById(Tables.USERS, data.user_id, {
+        verified_by: adminUser.id,
+        verified_at: new Date().toISOString(),
+        has_document_verified: true,
+        is_mentor: true,
       });
     }
 

@@ -1,22 +1,23 @@
 import { Router } from 'express';
 import { Auth as ensureAuth, validateZod } from '../app/Middlewares';
-import { Types } from 'mongoose';
+import { db, findById, findMany, insertOne, updateById, count, Tables } from '../lib/db';
 import { sseHub, ssePush, getOnlineUserIds } from '../lib/sseHub';
 import { createMulterInstance } from '../app/Middlewares/fileUpload';
-import { ChatThread as DMThread } from '../models/chat';
-import { ChatMessage as DMMessage } from '../models/chat';
-import { User } from '../app/Models/User';
-import { CoachKnowledge } from '../app/Models/CoachKnowledge';
 import { z } from 'zod';
-import { nonEmptyString, objectId, objectIdParam } from '../app/Validation/requestSchemas';
+import { nonEmptyString } from '../app/Validation/requestSchemas';
 import { generateResponse as generateMentorResponse } from '../services/ai/mentorAIService';
 import { analyzeSafety } from '../services/safety/trafficLight';
 import * as Sentry from '@sentry/node';
 
 const r = Router();
 
+// ── Validation helpers (UUID-based) ─────────────────────────────────────────
+const uuidString = z.string().uuid();
+const uuidParam = (key: string = 'id') =>
+  z.object({ [key]: uuidString } as Record<string, z.ZodTypeAny>).strict();
+
 const createConversationSchema = z.object({
-  partnerId: objectId,
+  partnerId: uuidString,
 }).strict();
 
 const attachmentSchema = z.object({
@@ -35,93 +36,68 @@ function isParticipant(doc: any, userId: string): boolean {
   try { return (doc?.participants || []).map(String).includes(String(userId)); } catch { return false; }
 }
 
+// ── POST /conversations — create or find a DM thread ────────────────────────
 r.post(
   '/conversations',
   ensureAuth as any,
   validateZod({ body: createConversationSchema }),
   async (req: any, res) => {
   try {
-    const me = String(req.user?._id || '');
+    const me = String(req.user?._id || req.user?.id || '');
     const { partnerId } = req.body || {};
-    console.log(`[chat:create] POST /conversations → me=${me}, userName=${req.user?.userName || 'unknown'}, partnerId=${partnerId}`);
+    console.log(`[chat:create] POST /conversations -> me=${me}, userName=${req.user?.userName || 'unknown'}, partnerId=${partnerId}`);
     if (!me) return res.status(401).json({ error: 'not_authenticated' });
     if (!partnerId || partnerId === me) return res.status(400).json({ error: 'invalid partner' });
 
-    let meOid: Types.ObjectId, partnerOid: Types.ObjectId;
-    try {
-      meOid = new Types.ObjectId(me);
-      partnerOid = new Types.ObjectId(String(partnerId));
-    } catch (idErr: any) {
-      console.error('[chat:create] Invalid ObjectId:', { me, partnerId, error: idErr?.message });
-      return res.status(400).json({ error: 'invalid_id', debug: { me, partnerId } });
-    }
+    const pair = [me, String(partnerId)].sort();
+    console.log(`[chat:create] Looking for thread with participants: [${pair.join(',')}]`);
 
-    const pair = [meOid, partnerOid].sort((a, b) => a.toString().localeCompare(b.toString()));
-    console.log(`[chat:create] Looking for thread with participants: [${pair.map(String).join(',')}]`);
+    // Find existing thread containing both participants
+    const { data: existing } = await db
+      .from(Tables.CHAT_THREADS)
+      .select('*')
+      .contains('participants', pair)
+      .limit(1)
+      .maybeSingle();
 
-    let t: any;
-    try {
-      t = await DMThread.findOne({ participants: pair });
-    } catch (findErr: any) {
-      console.error('[chat:create] findOne failed:', findErr?.message, findErr?.stack);
-      // Fallback: try finding with $all (order-independent)
-      t = await DMThread.findOne({ participants: { $all: pair, $size: 2 } });
-    }
-
+    let t = existing;
     const isNew = !t;
+
     if (!t) {
       console.log('[chat:create] Creating new thread...');
-      try {
-        t = await DMThread.create({
-          participants: pair,
-          unread: Object.fromEntries([[String(partnerId), 0], [me, 0]]),
-          // Populate legacy fields to satisfy old unique index {userId, partner}
-          userId: meOid,
-          partner: String(partnerOid),
-        } as any);
-      } catch (createErr: any) {
-        console.error('[chat:create] DMThread.create failed:', createErr?.message, createErr?.stack);
-        // If it's a duplicate key error on the legacy index, try to drop the index and retry
-        if (createErr?.code === 11000) {
-          console.log('[chat:create] Duplicate key error — attempting to drop legacy userId_partner index...');
-          try {
-            await DMThread.collection.dropIndex('userId_1_partner_1');
-            console.log('[chat:create] Legacy index dropped, retrying create...');
-            t = await DMThread.create({
-              participants: pair,
-              unread: Object.fromEntries([[String(partnerId), 0], [me, 0]]),
-              userId: meOid,
-              partner: String(partnerOid),
-            } as any);
-          } catch (retryErr: any) {
-            console.error('[chat:create] Retry after index drop also failed:', retryErr?.message);
-            return res.status(500).json({ error: 'create_failed', debug: { message: retryErr?.message } });
-          }
-        } else {
-          return res.status(500).json({ error: 'create_failed', debug: { message: createErr?.message } });
-        }
+      const unread: Record<string, number> = { [String(partnerId)]: 0, [me]: 0 };
+      t = await insertOne(Tables.CHAT_THREADS, {
+        participants: pair,
+        last_message_at: new Date().toISOString(),
+        unread,
+      });
+      if (!t) {
+        return res.status(500).json({ error: 'create_failed' });
       }
     }
 
-    console.log(`[chat:create] → threadId=${String(t?._id)}, isNew=${isNew}, participants=[${(t?.participants || []).map(String).join(',')}]`);
+    console.log(`[chat:create] -> threadId=${t.id}, isNew=${isNew}, participants=[${(t.participants || []).join(',')}]`);
 
-    // Ensure unread map has keys for both participants
+    // Ensure unread JSONB has keys for both participants
     try {
-      const ids = (t?.participants || []).map(String);
-      for (const p of ids) {
-        if ((t as any).unread?.get?.(p) === undefined) (t as any).unread?.set?.(p, 0);
+      const unread = { ...(t.unread || {}) };
+      let needsUpdate = false;
+      for (const p of (t.participants || [])) {
+        if (unread[p] === undefined) { unread[p] = 0; needsUpdate = true; }
       }
-      await t.save();
+      if (needsUpdate) {
+        await updateById(Tables.CHAT_THREADS, t.id, { unread });
+      }
     } catch (saveErr: any) {
       console.error('[chat:create] unread save failed (non-fatal):', saveErr?.message);
     }
 
     const payload = {
-      id: String(t?._id),
-      lastMessageText: t?.lastMessageText || '',
-      lastMessageAt: t?.lastMessageAt || null,
-      participants: (t?.participants || []).map(String),
-      unread: (t as any)?.unread?.get?.(me) ?? 0,
+      id: t.id,
+      lastMessageText: t.last_message_text || '',
+      lastMessageAt: t.last_message_at || null,
+      participants: t.participants || [],
+      unread: t.unread?.[me] ?? 0,
     };
     sseHub.publishMany(payload.participants, { type: 'chat:thread', payload });
     try { Sentry.addBreadcrumb({ category: 'chat', message: 'conversation-created', level: 'info', data: { threadId: payload.id, isNew } }); } catch {}
@@ -132,223 +108,277 @@ r.post(
   }
 });
 
+// ── GET /conversations — list my conversations ──────────────────────────────
 r.get('/conversations', ensureAuth as any, async (req: any, res) => {
   try {
-    const me = String(req.user._id);
-    const list = await DMThread.find({ participants: me }).sort({ updatedAt: -1 }).limit(50).lean();
+    const me = String(req.user?._id || req.user?.id || '');
+    const { data: list } = await db
+      .from(Tables.CHAT_THREADS)
+      .select('*')
+      .contains('participants', [me])
+      .order('last_message_at', { ascending: false })
+      .limit(50);
     return res.json({
-      conversations: list.map(t=>({
-        id: String(t._id),
-        participants: (t.participants||[]).map(String),
-        lastMessageText: t.lastMessageText||'',
-        lastMessageAt: t.lastMessageAt||null,
-        unread: (t as any)?.unread?.get?.(me) ?? 0,
-        isPaused: Boolean((t as any)?.isPaused),
-        safetyStatus: String((t as any)?.safetyStatus || 'green'),
+      conversations: (list || []).map((t: any) => ({
+        id: t.id,
+        participants: t.participants || [],
+        lastMessageText: t.last_message_text || '',
+        lastMessageAt: t.last_message_at || null,
+        unread: t.unread?.[me] ?? 0,
+        isPaused: Boolean(t.is_paused),
+        safetyStatus: String(t.safety_status || 'green'),
       }))
     });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
+// ── GET /conversations/:id/messages — paginated message history ─────────────
 r.get('/conversations/:id/messages', ensureAuth as any, async (req: any, res) => {
   try {
-    const me = String(req.user._id);
+    const me = String(req.user?._id || req.user?.id || '');
     const { id } = req.params;
-    const t = await DMThread.findById(id);
+    const t = await findById(Tables.CHAT_THREADS, id);
     if (!t || !isParticipant(t, me)) return res.status(403).json({ error: 'forbidden' });
+
     const { cursor } = req.query as any;
-    const q: any = { thread: id };
-    if (cursor) q._id = { $lt: new Types.ObjectId(String(cursor)) };
-    const msgs = await DMMessage.find(q).sort({ _id: -1 }).limit(30).lean();
+    let query = db.from(Tables.CHAT_MESSAGES).select('*').eq('thread_id', id);
+
+    if (cursor) {
+      // cursor is a message ID; resolve its created_at for keyset pagination
+      const cursorMsg = await findById(Tables.CHAT_MESSAGES, cursor, 'created_at');
+      if (cursorMsg) {
+        query = query.lt('created_at', cursorMsg.created_at);
+      }
+    }
+
+    const { data: msgs } = await query
+      .order('created_at', { ascending: false })
+      .limit(30);
+
+    const sorted = (msgs || []).reverse();
     return res.json({
-      messages: msgs.reverse().map(m=>({
-        id: String(m._id),
-        sender: String(m.sender),
+      messages: sorted.map((m: any) => ({
+        id: m.id,
+        sender: m.sender,
         text: m.text,
-        clientId: (m as any).clientId || null,
-        createdAt: m.createdAt,
-        flag: (m as any).flag || 'green',
-        flaggedCategories: (m as any).flaggedCategories || [],
-        attachments: (m as any).attachments || [],
+        clientId: m.client_id || null,
+        createdAt: m.created_at,
+        flag: m.flag || 'green',
+        flaggedCategories: m.flagged_categories || [],
+        attachments: m.attachments || [],
       }))
     });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
+// ── POST /conversations/:id/messages — send a message ───────────────────────
 r.post(
   '/conversations/:id/messages',
   ensureAuth as any,
-  validateZod({ params: objectIdParam('id'), body: sendMessageSchema }),
+  validateZod({ params: uuidParam('id'), body: sendMessageSchema }),
   async (req: any, res) => {
   try {
-    const me = String(req.user._id);
+    const me = String(req.user?._id || req.user?.id || '');
     const { id } = req.params;
     const { text, clientId, attachments: bodyAttachments } = req.body || {};
     if (!text || !String(text).trim()) return res.status(400).json({ error: 'text_required' });
-    const t = await DMThread.findById(id);
+
+    const t = await findById(Tables.CHAT_THREADS, id);
     if (!t || !isParticipant(t, me)) {
-      const participants = t ? (t.participants || []).map(String) : [];
-      console.error(`[chat:403] POST /conversations/${id}/messages → FORBIDDEN. me=${me}, thread=${t ? 'found' : 'null'}, participants=[${participants.join(',')}], includes_me=${participants.includes(me)}, userName=${req.user?.userName || 'unknown'}`);
+      const participants = t ? (t.participants || []) : [];
+      console.error(`[chat:403] POST /conversations/${id}/messages -> FORBIDDEN. me=${me}, thread=${t ? 'found' : 'null'}, participants=[${participants.join(',')}], includes_me=${participants.includes(me)}, userName=${req.user?.userName || 'unknown'}`);
       return res.status(403).json({ error: 'forbidden', debug: { threadFound: !!t, me, participants } });
     }
+
     const isMentorSender = Boolean(req.user?.isMentor);
-    if ((t as any)?.isPaused && !isMentorSender) {
+    if (t.is_paused && !isMentorSender) {
       return res.status(423).json({ error: 'conversation_paused' });
     }
+
     const safety = await analyzeSafety(String(text));
     const flag = safety.status;
-    const m = await DMMessage.create({
-      thread: t._id,
+
+    const m = await insertOne(Tables.CHAT_MESSAGES, {
+      thread_id: t.id,
       sender: me,
       text: String(text).trim(),
-      clientId: clientId || null,
-      readBy: [me],
+      client_id: clientId || null,
+      read_by: [me],
       flag,
-      flaggedCategories: safety.flaggedCategories || [],
+      flagged_categories: safety.flaggedCategories || [],
       attachments: Array.isArray(bodyAttachments) ? bodyAttachments : [],
-    } as any);
-    t.lastMessageText = m.text;
-    t.lastMessageAt = new Date();
-    // Update per-user unread counts
-    for (const p of (t.participants || []).map(String)) {
-      if ((t as any).unread?.get?.(p) === undefined) (t as any).unread?.set?.(p, 0);
-      (t as any).unread?.set?.(p, p === me ? 0 : (((t as any).unread?.get?.(p) ?? 0) + 1));
+    });
+    if (!m) return res.status(500).json({ error: 'send_failed' });
+
+    // Update thread metadata & per-user unread counts
+    const now = new Date().toISOString();
+    const unread: Record<string, number> = { ...(t.unread || {}) };
+    for (const p of (t.participants || [])) {
+      unread[p] = p === me ? 0 : (unread[p] ?? 0) + 1;
     }
-    await t.save();
-    const payload = {
-      threadId: String(t._id),
+    await updateById(Tables.CHAT_THREADS, id, {
+      last_message_text: m.text,
+      last_message_at: now,
+      unread,
+    });
+
+    const msgPayload = {
+      threadId: t.id,
       message: {
-        id: String(m._id),
+        id: m.id,
         sender: me,
         text: m.text,
         clientId: clientId || null,
-        createdAt: m.createdAt,
+        createdAt: m.created_at,
         status: 'delivered',
         flag,
-        flaggedCategories: (m as any).flaggedCategories || [],
-        attachments: (m as any).attachments || [],
+        flaggedCategories: m.flagged_categories || [],
+        attachments: m.attachments || [],
       }
     };
-    sseHub.publishMany((t.participants||[]).map(String), { type: 'chat:message', payload });
-    try { Sentry.addBreadcrumb({ category: 'chat', message: 'message-sent', level: 'info', data: { threadId: String(t._id), flag, sender: me } }); } catch {}
-    // send per-user unread with chat:thread
-    for (const p of (t.participants || []).map(String)) {
-      sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants: (t.participants||[]).map(String), unread: (t as any).unread?.get?.(p) ?? 0, isPaused: Boolean((t as any)?.isPaused), safetyStatus: String((t as any)?.safetyStatus || 'green') } });
+    const participants = (t.participants || []);
+    sseHub.publishMany(participants, { type: 'chat:message', payload: msgPayload });
+    try { Sentry.addBreadcrumb({ category: 'chat', message: 'message-sent', level: 'info', data: { threadId: t.id, flag, sender: me } }); } catch {}
+
+    // Send per-user unread with chat:thread
+    for (const p of participants) {
+      sseHub.publish(p, { type: 'chat:thread', payload: { id: t.id, lastMessageText: m.text, lastMessageAt: now, participants, unread: unread[p] ?? 0, isPaused: Boolean(t.is_paused), safetyStatus: String(t.safety_status || 'green') } });
     }
-    const participants = (t.participants || []).map(String);
-    const receiverId = participants.find((p) => p !== me);
-    // Safety decisions
+
+    const receiverId = participants.find((p: string) => p !== me);
+
+    // ── Safety decisions ──
     if (flag === 'red') {
-      (t as any).isPaused = true;
-      (t as any).safetyStatus = 'red';
       const systemText = 'Mentoren er varslet.';
       const systemSender = receiverId || me;
-      const sys = await DMMessage.create({
-        thread: t._id,
+      const sys = await insertOne(Tables.CHAT_MESSAGES, {
+        thread_id: t.id,
         sender: systemSender,
         text: systemText,
-        readBy: [systemSender],
+        read_by: [systemSender],
         flag: 'red',
-        flaggedCategories: safety.flaggedCategories || [],
-      } as any);
-      t.lastMessageText = systemText;
-      t.lastMessageAt = new Date();
+        flagged_categories: safety.flaggedCategories || [],
+      });
+
+      const sysNow = new Date().toISOString();
+      const sysUnread: Record<string, number> = { ...unread };
       for (const p of participants) {
-        if ((t as any).unread?.get?.(p) === undefined) (t as any).unread?.set?.(p, 0);
-        (t as any).unread?.set?.(p, p === String(systemSender) ? 0 : (((t as any).unread?.get?.(p) ?? 0) + 1));
+        sysUnread[p] = p === String(systemSender) ? 0 : (sysUnread[p] ?? 0) + 1;
       }
-      await t.save();
-      const sysPayload = {
-        threadId: String(t._id),
-        message: {
-          id: String(sys._id),
-          sender: String(systemSender),
-          text: sys.text,
-          clientId: null,
-          createdAt: sys.createdAt,
-          status: 'delivered',
-          flag: 'red',
-          flaggedCategories: (sys as any).flaggedCategories || [],
-        }
-      };
-      sseHub.publishMany(participants, { type: 'chat:message', payload: sysPayload });
+      await updateById(Tables.CHAT_THREADS, id, {
+        is_paused: true,
+        safety_status: 'red',
+        last_message_text: systemText,
+        last_message_at: sysNow,
+        unread: sysUnread,
+      });
+
+      if (sys) {
+        const sysPayload = {
+          threadId: t.id,
+          message: {
+            id: sys.id,
+            sender: String(systemSender),
+            text: sys.text,
+            clientId: null,
+            createdAt: sys.created_at,
+            status: 'delivered',
+            flag: 'red',
+            flaggedCategories: sys.flagged_categories || [],
+          }
+        };
+        sseHub.publishMany(participants, { type: 'chat:message', payload: sysPayload });
+      }
       for (const p of participants) {
-        sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText, lastMessageAt: t.lastMessageAt, participants, unread: (t as any).unread?.get?.(p) ?? 0, isPaused: true, safetyStatus: 'red' } });
+        sseHub.publish(p, { type: 'chat:thread', payload: { id: t.id, lastMessageText: systemText, lastMessageAt: sysNow, participants, unread: sysUnread[p] ?? 0, isPaused: true, safetyStatus: 'red' } });
       }
-      return res.status(201).json({ ok: true, id: String(m._id) });
+      return res.status(201).json({ ok: true, id: m.id });
     }
-    if (flag === 'yellow' && (t as any).safetyStatus !== 'red') {
-      (t as any).safetyStatus = 'yellow';
-      await t.save();
+
+    if (flag === 'yellow' && t.safety_status !== 'red') {
+      await updateById(Tables.CHAT_THREADS, id, { safety_status: 'yellow' });
     }
-    if (flag === 'green' && !(t as any).isPaused && (t as any).safetyStatus !== 'red') {
-      (t as any).safetyStatus = 'green';
-      await t.save();
+    if (flag === 'green' && !t.is_paused && t.safety_status !== 'red') {
+      await updateById(Tables.CHAT_THREADS, id, { safety_status: 'green' });
     }
-    // If receiver is a mentor, trigger AI auto-reply
+
+    // ── If receiver is a mentor, trigger AI auto-reply ──
     if (receiverId) {
-      console.log(`[mentor-ai] ── Auto-reply check START for thread=${String(t._id)}, sender=${me}, receiver=${receiverId} ──`);
+      console.log(`[mentor-ai] -- Auto-reply check START for thread=${t.id}, sender=${me}, receiver=${receiverId} --`);
       void (async () => {
         try {
-          const receiver = await User.findById(receiverId).select('isMentor userName').lean();
-          console.log(`[mentor-ai] Receiver lookup: id=${receiverId}, found=${!!receiver}, isMentor=${receiver?.isMentor}, userName=${(receiver as any)?.userName}`);
-          let actAsMentor = Boolean(receiver?.isMentor);
+          const receiver = await findById(Tables.USERS, receiverId, 'id, is_mentor, user_name');
+          console.log(`[mentor-ai] Receiver lookup: id=${receiverId}, found=${!!receiver}, isMentor=${receiver?.is_mentor}, userName=${receiver?.user_name}`);
+          let actAsMentor = Boolean(receiver?.is_mentor);
+
           // Fallback: if the receiver has knowledge base documents, treat as a mentor
           if (!actAsMentor) {
             try {
-              const kbCount = await CoachKnowledge.countDocuments({ userId: receiverId });
+              const kbCount = await count(Tables.COACH_KNOWLEDGE, { user_id: receiverId });
               console.log(`[mentor-ai] KB fallback check: ${kbCount} documents found for receiver ${receiverId}`);
               if (kbCount > 0) {
                 actAsMentor = true;
-                console.log(`[mentor-ai] Treating as mentor via KB fallback, auto-fixing isMentor flag`);
-                await User.updateOne({ _id: receiverId }, { $set: { isMentor: true } });
+                console.log(`[mentor-ai] Treating as mentor via KB fallback, auto-fixing is_mentor flag`);
+                await updateById(Tables.USERS, receiverId, { is_mentor: true });
               }
             } catch (kbErr: any) {
               console.error(`[mentor-ai] KB fallback check failed:`, kbErr?.message || kbErr);
             }
           }
+
           if (!actAsMentor) {
-            console.log(`[mentor-ai] ── Receiver is NOT a mentor, skipping AI reply ──`);
+            console.log(`[mentor-ai] -- Receiver is NOT a mentor, skipping AI reply --`);
             return;
           }
+
           console.log(`[mentor-ai] Generating AI response for mentor ${receiverId}, message: "${String(m.text).slice(0, 60)}..."`);
           const startTime = Date.now();
           const aiText = await generateMentorResponse(me, receiverId, m.text);
           const elapsed = Date.now() - startTime;
           console.log(`[mentor-ai] AI response generated in ${elapsed}ms (${String(aiText || '').length} chars)`);
+
           if (!aiText || !String(aiText).trim()) {
-            console.log(`[mentor-ai] ── AI returned empty response, not saving ──`);
+            console.log(`[mentor-ai] -- AI returned empty response, not saving --`);
             return;
           }
+
           // Re-fetch the thread to avoid stale data race conditions
-          const freshThread = await DMThread.findById(t._id);
+          const freshThread = await findById(Tables.CHAT_THREADS, t.id);
           if (!freshThread) {
-            console.error(`[mentor-ai] Thread ${String(t._id)} no longer exists`);
+            console.error(`[mentor-ai] Thread ${t.id} no longer exists`);
             return;
           }
-          const aiMessage = await DMMessage.create({
-            thread: freshThread._id,
+
+          const aiMessage = await insertOne(Tables.CHAT_MESSAGES, {
+            thread_id: freshThread.id,
             sender: receiverId,
             text: String(aiText).trim(),
-            readBy: [receiverId],
+            read_by: [receiverId],
             flag: 'green',
-          } as any);
-          freshThread.lastMessageText = aiMessage.text;
-          freshThread.lastMessageAt = new Date();
+          });
+          if (!aiMessage) return;
+
+          const aiNow = new Date().toISOString();
+          const freshUnread: Record<string, number> = { ...(freshThread.unread || {}) };
           for (const p of participants) {
-            if ((freshThread as any).unread?.get?.(p) === undefined) (freshThread as any).unread?.set?.(p, 0);
-            (freshThread as any).unread?.set?.(p, p === receiverId ? 0 : (((freshThread as any).unread?.get?.(p) ?? 0) + 1));
+            freshUnread[p] = p === receiverId ? 0 : (freshUnread[p] ?? 0) + 1;
           }
-          await freshThread.save();
-          console.log(`[mentor-ai] AI message saved: id=${String(aiMessage._id)}`);
+          await updateById(Tables.CHAT_THREADS, freshThread.id, {
+            last_message_text: aiMessage.text,
+            last_message_at: aiNow,
+            unread: freshUnread,
+          });
+
+          console.log(`[mentor-ai] AI message saved: id=${aiMessage.id}`);
+
           const aiPayload = {
-            threadId: String(freshThread._id),
+            threadId: freshThread.id,
             message: {
-              id: String(aiMessage._id),
+              id: aiMessage.id,
               sender: receiverId,
               text: aiMessage.text,
               clientId: null,
-              createdAt: aiMessage.createdAt,
+              createdAt: aiMessage.created_at,
               status: 'delivered',
               flag: 'green',
               flaggedCategories: [],
@@ -356,63 +386,82 @@ r.post(
           };
           sseHub.publishMany(participants, { type: 'chat:message', payload: aiPayload });
           for (const p of participants) {
-            sseHub.publish(p, { type: 'chat:thread', payload: { id: String(freshThread._id), lastMessageText: freshThread.lastMessageText, lastMessageAt: freshThread.lastMessageAt, participants, unread: (freshThread as any).unread?.get?.(p) ?? 0, isPaused: Boolean((freshThread as any)?.isPaused), safetyStatus: String((freshThread as any)?.safetyStatus || 'green') } });
+            sseHub.publish(p, { type: 'chat:thread', payload: { id: freshThread.id, lastMessageText: aiMessage.text, lastMessageAt: aiNow, participants, unread: freshUnread[p] ?? 0, isPaused: Boolean(freshThread.is_paused), safetyStatus: String(freshThread.safety_status || 'green') } });
           }
-          console.log(`[mentor-ai] ── Auto-reply COMPLETE for thread=${String(freshThread._id)} ──`);
+          console.log(`[mentor-ai] -- Auto-reply COMPLETE for thread=${freshThread.id} --`);
         } catch (err: any) {
-          console.error('[mentor-ai] ── Auto-reply FAILED ──', receiverId, ':', err?.message || err);
+          console.error('[mentor-ai] -- Auto-reply FAILED --', receiverId, ':', err?.message || err);
           console.error('[mentor-ai] Stack:', err?.stack);
         }
       })();
     }
-    return res.status(201).json({ ok: true, id: String(m._id) });
+
+    return res.status(201).json({ ok: true, id: m.id });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
+// ── POST /conversations/:id/resume — mentor resumes a paused conversation ───
 r.post(
   '/conversations/:id/resume',
   ensureAuth as any,
-  validateZod({ params: objectIdParam('id'), body: z.object({}).strict() }),
+  validateZod({ params: uuidParam('id'), body: z.object({}).strict() }),
   async (req: any, res) => {
   try {
-    const me = String(req.user._id);
+    const me = String(req.user?._id || req.user?.id || '');
     if (!req.user?.isMentor) return res.status(403).json({ error: 'forbidden' });
     const { id } = req.params;
-    const t = await DMThread.findById(id);
+    const t = await findById(Tables.CHAT_THREADS, id);
     if (!t || !isParticipant(t, me)) return res.status(403).json({ error: 'forbidden' });
-    (t as any).isPaused = false;
-    (t as any).safetyStatus = 'green';
-    await t.save();
-    const participants = (t.participants || []).map(String);
+
+    await updateById(Tables.CHAT_THREADS, id, { is_paused: false, safety_status: 'green' });
+
+    const participants = t.participants || [];
     for (const p of participants) {
-      sseHub.publish(p, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText || '', lastMessageAt: t.lastMessageAt || null, participants, unread: (t as any).unread?.get?.(p) ?? 0, isPaused: false, safetyStatus: 'green' } });
+      sseHub.publish(p, { type: 'chat:thread', payload: { id: t.id, lastMessageText: t.last_message_text || '', lastMessageAt: t.last_message_at || null, participants, unread: t.unread?.[p] ?? 0, isPaused: false, safetyStatus: 'green' } });
     }
     return res.json({ ok: true });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
+// ── POST /conversations/:id/read — mark messages as read ────────────────────
 r.post(
   '/conversations/:id/read',
   ensureAuth as any,
-  validateZod({ params: objectIdParam('id'), body: z.object({}).strict() }),
+  validateZod({ params: uuidParam('id'), body: z.object({}).strict() }),
   async (req: any, res) => {
   try {
-    const me = String(req.user._id);
+    const me = String(req.user?._id || req.user?.id || '');
     const { id } = req.params;
-    const t = await DMThread.findById(id);
+    const t = await findById(Tables.CHAT_THREADS, id);
     if (!t || !isParticipant(t, me)) return res.status(403).json({ error: 'forbidden' });
-    // Mark messages read and clear unread count
+
+    // Add me to read_by for messages sent by others (no atomic array_append via JS client)
     try {
-      await DMMessage.updateMany({ thread: id, sender: { $ne: me } }, { $addToSet: { readBy: new Types.ObjectId(me) } } as any);
-    } catch {}
-    try {
-      (t as any).unread?.set?.(me, 0);
-      await t.save();
+      const { data: unreadMsgs } = await db
+        .from(Tables.CHAT_MESSAGES)
+        .select('id, read_by')
+        .eq('thread_id', id)
+        .neq('sender', me);
+
+      if (unreadMsgs) {
+        for (const msg of unreadMsgs) {
+          const readBy: string[] = msg.read_by || [];
+          if (!readBy.includes(me)) {
+            await db.from(Tables.CHAT_MESSAGES).update({ read_by: [...readBy, me] }).eq('id', msg.id);
+          }
+        }
+      }
     } catch {}
 
-    sseHub.publishMany((t.participants||[]).map(String), { type: 'chat:read', payload: { threadId: id, by: me } });
-    // Push updated thread unread to reader
-    sseHub.publish(me, { type: 'chat:thread', payload: { id: String(t._id), lastMessageText: t.lastMessageText || '', lastMessageAt: t.lastMessageAt || null, participants: (t.participants||[]).map(String), unread: 0 } });
+    // Clear unread count for this user
+    try {
+      const unread = { ...(t.unread || {}), [me]: 0 };
+      await updateById(Tables.CHAT_THREADS, id, { unread });
+    } catch {}
+
+    const participants = t.participants || [];
+    sseHub.publishMany(participants, { type: 'chat:read', payload: { threadId: id, by: me } });
+    sseHub.publish(me, { type: 'chat:thread', payload: { id: t.id, lastMessageText: t.last_message_text || '', lastMessageAt: t.last_message_at || null, participants, unread: 0 } });
     return res.json({ ok: true });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
@@ -453,12 +502,12 @@ r.post(
   ensureAuth as any,
   async (req: any, res) => {
   try {
-    const me = String(req.user._id);
+    const me = String(req.user?._id || req.user?.id || '');
     const { id } = req.params;
-    const t = await DMThread.findById(id).select('participants').lean();
+    const t = await findById(Tables.CHAT_THREADS, id, 'id, participants');
     if (!t || !isParticipant(t, me)) return res.status(403).json({ error: 'forbidden' });
-    const others = (t.participants || []).map(String).filter((p) => p !== me);
-    const payload = { threadId: String(t._id), userId: me };
+    const others = (t.participants || []).filter((p: string) => p !== me);
+    const payload = { threadId: t.id, userId: me };
     for (const uid of others) {
       ssePush(uid, 'chat:typing', payload);
     }
@@ -473,14 +522,18 @@ r.get('/debug-ai', async (req: any, res) => {
   const userName = String(req.query?.userName || 'Coach.Majen');
   const testMessage = String(req.query?.testMessage || 'Hei, kan du hjelpe meg?');
 
-  // Step 1: Find the mentor user
+  // Step 1: Find the mentor user (case-insensitive via Supabase ilike)
   let mentorId = '';
   try {
     const start = Date.now();
-    const escaped = userName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const mentor = await User.findOne({ userName: { $regex: `^${escaped}$`, $options: 'i' } }).select('_id userName isMentor').lean();
-    steps.push({ step: '1_find_mentor', ok: !!mentor, detail: mentor ? `id=${String(mentor._id)}, userName=${(mentor as any).userName}, isMentor=${(mentor as any).isMentor}` : `No user found for "${userName}"`, ms: Date.now() - start });
-    if (mentor) mentorId = String(mentor._id);
+    const { data: mentor } = await db
+      .from(Tables.USERS)
+      .select('id, is_mentor, user_name')
+      .ilike('user_name', userName)
+      .limit(1)
+      .maybeSingle();
+    steps.push({ step: '1_find_mentor', ok: !!mentor, detail: mentor ? `id=${mentor.id}, userName=${mentor.user_name}, isMentor=${mentor.is_mentor}` : `No user found for "${userName}"`, ms: Date.now() - start });
+    if (mentor) mentorId = String(mentor.id);
   } catch (err: any) {
     steps.push({ step: '1_find_mentor', ok: false, detail: err?.message || String(err) });
   }
@@ -490,9 +543,12 @@ r.get('/debug-ai', async (req: any, res) => {
   // Step 2: Check KB documents
   try {
     const start = Date.now();
-    const count = await CoachKnowledge.countDocuments({ userId: mentorId });
-    const sample = await CoachKnowledge.find({ userId: mentorId }).select('title classification').limit(3).lean();
-    steps.push({ step: '2_kb_documents', ok: count > 0, detail: `${count} docs. Sample: ${sample.map((d: any) => `"${d.title}" (${d.classification || 'unclassified'})`).join(', ')}`, ms: Date.now() - start });
+    const kbCount = await count(Tables.COACH_KNOWLEDGE, { user_id: mentorId });
+    const sample = await findMany(Tables.COACH_KNOWLEDGE, { user_id: mentorId }, {
+      select: 'title, classification',
+      limit: 3,
+    });
+    steps.push({ step: '2_kb_documents', ok: kbCount > 0, detail: `${kbCount} docs. Sample: ${sample.map((d: any) => `"${d.title}" (${d.classification || 'unclassified'})`).join(', ')}`, ms: Date.now() - start });
   } catch (err: any) {
     steps.push({ step: '2_kb_documents', ok: false, detail: err?.message || String(err) });
   }

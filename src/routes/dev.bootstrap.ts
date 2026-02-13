@@ -1,9 +1,5 @@
 import { Router } from "express";
-import { User } from "../app/Models/User";
-import TrainingPlanVersion from "../models/TrainingPlanVersion";
-import NutritionPlanVersion from "../models/NutritionPlanVersion";
-import StudentState from "../models/StudentState";
-import StudentSnapshot from "../models/StudentSnapshot";
+import { findOne, insertOne, upsert, Tables } from "../lib/db";
 import { validateZod } from "../app/Middlewares";
 import { z } from "zod";
 
@@ -17,14 +13,15 @@ r.post("/dev/bootstrap", validateZod({ body: bootstrapSchema }), async (req: any
     if (!devOn) return res.status(404).json({ error: 'DEV_LOGIN_DISABLED', value: process.env.DEV_LOGIN_ENABLED });
     const email = String((req.body?.email || "demo@mentoros.app").toLowerCase());
 
-    let user = await (User as any).findOne({ email });
-    if (!user) user = await (User as any).create({ email, fullName: "Demo User" });
+    let user = await findOne(Tables.USERS, { email });
+    if (!user) user = await insertOne(Tables.USERS, { email, full_name: "Demo User" });
+    if (!user) return res.status(500).json({ error: "bootstrap failed" });
 
     // Ensure initial plan versions and state
-    let state = await StudentState.findOne({ user: user._id });
+    let state = await findOne(Tables.STUDENT_STATES, { user_id: user.id });
     if (!state) {
-      const tp = await TrainingPlanVersion.create({
-        user: user._id,
+      const tp = await insertOne(Tables.TRAINING_PLAN_VERSIONS, {
+        user_id: user.id,
         version: 1,
         source: "manual",
         reason: "Bootstrap",
@@ -34,30 +31,35 @@ r.post("/dev/bootstrap", validateZod({ body: bootstrapSchema }), async (req: any
           { day: 'Fri', focus: 'Push', exercises: [{ name: 'Bench', sets: 3, reps: '8' }] },
         ],
       });
-      const np = await NutritionPlanVersion.create({
-        user: user._id,
+      const np = await insertOne(Tables.NUTRITION_PLAN_VERSIONS, {
+        user_id: user.id,
         version: 1,
         source: "manual",
         reason: "Bootstrap",
         kcal: 2400,
-        proteinGrams: 140,
-        carbsGrams: 300,
-        fatGrams: 70,
+        protein_grams: 140,
+        carbs_grams: 300,
+        fat_grams: 70,
       });
-      state = await StudentState.create({ user: user._id, currentTrainingPlanVersion: tp._id, currentNutritionPlanVersion: np._id });
-      await StudentSnapshot.findOneAndUpdate(
-        { user: user._id },
-        { $setOnInsert: { weightSeries: [], trainingPlanSummary: { daysPerWeek: 3 }, nutritionSummary: { kcal: 2400, protein: 140, carbs: 300, fat: 70 }, kpis: { adherence7d: 0 } } },
-        { upsert: true }
-      );
+      if (!tp || !np) return res.status(500).json({ error: "bootstrap failed" });
+      state = await insertOne(Tables.STUDENT_STATES, {
+        user_id: user.id,
+        current_training_plan_version: tp.id,
+        current_nutrition_plan_version: np.id,
+      });
+      await upsert(Tables.STUDENT_SNAPSHOTS, {
+        user_id: user.id,
+        weight_series: [],
+        training_plan_summary: { daysPerWeek: 3 },
+        nutrition_summary: { kcal: 2400, protein: 140, carbs: 300, fat: 70 },
+        kpis: { adherence7d: 0 },
+      }, 'user_id');
     }
 
-    return res.json({ ok: true, userId: user._id.toString() });
+    return res.json({ ok: true, userId: user.id });
   } catch (e) {
     return res.status(500).json({ error: "bootstrap failed" });
   }
 });
 
 export default r;
-
-

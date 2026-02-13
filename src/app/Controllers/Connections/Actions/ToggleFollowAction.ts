@@ -2,9 +2,8 @@ import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
 import { plainToClass } from "class-transformer";
 import { FollowInput } from "../Inputs/createFollowInput";
-import { userConnection } from "../../../Models/Connection";
 import { validate } from "class-validator";
-import { User } from "../../../Models/User";
+import { findOne, findById, insertOne, deleteById, Tables } from "../../../../lib/db";
 import { sendNotification } from "../../../../utils/Notifications/notificationService";
 import { FirebaseNotificationEnum } from "../../../../types/enums/FirebaseNotificationEnum";
 import { saveNotification } from "../../Notifications/Actions/saveNotification";
@@ -22,24 +21,25 @@ export const toggleFollow = async (
       return res.status(400).json({ errors: validationErrors });
     }
 
-    const followExists = await userConnection.findOne({
+    const followExists = await findOne(Tables.USER_CONNECTIONS, {
       owner: user.id,
-      followingTo: createFollowInput.followingTo,
+      following_to: createFollowInput.followingTo,
     });
 
     if (followExists) {
-      await userConnection.deleteOne({ _id: followExists.id });
+      await deleteById(Tables.USER_CONNECTIONS, followExists.id);
       return res.json({
         message: "Account Unfollowed",
       });
     }
 
-    const newFollow = await userConnection.create({
+    const newFollow = await insertOne(Tables.USER_CONNECTIONS, {
       owner: user.id,
-      followingTo: createFollowInput.followingTo,
+      following_to: createFollowInput.followingTo,
     });
+
     try {
-      const followedUser = await User.findById(createFollowInput.followingTo);
+      const followedUser = await findById(Tables.USERS, createFollowInput.followingTo);
       if (followedUser && followedUser.fcm_token) {
         const notificationToken = followedUser.fcm_token;
         if (notificationToken) {
@@ -57,11 +57,10 @@ export const toggleFollow = async (
           await saveNotification({
             title: notificationTitle,
             description: notificationDescription,
-            sentTo: [followedUser._id],
+            sentTo: [followedUser.id],
             type: FirebaseNotificationEnum.FOLLOW,
             notificationOnPost: null,
-            notificationFromUser: user.id
-
+            notificationFromUser: user.id,
           });
         } else {
           console.error("FCM token for the user not found");
@@ -77,11 +76,6 @@ export const toggleFollow = async (
     });
   } catch (error) {
     console.error("Error following account:", error);
-    if (error.code === 11000) {
-      return res.status(500).json({
-        error: { message: "You are already following this account", error },
-      });
-    }
     return res
       .status(500)
       .json({ error: { message: "Something went wrong." } });

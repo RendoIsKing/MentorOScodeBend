@@ -1,19 +1,15 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { Interaction } from "../../../Models/Interaction";
-import { Post } from "../../../Models/Post";
-import { Subscription } from "../../../Models/Subscription";
-import { Transaction } from "../../../Models/Transaction";
-import { User } from "../../../Models/User";
-import { UserData } from "../../../Models/UserData";
+import { db, Tables, findMany, insertOne } from "../../../../lib/db";
 import { FileFormatEnum } from "../../../../types/enums/fileFormatEnum";
+
 export const processUserData = async (
   req: Request,
   res: Response
 ): Promise<Response> => {
   try {
     const user = req.user as UserInterface;
-    const requestedUserId = user._id;
+    const requestedUserId = (user as any).id || user._id;
 
     const { fileFormat } = req.body;
 
@@ -29,37 +25,45 @@ export const processUserData = async (
         .json({ error: { message: "Invalid file format" } });
     }
 
-    const existingDatasets = await UserData.find({
-      user: requestedUserId,
-      fileFormat,
-      isExpired: false,
+    const existingDatasets = await findMany(Tables.USER_DATA, {
+      user_id: requestedUserId,
+      file_format: fileFormat,
+      is_expired: false,
     });
 
     if (existingDatasets.length > 1) {
-      await UserData.updateMany(
-        { user: requestedUserId, fileFormat, isExpired: false },
-        { $set: { isExpired: true } }
-      );
+      await db
+        .from(Tables.USER_DATA)
+        .update({ is_expired: true })
+        .eq("user_id", requestedUserId)
+        .eq("file_format", fileFormat)
+        .eq("is_expired", false);
     }
 
-    const userInfo = await User.findById(
-      requestedUserId,
-      "username photoId bio email completePhoneNumber"
-    ).lean();
+    // Fetch user info (selected fields)
+    const { data: userInfo } = await db
+      .from(Tables.USERS)
+      .select("user_name, photo_id, bio, email, complete_phone_number")
+      .eq("id", requestedUserId)
+      .single();
 
-    const posts = await Post.find({ user: requestedUserId }).lean();
+    // Fetch posts
+    const posts = await findMany(Tables.POSTS, { user_id: requestedUserId });
 
-    const interactions = await Interaction.find({
-      interactedBy: requestedUserId,
-    }).lean();
+    // Fetch interactions
+    const interactions = await findMany(Tables.INTERACTIONS, {
+      interacted_by: requestedUserId,
+    });
 
-    const transactions = await Transaction.find({
-      userId: requestedUserId,
-    }).lean();
+    // Fetch transactions
+    const transactions = await findMany(Tables.TRANSACTIONS, {
+      user_id: requestedUserId,
+    });
 
-    const subscriptions = await Subscription.find({
-      userId: requestedUserId,
-    }).lean();
+    // Fetch subscriptions
+    const subscriptions = await findMany(Tables.SUBSCRIPTIONS, {
+      user_id: requestedUserId,
+    });
 
     const aggregatedData = {
       userInfo,
@@ -69,14 +73,14 @@ export const processUserData = async (
       subscriptions,
     };
 
-    const userData = new UserData({
-      user: requestedUserId,
+    const userData = await insertOne(Tables.USER_DATA, {
+      user_id: requestedUserId,
       data: aggregatedData,
-      fileFormat,
-      downloadBefore: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      file_format: fileFormat,
+      download_before: new Date(
+        Date.now() + 30 * 24 * 60 * 60 * 1000
+      ).toISOString(),
     });
-
-    await userData.save();
 
     return res.json({ userData });
   } catch (error) {

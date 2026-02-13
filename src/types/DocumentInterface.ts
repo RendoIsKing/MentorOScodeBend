@@ -1,8 +1,9 @@
-import { Document } from "mongoose";
 import { DocumentEnum } from "./DocumentEnum";
 import { DocumentStatusEnum } from "./DocumentStatusEnum";
 
-export interface DocumentInterface extends Document {
+export interface DocumentInterface {
+  _id?: string;
+  id?: string;
   title: string;
   description: string;
   dob: string;

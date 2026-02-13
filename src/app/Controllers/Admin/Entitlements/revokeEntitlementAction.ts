@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { User } from "../../../Models/User";
+import { findById, updateById, Tables } from "../../../../lib/db";
 
 export const revokeEntitlement = async (
   req: Request,
@@ -9,30 +9,44 @@ export const revokeEntitlement = async (
     const { id } = req.params;
     const { role } = req.body;
     if (!role) {
-      return res.status(400).json({ error: { message: "role is required." } });
+      return res
+        .status(400)
+        .json({ error: { message: "role is required." } });
     }
 
-    const user = await User.findById(id);
-    if (!user || user.isDeleted) {
-      return res.status(404).json({ error: { message: "User not found." } });
+    const user = await findById(Tables.USERS, id);
+    if (!user || user.is_deleted) {
+      return res
+        .status(404)
+        .json({ error: { message: "User not found." } });
     }
 
     const roleValue = String(role).toLowerCase();
+    let updates: Record<string, any> = {};
+
     if (roleValue === "mentor") {
-      user.isMentor = false;
-      user.hasDocumentVerified = false;
+      updates = {
+        is_mentor: false,
+        has_document_verified: false,
+      };
     } else if (roleValue === "verified") {
-      user.isVerified = false;
-      user.verifiedAt = null;
-      user.verifiedBy = null;
+      updates = {
+        is_verified: false,
+        verified_at: null,
+        verified_by: null,
+      };
     } else {
-      return res.status(400).json({ error: { message: "Invalid role." } });
+      return res
+        .status(400)
+        .json({ error: { message: "Invalid role." } });
     }
 
-    await user.save();
+    const updated = await updateById(Tables.USERS, id, updates);
 
-    return res.json({ data: user, message: "Entitlement revoked." });
+    return res.json({ data: updated, message: "Entitlement revoked." });
   } catch (error) {
-    return res.status(500).json({ error: { message: "Something went wrong." } });
+    return res
+      .status(500)
+      .json({ error: { message: "Something went wrong." } });
   }
 };

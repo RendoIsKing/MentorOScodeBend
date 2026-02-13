@@ -8,20 +8,13 @@ import { InteractionController } from "../app/Controllers/Interaction";
 import { chatWithCoachEngh, chatWithCoachMajen } from "../app/Controllers/Interaction/chat.controller";
 import { generateFirstPlans } from "../app/Controllers/Interaction/generateFirstPlans";
 import { decideAndApplyAction } from "../app/Controllers/Interaction/decisionEngine";
-import { Goal, TrainingPlan, NutritionPlan } from "../app/Models/PlanModels";
-import TrainingPlanVersion from "../models/TrainingPlanVersion";
-import NutritionPlanVersion from "../models/NutritionPlanVersion";
-import StudentState from "../models/StudentState";
-import ChangeEvent from "../models/ChangeEvent";
+import { db, findById, findOne, insertOne, updateMany, upsert, Tables } from "../lib/db";
 import { nextTrainingVersion, nextNutritionVersion } from "../services/versioning/nextVersion";
 import { publish } from "../services/events/publish";
 import { patchSwapExercise, patchSetDaysPerWeek } from "../services/planRules/training";
 import { applyTrainingPatch, applyNutritionPatch } from "../services/planRules/materialize";
-import jwt from 'jsonwebtoken';
-import { UserProfile } from '../app/Models/UserProfile';
 import { createMulterInstance } from '../app/Middlewares/fileUpload';
 import { FileEnum } from '../types/FileEnum';
-import { CoachKnowledge } from '../app/Models/CoachKnowledge';
 import { getThread, appendMessage, clearThread } from '../app/Controllers/Interaction/thread.controller';
 import { z } from "zod";
 import { objectId } from "../app/Validation/requestSchemas";
@@ -110,10 +103,9 @@ InteractionRoutes.post("/chat/majen", ensureAuth as any, perUserIpLimiter({ wind
 // Expose Majen coach user for FE convenience (dev only if seeded)
 InteractionRoutes.get('/chat/majen/coach', ensureAuth as any, async (req, res) => {
   try {
-    const { User } = await import('../app/Models/User');
-    const u = await (User as any).findOne({ userName: 'coach-majen' }).lean();
-    if (!u?._id) return res.status(404).json({ message: 'not found' });
-    return res.json({ id: String(u._id), userName: u.userName, fullName: u.fullName });
+    const u = await findOne(Tables.USERS, { user_name: 'coach-majen' });
+    if (!u?.id) return res.status(404).json({ message: 'not found' });
+    return res.json({ id: String(u.id), userName: u.user_name, fullName: u.full_name });
   } catch {
     return res.status(500).json({ message: 'lookup failed' });
   }
@@ -130,27 +122,14 @@ function validateActionBody(body: any, userId: string): { ok: true; data: Action
 InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try { Sentry.addBreadcrumb({ category: 'actions', message: 'action-apply', level: 'info', data: { type: req.body?.type } }); } catch {}
   try {
-    let userId: any = (req as any).user?._id || req.body.userId || (req as any).session?.user?.id;
-    if (!userId) {
-      const cookie = req.headers?.cookie as string | undefined;
-      const match = cookie?.match(/auth_token=([^;]+)/);
-      if (match) {
-        try {
-          const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
-          const decoded: any = (await import('jsonwebtoken')).default.verify(token, secret);
-          userId = decoded?.id || decoded?._id;
-        } catch {}
-      }
-    }
+    let userId: any = (req as any).user?._id || (req as any).user?.id || req.body.userId;
     if (!userId) {
       // Dev fallback: if running with dev routes enabled and no session cookie was forwarded
       try {
         const enabled = String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase();
         if (enabled === 'true' || (process.env.NODE_ENV !== 'production')) {
-          const { User } = await import('../app/Models/User');
-          const demo = await (User as any).findOne({ email: 'demo@mentoros.app' }).lean();
-          if (demo?._id) userId = String(demo._id);
+          const demo = await findOne(Tables.USERS, { email: 'demo@mentoros.app' });
+          if (demo?.id) userId = String(demo.id);
         }
       } catch {}
     }
@@ -171,10 +150,8 @@ InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserI
       if (kcal < MIN_KCAL || kcal > MAX_KCAL) return res.status(422).json({ error: `kcal must be between ${MIN_KCAL} and ${MAX_KCAL}` });
     }
     // Read current versions via StudentState pointers
-    const StudentState = (await import('../models/StudentState')).default;
-    const TrainingPlanVersion = (await import('../models/TrainingPlanVersion')).default;
-    const state = await StudentState.findOne({ user: userId });
-    const currentTraining = state?.currentTrainingPlanVersion ? await TrainingPlanVersion.findById(state.currentTrainingPlanVersion) : null;
+    const { data: state } = await db.from(Tables.STUDENT_STATES).select('*').eq('user_id', userId).maybeSingle();
+    const currentTraining = state?.current_training_plan_version ? await findById(Tables.TRAINING_PLAN_VERSIONS, state.current_training_plan_version) : null;
 
     if (type === 'PLAN_SWAP_EXERCISE') {
       const vr = SwapExerciseSchema.safeParse(payload);
@@ -205,16 +182,15 @@ InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserI
     if (type === 'NUTRITION_SET_CALORIES') {
       const kcal = Number(payload?.kcal);
       const ret = await applyNutritionPatch(userId, { kcal, reason: { summary: `Kalorier satt til ${kcal}` } } as any);
-      try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Satte kalorier: ${kcal} kcal`, actor: (req as any)?.user?._id, before: { current: state?.currentNutritionPlanVersion }, after: { kcal } }); } catch {}
+      try { await insertOne(Tables.CHANGE_EVENTS, { user_id: userId, type: 'NUTRITION_EDIT', summary: `Satte kalorier: ${kcal} kcal`, actor: (req as any)?.user?._id || (req as any)?.user?.id, before_data: { current: state?.current_nutrition_plan_version }, after_data: { kcal } }); } catch {}
       return res.json({ ok: true, summary: `Kalorier satt til ${kcal}`, ...ret });
     }
     if (type === 'WEIGHT_LOG') {
       const vr = WeightLogSchema.safeParse(payload);
       if (!vr.success) return res.status(422).json({ error: 'validation_failed', details: vr.error.flatten() });
       const { date, kg } = vr.data;
-      const { WeightEntry } = await import('../app/Models/WeightEntry');
-      await WeightEntry.updateOne({ userId, date }, { $set: { kg } }, { upsert: true });
-      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})`, actor: (req as any)?.user?._id, after: { date, kg } }); } catch {}
+      await upsert(Tables.WEIGHT_ENTRIES, { user_id: userId, date, kg }, 'user_id,date');
+      try { await insertOne(Tables.CHANGE_EVENTS, { user_id: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})`, actor: (req as any)?.user?._id || (req as any)?.user?.id, after_data: { date, kg } }); } catch {}
       await publish({ type: 'WEIGHT_LOGGED', user: userId, date, kg });
       return res.json({ ok: true, summary: `Vekt ${kg}kg lagret` });
     }
@@ -222,9 +198,8 @@ InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserI
       const vr = WeightDeleteSchema.safeParse(payload);
       if (!vr.success) return res.status(422).json({ error: 'validation_failed', details: vr.error.flatten() });
       const { date } = vr.data;
-      const { WeightEntry } = await import('../app/Models/WeightEntry');
-      await WeightEntry.deleteOne({ userId, date });
-      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}`, actor: (req as any)?.user?._id, before: { date } }); } catch {}
+      await db.from(Tables.WEIGHT_ENTRIES).delete().eq('user_id', userId).eq('date', date);
+      try { await insertOne(Tables.CHANGE_EVENTS, { user_id: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}`, actor: (req as any)?.user?._id || (req as any)?.user?.id, before_data: { date } }); } catch {}
       await publish({ type: 'WEIGHT_DELETED', user: userId as any, date });
       return res.json({ ok: true, summary: `Vekt slettet (${date})` });
     }
@@ -238,27 +213,14 @@ InteractionRoutes.post('/interaction/actions/apply', ensureAuth as any, perUserI
 // /api/backend/v1/interaction/actions/apply (expected by FE/tests)
 InteractionRoutes.post('/actions/apply', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
-    let userId: any = (req as any).user?._id || req.body.userId;
-    if (!userId) {
-      const cookie = req.headers?.cookie as string | undefined;
-      const match = cookie?.match(/auth_token=([^;]+)/);
-      if (match) {
-        try {
-          const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
-          const decoded: any = (await import('jsonwebtoken')).default.verify(token, secret);
-          userId = decoded?.id || decoded?._id;
-        } catch {}
-      }
-    }
+    let userId: any = (req as any).user?._id || (req as any).user?.id || req.body.userId;
     if (!userId) {
       // Dev fallback: if running with dev routes enabled and no session cookie was forwarded
       try {
         const enabled = String(process.env.DEV_LOGIN_ENABLED || '').trim().toLowerCase();
         if (enabled === 'true' || (process.env.NODE_ENV !== 'production')) {
-          const { User } = await import('../app/Models/User');
-          const demo = await (User as any).findOne({ email: 'demo@mentoros.app' }).lean();
-          if (demo?._id) userId = String(demo._id);
+          const demo = await findOne(Tables.USERS, { email: 'demo@mentoros.app' });
+          if (demo?.id) userId = String(demo.id);
         }
       } catch {}
     }
@@ -276,10 +238,8 @@ InteractionRoutes.post('/actions/apply', ensureAuth as any, perUserIpLimiter({ w
       if (!Number.isFinite(kcal)) return res.status(400).json({ error: 'kcal required' });
       if (kcal < MIN_KCAL || kcal > MAX_KCAL) return res.status(422).json({ error: `kcal must be between ${MIN_KCAL} and ${MAX_KCAL}` });
     }
-    const StudentState = (await import('../models/StudentState')).default;
-    const TrainingPlanVersion = (await import('../models/TrainingPlanVersion')).default;
-    const state = await StudentState.findOne({ user: userId });
-    const currentTraining = state?.currentTrainingPlanVersion ? await TrainingPlanVersion.findById(state.currentTrainingPlanVersion) : null;
+    const { data: state } = await db.from(Tables.STUDENT_STATES).select('*').eq('user_id', userId).maybeSingle();
+    const currentTraining = state?.current_training_plan_version ? await findById(Tables.TRAINING_PLAN_VERSIONS, state.current_training_plan_version) : null;
 
     if (type === 'PLAN_SWAP_EXERCISE') {
       if (!currentTraining) return res.status(404).json({ error: 'No current training plan' });
@@ -306,22 +266,20 @@ InteractionRoutes.post('/actions/apply', ensureAuth as any, perUserIpLimiter({ w
     if (type === 'NUTRITION_SET_CALORIES') {
       const kcal = Number(payload?.kcal);
       const ret = await applyNutritionPatch(userId, { kcal, reason: { summary: `Kalorier satt til ${kcal}` } } as any);
-      try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Satte kalorier: ${kcal} kcal`, actor: (req as any)?.user?._id, before: { current: state?.currentNutritionPlanVersion }, after: { kcal } }); } catch {}
+      try { await insertOne(Tables.CHANGE_EVENTS, { user_id: userId, type: 'NUTRITION_EDIT', summary: `Satte kalorier: ${kcal} kcal`, actor: (req as any)?.user?._id || (req as any)?.user?.id, before_data: { current: state?.current_nutrition_plan_version }, after_data: { kcal } }); } catch {}
       return res.json({ ok: true, summary: `Kalorier satt til ${kcal}`, ...ret });
     }
     if (type === 'WEIGHT_LOG') {
       const { date, kg } = payload || {};
-      const { WeightEntry } = await import('../app/Models/WeightEntry');
-      await WeightEntry.updateOne({ userId, date }, { $set: { kg } }, { upsert: true });
-      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})`, actor: (req as any)?.user?._id, after: { date, kg } }); } catch {}
+      await upsert(Tables.WEIGHT_ENTRIES, { user_id: userId, date, kg }, 'user_id,date');
+      try { await insertOne(Tables.CHANGE_EVENTS, { user_id: userId, type: 'WEIGHT_LOG', summary: `Logget vekt: ${kg} kg (${date})`, actor: (req as any)?.user?._id || (req as any)?.user?.id, after_data: { date, kg } }); } catch {}
       await publish({ type: 'WEIGHT_LOGGED', user: userId, date, kg });
       return res.json({ ok: true, summary: `Vekt ${kg}kg lagret` });
     }
     if (type === 'WEIGHT_DELETE') {
       const { date } = payload || {};
-      const { WeightEntry } = await import('../app/Models/WeightEntry');
-      await WeightEntry.deleteOne({ userId, date });
-      try { const ChangeEvent = (await import('../models/ChangeEvent')).default; await ChangeEvent.create({ user: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}`, actor: (req as any)?.user?._id, before: { date } }); } catch {}
+      await db.from(Tables.WEIGHT_ENTRIES).delete().eq('user_id', userId).eq('date', date);
+      try { await insertOne(Tables.CHANGE_EVENTS, { user_id: userId, type: 'WEIGHT_LOG', summary: `Weight entry deleted for ${date}`, actor: (req as any)?.user?._id || (req as any)?.user?.id, before_data: { date } }); } catch {}
       await publish({ type: 'WEIGHT_DELETED', user: userId as any, date });
       return res.json({ ok: true, summary: `Vekt slettet (${date})` });
     }
@@ -352,7 +310,7 @@ InteractionRoutes.post('/actions/applyPlanChange', ensureAuth as any, perUserIpL
 
       // Decide underlying importer based on type
       const api = type.toLowerCase();
-      const userId = (req as any)?.user?._id || req.body?.userId || undefined;
+      const userId = (req as any)?.user?._id || (req as any)?.user?.id || req.body?.userId || undefined;
 
       // Reuse existing from-text endpoints for materialization
       if (api.includes('trenings')) {
@@ -403,20 +361,9 @@ InteractionRoutes.post('/chat/:partner/clear', ensureAuth as any, perUserIpLimit
 // Get current goal for user
 InteractionRoutes.get('/chat/engh/goals/current', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   try {
-    const userId = (req as any).user?._id || (req.query.userId as string) || ((): string | undefined => {
-      const cookie = req.headers?.cookie as string | undefined;
-      if (!cookie) return undefined;
-      const match = cookie.match(/auth_token=([^;]+)/);
-      if (!match) return undefined;
-      try {
-        const token = decodeURIComponent(match[1]);
-        const secret = process.env.JWT_SECRET || 'secret_secret';
-        const decoded: any = jwt.verify(token, secret);
-        return decoded?.id || decoded?._id;
-      } catch { return undefined; }
-    })();
+    const userId = (req as any).user?._id || (req as any).user?.id || (req.query.userId as string);
     if (!userId) return res.status(400).json({ message: 'userId required' });
-    const goal = await Goal.findOne({ userId, isCurrent: true }).sort({ version: -1 }).lean();
+    const { data: goal } = await db.from(Tables.GOALS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle();
     if (!goal) return res.status(404).json({ message: 'not found' });
     return res.json({ data: goal });
   } catch (e) {
@@ -427,20 +374,9 @@ InteractionRoutes.get('/chat/engh/goals/current', ensureAuth as any, perUserIpLi
 // Get current training plan for user (mirrors goals/current behavior)
 InteractionRoutes.get('/chat/engh/training/current', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   try {
-    const userId = (req as any).user?._id || (req.query.userId as string) || ((): string | undefined => {
-      const cookie = req.headers?.cookie as string | undefined;
-      if (!cookie) return undefined;
-      const match = cookie.match(/auth_token=([^;]+)/);
-      if (!match) return undefined;
-      try {
-        const token = decodeURIComponent(match[1]);
-        const secret = process.env.JWT_SECRET || 'secret_secret';
-        const decoded: any = jwt.verify(token, secret);
-        return decoded?.id || decoded?._id;
-      } catch { return undefined; }
-    })();
+    const userId = (req as any).user?._id || (req as any).user?.id || (req.query.userId as string);
     if (!userId) return res.status(400).json({ message: 'userId required' });
-    const plan = await TrainingPlan.findOne({ userId, isCurrent: true }).sort({ version: -1 }).lean();
+    const { data: plan } = await db.from(Tables.TRAINING_PLANS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle();
     if (!plan) return res.status(404).json({ message: 'not found' });
     return res.json({ data: plan });
   } catch (e) {
@@ -451,20 +387,9 @@ InteractionRoutes.get('/chat/engh/training/current', ensureAuth as any, perUserI
 // Get current nutrition plan for user
 InteractionRoutes.get('/chat/engh/nutrition/current', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   try {
-    const userId = (req as any).user?._id || (req.query.userId as string) || ((): string | undefined => {
-      const cookie = req.headers?.cookie as string | undefined;
-      if (!cookie) return undefined;
-      const match = cookie.match(/auth_token=([^;]+)/);
-      if (!match) return undefined;
-      try {
-        const token = decodeURIComponent(match[1]);
-        const secret = process.env.JWT_SECRET || 'secret_secret';
-        const decoded: any = jwt.verify(token, secret);
-        return decoded?.id || decoded?._id;
-      } catch { return undefined; }
-    })();
+    const userId = (req as any).user?._id || (req as any).user?.id || (req.query.userId as string);
     if (!userId) return res.status(400).json({ message: 'userId required' });
-    const plan = await NutritionPlan.findOne({ userId, isCurrent: true }).sort({ version: -1 }).lean();
+    const { data: plan } = await db.from(Tables.NUTRITION_PLANS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle();
     if (!plan) return res.status(404).json({ message: 'not found' });
     return res.json({ data: plan });
   } catch (e) {
@@ -479,8 +404,8 @@ InteractionRoutes.post('/chat/engh/knowledge/upload', ensureAuth as any, perUser
     if (!file) return res.status(400).json({ message: 'file is required' });
     const content = `Uploaded file: ${file.originalname}`;
     const embedding = await generateEmbedding(content);
-    const doc = await CoachKnowledge.create({
-      userId: (req as any).user?._id || undefined,
+    const doc = await insertOne(Tables.COACH_KNOWLEDGE, {
+      user_id: (req as any).user?._id || (req as any).user?.id || undefined,
       title: file.originalname,
       content,
       type: "pdf",
@@ -499,8 +424,8 @@ InteractionRoutes.post('/chat/engh/knowledge/text', ensureAuth as any, perUserIp
     if (!text) return res.status(400).json({ message: 'text is required' });
     const content = String(text);
     const embedding = await generateEmbedding(content);
-    const doc = await CoachKnowledge.create({
-      userId: (req as any).user?._id || undefined,
+    const doc = await insertOne(Tables.COACH_KNOWLEDGE, {
+      user_id: (req as any).user?._id || (req as any).user?.id || undefined,
       title: title || "Knowledge entry",
       content,
       type: "text",
@@ -515,26 +440,19 @@ InteractionRoutes.post('/chat/engh/knowledge/text', ensureAuth as any, perUserIp
 // First-time profile save/update
 InteractionRoutes.post('/chat/engh/profile', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 30 }), async (req, res) => {
   try {
-    let userId = (req as any).user?._id || req.body.userId;
-    if (!userId) {
-      const cookie = req.headers?.cookie as string | undefined;
-      const match = cookie?.match(/auth_token=([^;]+)/);
-      if (match) {
-        try {
-          const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
-          const decoded: any = jwt.verify(token, secret);
-          userId = decoded?.id || decoded?._id;
-        } catch {}
-      }
-    }
+    const userId = (req as any).user?._id || (req as any).user?.id || req.body.userId;
     if (!userId) return res.status(400).json({ message: 'userId required' });
-    const payload = (({ goals, currentWeightKg, strengths, weaknesses, injuryHistory, nutritionPreferences, trainingDaysPerWeek }) => ({ goals, currentWeightKg, strengths, weaknesses, injuryHistory, nutritionPreferences, trainingDaysPerWeek }))(req.body || {});
-    const doc = await UserProfile.findOneAndUpdate(
-      { userId },
-      { $set: payload, $setOnInsert: { userId } },
-      { new: true, upsert: true }
-    );
+    const { goals, currentWeightKg, strengths, weaknesses, injuryHistory, nutritionPreferences, trainingDaysPerWeek } = req.body || {};
+    const doc = await upsert(Tables.USER_PROFILES, {
+      user_id: userId,
+      goals,
+      current_weight_kg: currentWeightKg,
+      strengths,
+      weaknesses,
+      injury_history: injuryHistory,
+      nutrition_preferences: nutritionPreferences,
+      training_days_per_week: trainingDaysPerWeek,
+    }, 'user_id');
     return res.json({ data: doc });
   } catch (e) {
     return res.status(500).json({ message: 'profile save failed' });
@@ -544,21 +462,9 @@ InteractionRoutes.post('/chat/engh/profile', ensureAuth as any, perUserIpLimiter
 // Get profile (for onboarding check)
 InteractionRoutes.get('/chat/engh/profile', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req, res) => {
   try {
-    let userId = (req as any).user?._id || (req.query.userId as string);
-    if (!userId) {
-      const cookie = req.headers?.cookie as string | undefined;
-      const match = cookie?.match(/auth_token=([^;]+)/);
-      if (match) {
-        try {
-          const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
-          const decoded: any = jwt.verify(token, secret);
-          userId = decoded?.id || decoded?._id;
-        } catch {}
-      }
-    }
+    const userId = (req as any).user?._id || (req as any).user?.id || (req.query.userId as string);
     if (!userId) return res.status(400).json({ message: 'userId required' });
-    const doc = await UserProfile.findOne({ userId });
+    const doc = await findOne(Tables.USER_PROFILES, { user_id: userId });
     if (!doc) return res.status(404).json({ message: 'not found' });
     return res.json({ data: doc });
   } catch (e) {
@@ -568,26 +474,15 @@ InteractionRoutes.get('/chat/engh/profile', ensureAuth as any, perUserIpLimiter(
 
 export default InteractionRoutes;
 
-// DEV: quick diagnostics to confirm plans exist for current user (no Auth)
-InteractionRoutes.get('/debug/plans', async (req, res) => {
+// DEV: quick diagnostics to confirm plans exist for current user
+InteractionRoutes.get('/debug/plans', ensureAuth as any, async (req, res) => {
   try {
-    const cookie = req.headers?.cookie as string | undefined;
-    const match = cookie?.match(/auth_token=([^;]+)/);
-    let userId: any;
-    if (match) {
-      try {
-        const token = decodeURIComponent(match[1]);
-        const secret = process.env.JWT_SECRET || 'secret_secret';
-        const decoded: any = jwt.verify(token, secret);
-        userId = decoded?.id || decoded?._id;
-      } catch {}
-    }
-    if (!userId) return res.status(400).json({ message: 'userId not resolved from cookie' });
-    const Models = await import('../app/Models/PlanModels');
+    const userId = (req as any).user?._id || (req as any).user?.id || (req.query.userId as string);
+    if (!userId) return res.status(400).json({ message: 'userId not resolved' });
     const [tp, np, g] = await Promise.all([
-      Models.TrainingPlan.findOne({ userId, isCurrent: true }).sort({ version:-1 }).lean(),
-      Models.NutritionPlan.findOne({ userId, isCurrent: true }).sort({ version:-1 }).lean(),
-      Models.Goal.findOne({ userId, isCurrent: true }).sort({ version:-1 }).lean(),
+      db.from(Tables.TRAINING_PLANS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle().then(r => r.data),
+      db.from(Tables.NUTRITION_PLANS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle().then(r => r.data),
+      db.from(Tables.GOALS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle().then(r => r.data),
     ]);
     return res.json({ userId, training: tp, nutrition: np, goal: g });
   } catch (e) {
@@ -598,19 +493,7 @@ InteractionRoutes.get('/debug/plans', async (req, res) => {
 // Create training plan from free-form text sent by the assistant (quick import)
 InteractionRoutes.post('/chat/engh/training/from-text', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
-    let userId: any = (req as any).user?._id || req.body.userId;
-    if (!userId) {
-      const cookie = req.headers?.cookie as string | undefined;
-      const match = cookie?.match(/auth_token=([^;]+)/);
-      if (match) {
-        try {
-          const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
-          const decoded: any = jwt.verify(token, secret);
-          userId = decoded?.id || decoded?._id;
-        } catch {}
-      }
-    }
+    const userId: any = (req as any).user?._id || (req as any).user?.id || req.body.userId;
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const rawText: string = (req.body?.text || '').replace(/\r/g,'');
     // Strip any preamble before the first "Dag X:" so we don't create a bogus first session
@@ -854,11 +737,11 @@ InteractionRoutes.post('/chat/engh/training/from-text', ensureAuth as any, perUs
       .map(l=>l.replace(/^[-•]\s*/, ''))
       .slice(0, 10);
 
-    const latest = await TrainingPlan.findOne({ userId }).sort({ version: -1 });
+    const { data: latest } = await db.from(Tables.TRAINING_PLANS).select('*').eq('user_id', userId).order('version', { ascending: false }).limit(1).maybeSingle();
     const nextVersion = (latest?.version || 0) + 1;
-    await TrainingPlan.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
-    const created = await TrainingPlan.create({ userId, version: nextVersion, isCurrent: true, sessions, sourceText: rawText, guidelines: guidelineLines });
-    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(created._id) }], message: 'Training plan imported to Assets' });
+    await updateMany(Tables.TRAINING_PLANS, { user_id: userId, is_current: true }, { is_current: false });
+    const created = await insertOne(Tables.TRAINING_PLANS, { user_id: userId, version: nextVersion, is_current: true, sessions, source_text: rawText, guidelines: guidelineLines });
+    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(created?.id) }], message: 'Training plan imported to Assets' });
   } catch (e) {
     console.error('[nutrition/from-text] failed', e);
     const msg = typeof (e as any)?.message === 'string' ? (e as any).message : 'unknown';
@@ -869,30 +752,18 @@ InteractionRoutes.post('/chat/engh/training/from-text', ensureAuth as any, perUs
 // Save training plan (create new version)
 InteractionRoutes.post('/chat/engh/training/save', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
-    let userId: any = (req as any).user?._id || req.body.userId;
-    if (!userId) {
-      const cookie = req.headers?.cookie as string | undefined;
-      const match = cookie?.match(/auth_token=([^;]+)/);
-      if (match) {
-        try {
-          const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
-          const decoded: any = jwt.verify(token, secret);
-          userId = decoded?.id || decoded?._id;
-        } catch {}
-      }
-    }
+    const userId: any = (req as any).user?._id || (req as any).user?.id || req.body.userId;
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const sessions = Array.isArray(req.body?.sessions) ? req.body.sessions : [];
     if (!sessions.length) return res.status(400).json({ message: 'sessions required' });
     // Map sessions to versioning model shape
     const days = sessions.map((s: any) => ({ day: s.day, focus: s.focus, exercises: (s.exercises||[]).map((e:any)=>({ name: e.name||e.exercise, sets: e.sets, reps: String(e.reps), rpe: e.rpe })) }));
     const version = await nextTrainingVersion(userId);
-    const doc = await TrainingPlanVersion.create({ user: userId, version, source: 'action', reason: 'Saved via chat', days });
-    await StudentState.findOneAndUpdate({ user: userId }, { $set: { currentTrainingPlanVersion: doc._id } }, { upsert: true });
-    try { await ChangeEvent.create({ user: userId, type: 'PLAN_EDIT', summary: `Training v${version} saved`, refId: doc._id, actor: (req as any)?.user?._id, after: { version } }); } catch {}
+    const doc = await insertOne(Tables.TRAINING_PLAN_VERSIONS, { user_id: userId, version, source: 'action', reason: 'Saved via chat', days });
+    await upsert(Tables.STUDENT_STATES, { user_id: userId, current_training_plan_version: doc?.id }, 'user_id');
+    try { await insertOne(Tables.CHANGE_EVENTS, { user_id: userId, type: 'PLAN_EDIT', summary: `Training v${version} saved`, ref_id: doc?.id, actor: (req as any)?.user?._id || (req as any)?.user?.id, after_data: { version } }); } catch {}
     try { await publish({ type: 'PLAN_UPDATED', user: userId as any }); } catch {}
-    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(doc._id) }], message: 'Training plan saved' });
+    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'training', planId: String(doc?.id) }], message: 'Training plan saved' });
   } catch (e) {
     return res.status(500).json({ message: 'save failed' });
   }
@@ -901,28 +772,16 @@ InteractionRoutes.post('/chat/engh/training/save', ensureAuth as any, perUserIpL
 // Save nutrition plan (create new version)
 InteractionRoutes.post('/chat/engh/nutrition/save', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
-    let userId: any = (req as any).user?._id || req.body.userId;
-    if (!userId) {
-      const cookie = req.headers?.cookie as string | undefined;
-      const match = cookie?.match(/auth_token=([^;]+)/);
-      if (match) {
-        try {
-          const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
-          const decoded: any = jwt.verify(token, secret);
-          userId = decoded?.id || decoded?._id;
-        } catch {}
-      }
-    }
+    const userId: any = (req as any).user?._id || (req as any).user?.id || req.body.userId;
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const { dailyTargets } = req.body || {};
     if (!dailyTargets) return res.status(400).json({ message: 'dailyTargets required' });
     const version = await nextNutritionVersion(userId as any);
-    const doc = await NutritionPlanVersion.create({ user: userId, version, source: 'action', reason: 'Saved via chat', kcal: dailyTargets.kcal, proteinGrams: dailyTargets.protein, carbsGrams: dailyTargets.carbs, fatGrams: dailyTargets.fat });
-    await StudentState.findOneAndUpdate({ user: userId }, { $set: { currentNutritionPlanVersion: doc._id } }, { upsert: true });
-    try { await ChangeEvent.create({ user: userId, type: 'NUTRITION_EDIT', summary: `Nutrition v${version} saved`, refId: doc._id, actor: (req as any)?.user?._id, after: { version } }); } catch {}
+    const doc = await insertOne(Tables.NUTRITION_PLAN_VERSIONS, { user_id: userId, version, source: 'action', reason: 'Saved via chat', kcal: dailyTargets.kcal, protein_grams: dailyTargets.protein, carbs_grams: dailyTargets.carbs, fat_grams: dailyTargets.fat });
+    await upsert(Tables.STUDENT_STATES, { user_id: userId, current_nutrition_plan_version: doc?.id }, 'user_id');
+    try { await insertOne(Tables.CHANGE_EVENTS, { user_id: userId, type: 'NUTRITION_EDIT', summary: `Nutrition v${version} saved`, ref_id: doc?.id, actor: (req as any)?.user?._id || (req as any)?.user?.id, after_data: { version } }); } catch {}
     try { await publish({ type: 'NUTRITION_UPDATED', user: userId as any }); } catch {}
-    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'nutrition', planId: String(doc._id) }], message: 'Meal plan saved' });
+    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'nutrition', planId: String(doc?.id) }], message: 'Meal plan saved' });
   } catch (e) {
     return res.status(500).json({ message: 'save failed' });
   }
@@ -931,7 +790,7 @@ InteractionRoutes.post('/chat/engh/nutrition/save', ensureAuth as any, perUserIp
 // Public share endpoints (JSON)
 InteractionRoutes.get('/plans/share/training/:id', async (req, res) => {
   try {
-    const plan = await TrainingPlan.findById(req.params.id).lean();
+    const plan = await findById(Tables.TRAINING_PLANS, req.params.id);
     if (!plan) return res.status(404).json({ message: 'not found' });
     return res.json({ plan });
   } catch {
@@ -941,7 +800,7 @@ InteractionRoutes.get('/plans/share/training/:id', async (req, res) => {
 
 InteractionRoutes.get('/plans/share/nutrition/:id', async (req, res) => {
   try {
-    const plan = await NutritionPlan.findById(req.params.id).lean();
+    const plan = await findById(Tables.NUTRITION_PLANS, req.params.id);
     if (!plan) return res.status(404).json({ message: 'not found' });
     return res.json({ plan });
   } catch {
@@ -951,19 +810,7 @@ InteractionRoutes.get('/plans/share/nutrition/:id', async (req, res) => {
 // Create nutrition plan from free-form text
 InteractionRoutes.post('/chat/engh/nutrition/from-text', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
-    let userId: any = (req as any).user?._id || req.body.userId;
-    if (!userId) {
-      const cookie = req.headers?.cookie as string | undefined;
-      const match = cookie?.match(/auth_token=([^;]+)/);
-      if (match) {
-        try {
-          const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
-          const decoded: any = jwt.verify(token, secret);
-          userId = decoded?.id || decoded?._id;
-        } catch {}
-      }
-    }
+    const userId: any = (req as any).user?._id || (req as any).user?.id || req.body.userId;
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const text: string = (req.body?.text || '')
       .replace(/<br\s*\/?>(?=\S)/gi, '\n')
@@ -1175,11 +1022,11 @@ InteractionRoutes.post('/chat/engh/nutrition/from-text', ensureAuth as any, perU
       }
     }
 
-    const latest = await NutritionPlan.findOne({ userId }).sort({ version: -1 });
+    const { data: latest } = await db.from(Tables.NUTRITION_PLANS).select('*').eq('user_id', userId).order('version', { ascending: false }).limit(1).maybeSingle();
     const nextVersion = (latest?.version || 0) + 1;
-    await NutritionPlan.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
-    const created = await NutritionPlan.create({ userId, version: nextVersion, isCurrent: true, dailyTargets: { kcal, protein, carbs, fat }, notes: '', sourceText: text, meals: meals.length?meals:undefined, guidelines, days: daysParsed.length?daysParsed:undefined });
-    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'nutrition', planId: String(created._id) }], message: 'Meal plan imported to Assets' });
+    await updateMany(Tables.NUTRITION_PLANS, { user_id: userId, is_current: true }, { is_current: false });
+    const created = await insertOne(Tables.NUTRITION_PLANS, { user_id: userId, version: nextVersion, is_current: true, daily_targets: { kcal, protein, carbs, fat }, notes: '', source_text: text, meals: meals.length?meals:undefined, guidelines, days: daysParsed.length?daysParsed:undefined });
+    return res.json({ actions: [{ type: 'PLAN_CREATE', area: 'nutrition', planId: String(created?.id) }], message: 'Meal plan imported to Assets' });
   } catch (e) {
     console.error('[nutrition/from-text] failed', e);
     return res.status(500).json({ message: 'import failed' });
@@ -1189,19 +1036,7 @@ InteractionRoutes.post('/chat/engh/nutrition/from-text', ensureAuth as any, perU
 // Create simple goal from free-form text
 InteractionRoutes.post('/chat/engh/goals/from-text', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: Number(process.env.RATE_LIMIT_ACTIONS_PER_MIN || 30) }), async (req, res) => {
   try {
-    let userId: any = (req as any).user?._id || req.body.userId;
-    if (!userId) {
-      const cookie = req.headers?.cookie as string | undefined;
-      const match = cookie?.match(/auth_token=([^;]+)/);
-      if (match) {
-        try {
-          const token = decodeURIComponent(match[1]);
-          const secret = process.env.JWT_SECRET || 'secret_secret';
-          const decoded: any = jwt.verify(token, secret);
-          userId = decoded?.id || decoded?._id;
-        } catch {}
-      }
-    }
+    const userId: any = (req as any).user?._id || (req as any).user?.id || req.body.userId;
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const text: string = (req.body?.text || '').replace(/\r/g, '');
     const targetWeight = Number((text.match(/(\d{2,3})\s*kg/i) || [])[1]) || undefined;
@@ -1247,15 +1082,15 @@ InteractionRoutes.post('/chat/engh/goals/from-text', ensureAuth as any, perUserI
       longTerm,
       tips: unique([...(tipsA||[]), ...(tipsB||[])]),
     };
-    const latest = await Goal.findOne({ userId }).sort({ version: -1 });
+    const { data: latest } = await db.from(Tables.GOALS).select('*').eq('user_id', userId).order('version', { ascending: false }).limit(1).maybeSingle();
     const nextVersion = (latest?.version || 0) + 1;
-    await Goal.updateMany({ userId, isCurrent: true }, { $set: { isCurrent: false } });
-    const created = await Goal.create({ userId, version: nextVersion, isCurrent: true, targetWeightKg: targetWeight, strengthTargets: strength, horizonWeeks: horizon, sourceText: text, caloriesDailyDeficit: deficit, weeklyWeightLossKg: weeklyLoss, weeklyExerciseMinutes: weeklyMinutes, hydrationLiters: hydration, plan });
+    await updateMany(Tables.GOALS, { user_id: userId, is_current: true }, { is_current: false });
+    const created = await insertOne(Tables.GOALS, { user_id: userId, version: nextVersion, is_current: true, target_weight_kg: targetWeight, strength_targets: strength, horizon_weeks: horizon, source_text: text, calories_daily_deficit: deficit, weekly_weight_loss_kg: weeklyLoss, weekly_exercise_minutes: weeklyMinutes, hydration_liters: hydration, plan });
     try {
-      await ChangeEvent.create({ user: userId, type: 'GOAL_EDIT', summary: 'Goal imported from text', actor: (req as any)?.user?._id, after: { goalId: created._id, version: nextVersion } });
+      await insertOne(Tables.CHANGE_EVENTS, { user_id: userId, type: 'GOAL_EDIT', summary: 'Goal imported from text', actor: (req as any)?.user?._id || (req as any)?.user?.id, after_data: { goal_id: created?.id, version: nextVersion } });
       await publish({ type: 'GOAL_UPDATED', user: userId as any });
     } catch {}
-    return res.json({ actions: [{ type: 'GOAL_SET', goalId: String(created._id) }], message: 'Goal imported to Assets' });
+    return res.json({ actions: [{ type: 'GOAL_SET', goalId: String(created?.id) }], message: 'Goal imported to Assets' });
   } catch (e) {
     return res.status(500).json({ message: 'import failed' });
   }

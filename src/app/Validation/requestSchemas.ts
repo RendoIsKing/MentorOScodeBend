@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/);
+// Accept both UUIDs (Supabase) and MongoDB ObjectIds (legacy) during migration
+export const objectId = z.string().regex(/^[0-9a-fA-F-]{24,36}$/);
 export const nonEmptyString = z.string().trim().min(1);
 
 export const objectIdParam = (key: string = "id") =>

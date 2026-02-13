@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { CoachKnowledge } from "../../../Models/CoachKnowledge";
+import { insertOne, Tables } from "../../../../lib/db";
 import { generateEmbedding } from "../../../../services/ai/embeddingService";
 import { extractTextFromFile } from "../../../../utils/fileTextExtractor";
 
@@ -55,17 +55,22 @@ export const addKnowledgeAction = async (req: Request, res: Response) => {
     }
 
     const embedding = await generateEmbedding(resolvedContent);
-    const doc = await CoachKnowledge.create({
-      userId,
+
+    const row = await insertOne(Tables.COACH_KNOWLEDGE, {
+      user_id: userId,
       title: resolvedTitle,
       content: resolvedContent,
       type: resolvedType,
-      mentorName,
-      embedding,
+      mentor_name: mentorName,
+      embedding: JSON.stringify(embedding),
     });
 
-    const knowledge = doc.toObject();
-    delete (knowledge as any).embedding;
+    if (!row) {
+      return res.status(500).json({ message: "failed_to_add_knowledge" });
+    }
+
+    // Remove embedding from response
+    const { embedding: _emb, ...knowledge } = row as any;
 
     return res.json({ success: true, knowledge });
   } catch (error: any) {

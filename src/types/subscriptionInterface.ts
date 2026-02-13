@@ -1,12 +1,13 @@
-import { Document, Types } from "mongoose";
 import { SubscriptionStatusEnum } from "./enums/SubscriptionStatusEnum";
 import { SubscriptionPlanInterface } from "./SubscriptionPlanInterface";
 
-export interface SubscriptionInterface extends Document {
-  userId: Types.ObjectId;
+export interface SubscriptionInterface {
+  _id?: string;
+  id?: string;
+  userId: string;
   StripeSubscriptionId: string;
   StripePriceId: string;
-  planId: Types.ObjectId | SubscriptionPlanInterface;
+  planId: string | SubscriptionPlanInterface;
   status: SubscriptionStatusEnum;
   stripeSubscriptionObject: string;
   startDate: Date;

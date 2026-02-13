@@ -1,11 +1,8 @@
 import { Request, Response } from "express";
 import stripeInstance from "../../../../utils/stripe";
 import { UserInterface } from "../../../../types/UserInterface";
-import { User } from "../../../Models/User";
-import { cardDetails } from "../../../Models/CardDetails";
-import { Post } from "../../../Models/Post";
+import { findOne, insertOne, Tables } from "../../../../lib/db";
 import { Privacy } from "../../../../types/enums/privacyEnums";
-import { Transaction } from "../../../Models/Transaction";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { stripe_currency } from "../../../../utils/consts/stripeCurrency";
 import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
@@ -19,25 +16,24 @@ export const createOneTimeSubscription = async (
   const reqUser = req.user as UserInterface;
 
   try {
-    console.log("subscirption api is hitting")
-    const user = await User.findOne({
-      _id: reqUser?.id,
-      isDeleted: false,
-      deletedAt: null,
+    console.log("subscirption api is hitting");
+    const user = await findOne(Tables.USERS, {
+      id: reqUser?.id,
+      is_deleted: false,
     });
-    console.log("postId is", postId)
-    const post = await Post.findOne({
-      _id: postId,
+
+    console.log("postId is", postId);
+    const post = await findOne(Tables.POSTS, {
+      id: postId,
       privacy: Privacy.PAY_PER_VIEW,
-      isDeleted: false,
-      deletedAt: null,
+      is_deleted: false,
     });
 
     if (!post) {
       return res.status(404).json({ error: { message: "Post not found" } });
     }
 
-    if (!post.stripeProductId) {
+    if (!post.stripe_product_id) {
       return res
         .status(404)
         .json({ error: { message: "Product not registerd on stripe" } });
@@ -46,16 +42,16 @@ export const createOneTimeSubscription = async (
     if (!user) {
       return res.status(404).json({ error: { message: "User not found" } });
     }
-    if (!user.isStripeCustomer == false && !user.stripeClientId) {
+    if (!user.is_stripe_customer == false && !user.stripe_client_id) {
       return res
         .status(404)
         .json({ error: { message: "User not registerd on stripe" } });
     }
-    
-    console.log("ali User id is", user.id)
-    const card = await cardDetails.findOne({
-      userId: user.id,
-      isDefault: true,
+
+    console.log("ali User id is", user.id);
+    const card = await findOne(Tables.CARD_DETAILS, {
+      user_id: user.id,
+      is_default: true,
     });
 
     if (!card) {
@@ -66,45 +62,35 @@ export const createOneTimeSubscription = async (
 
     const paymentIntent = await stripeInstance.paymentIntents.create({
       amount: post.price,
-      customer: user.stripeClientId,
+      customer: user.stripe_client_id,
       currency: stripe_currency,
-      // payment_method: card.paymentMethodId,
-      // off_session: true, // Required for automatic confirmation
-      // confirm: true,
     });
 
-    const newTransaction = new Transaction({
-      userId: user?.id,
-      stripePaymentIntentId: paymentIntent.id,
-      stripeProductId: post.stripeProductId,
+    const newTransaction = await insertOne(Tables.TRANSACTIONS, {
+      user_id: user.id,
+      stripe_payment_intent_id: paymentIntent.id,
+      stripe_product_id: post.stripe_product_id,
       type: TransactionType.DEBIT,
-      productType: ProductType.POSTS,
-      productId: post.id,
+      product_type: ProductType.POSTS,
+      product_id: post.id,
       amount: post.price,
       status: TransactionStatus.PENDING,
     });
 
-    await newTransaction.save();
-
-    const newCreditTransaction = new Transaction({
-      userId: post?.user,
-      stripePaymentIntentId: paymentIntent.id,
+    const newCreditTransaction = await insertOne(Tables.TRANSACTIONS, {
+      user_id: post.user_id,
+      stripe_payment_intent_id: paymentIntent.id,
       type: TransactionType.CREDIT,
-      stripeProductId: post.stripeProductId,
-      productType: ProductType.POSTS,
-      productId: post.id,
+      stripe_product_id: post.stripe_product_id,
+      product_type: ProductType.POSTS,
+      product_id: post.id,
       amount: post.price,
       status: TransactionStatus.PENDING,
     });
-
-    await newCreditTransaction.save();
 
     return res.status(200).send({
       data: paymentIntent,
-      paymentMethod: card.paymentMethodId,
-      // clientSecret: paymentIntent.client_secret,
-      //@ts-ignore
-      //   clientSecret: subscription.latest_invoice.payment_intent.client_secret,
+      paymentMethod: card.payment_method_id,
     });
   } catch (error) {
     console.error("Error creating one time payment:", error);

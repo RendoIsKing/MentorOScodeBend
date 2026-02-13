@@ -1,10 +1,9 @@
 import { Request, Response } from "express";
-import { Document } from "../../../Models/Document";
 import { validate } from "class-validator";
 import { DocumentInput } from "../Inputs/postDocumentInput";
 import { UserInterface } from "../../../../types/UserInterface";
-import { User } from "../../../Models/User";
 import { plainToClass } from "class-transformer";
+import { insertOne, updateById, Tables } from "../../../../lib/db";
 
 export const postDocument = async (
   req: Request,
@@ -19,17 +18,18 @@ export const postDocument = async (
 
     const user = req.user as UserInterface;
     if (user) {
-      await User.findByIdAndUpdate(user.id, {
-        hasDocumentUploaded: true,
+      await updateById(Tables.USERS, user.id, {
+        has_document_uploaded: true,
       });
     }
 
-    const newDocument = new Document({
-      ...req.body,
-      userId: user.id,
+    const newDocument = await insertOne(Tables.DOCUMENTS, {
+      title: req.body.title,
+      description: req.body.description,
+      document_media_id: req.body.documentMediaId,
+      type: req.body.type,
+      user_id: user.id,
     });
-
-    await newDocument.save();
 
     return res.json({
       data: newDocument,

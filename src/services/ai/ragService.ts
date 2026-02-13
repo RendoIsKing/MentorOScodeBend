@@ -1,5 +1,4 @@
-import mongoose from "mongoose";
-import { CoachKnowledge } from "../../app/Models/CoachKnowledge";
+import { db, rpc, Tables } from "../../lib/db";
 import { generateEmbedding } from "./embeddingService";
 
 export type RetrievedDoc = {
@@ -12,10 +11,6 @@ function toSnippet(text: string, max = 220) {
   const cleaned = String(text || "").trim();
   if (!cleaned) return "";
   return cleaned.length > max ? `${cleaned.slice(0, max)}...` : cleaned;
-}
-
-function escapeRegex(input: string) {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // Comprehensive stop words for Norwegian + English to reduce noise in search queries
@@ -55,101 +50,104 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
   const cleaned = String(query || "").trim();
   if (!cleaned) return [];
 
-  if (!mongoose.Types.ObjectId.isValid(mentorId)) {
-    try { console.log(`⚠️ Invalid mentorId for RAG: ${mentorId}`); } catch {}
+  if (!mentorId) {
+    console.log(`⚠️ Missing mentorId for RAG`);
     return [];
   }
-  const userObjectId = new mongoose.Types.ObjectId(mentorId);
-  try {
-    console.log(`🔍 RAG Lookup started for mentorId: ${mentorId} with query: ${cleaned}`);
-  } catch {}
+
+  console.log(`🔍 RAG Lookup started for mentorId: ${mentorId} with query: ${cleaned}`);
 
   const searchTokens = extractSearchTokens(cleaned);
-  try { console.log(`🔑 Search tokens: [${searchTokens.join(", ")}]`); } catch {}
+  console.log(`🔑 Search tokens: [${searchTokens.join(", ")}]`);
 
-  // --- Strategy 1: Vector (semantic) search ---
-  // Increased numCandidates and limit to catch more semantically relevant documents
-  let vectorResults: Array<{ title?: string; content?: string; score?: number }> = [];
+  // --- Strategy 1: Vector (semantic) search via Supabase RPC ---
+  let vectorResults: Array<{ id: string; title: string; content: string; similarity: number }> = [];
   try {
     const queryVector = await generateEmbedding(cleaned);
-    const pipeline: any[] = [
+    const results = await rpc<Array<{ id: string; title: string; content: string; similarity: number }>>(
+      "match_knowledge",
       {
-        $vectorSearch: {
-          index: "default",
-          path: "embedding",
-          queryVector,
-          numCandidates: 200,
-          limit: 6,
-          filter: { userId: { $eq: userObjectId } },
-        },
-      },
-      { $project: { content: 1, title: 1, score: { $meta: "vectorSearchScore" } } },
-    ];
-    vectorResults = await CoachKnowledge.aggregate(pipeline);
-    try {
-      console.log(`🧩 Vector Search found ${vectorResults.length} results:`,
-        vectorResults.map((r) => `"${r.title}" (score: ${(r.score ?? 0).toFixed(3)})`).join(", "));
-    } catch {}
+        query_embedding: JSON.stringify(queryVector),
+        match_user_id: mentorId,
+        match_threshold: 0.5,
+        match_count: 6,
+      }
+    );
+    vectorResults = results || [];
+    console.log(
+      `🧩 Vector Search found ${vectorResults.length} results:`,
+      vectorResults.map((r) => `"${r.title}" (score: ${(r.similarity ?? 0).toFixed(3)})`).join(", ")
+    );
   } catch (err) {
-    try { console.error("Vector search failed:", err); } catch {}
+    console.error("Vector search failed:", err);
     vectorResults = [];
   }
 
   // --- Strategy 2: Keyword tag search (Smart Ingestion Pipeline keywords) ---
-  let keywordResults: Array<{ title?: string; content?: string }> = [];
+  let keywordResults: Array<{ title: string; content: string }> = [];
   try {
     if (searchTokens.length) {
-      const keywordOrClauses = searchTokens.map((word) => ({
-        keywords: { $regex: escapeRegex(word), $options: "i" },
-      }));
-      keywordResults = (await CoachKnowledge.find({
-        userId: userObjectId,
-        $or: keywordOrClauses,
-      })
-        .limit(5)
-        .lean()) as any;
-      try { console.log(`🏷️ Keyword Tag Search found ${keywordResults.length} results.`); } catch {}
+      // Use Supabase ilike + or for keyword matching across the keywords array
+      const orConditions = searchTokens
+        .map((word) => `keywords.cs.{${word}}`)
+        .join(",");
+
+      const { data } = await db
+        .from(Tables.COACH_KNOWLEDGE)
+        .select("title, content")
+        .eq("user_id", mentorId)
+        .or(searchTokens.map((word) => `keywords.cs.{"${word}"}`).join(","))
+        .limit(5);
+
+      keywordResults = (data || []) as any;
+      console.log(`🏷️ Keyword Tag Search found ${keywordResults.length} results.`);
     }
   } catch {
     keywordResults = [];
   }
 
   // --- Strategy 3: Title search (match document titles) ---
-  let titleResults: Array<{ title?: string; content?: string }> = [];
+  let titleResults: Array<{ title: string; content: string }> = [];
   try {
     if (searchTokens.length) {
-      const titleOrClauses = searchTokens.map((word) => ({
-        title: { $regex: escapeRegex(word), $options: "i" },
-      }));
-      titleResults = (await CoachKnowledge.find({
-        userId: userObjectId,
-        $or: titleOrClauses,
-      })
-        .limit(4)
-        .lean()) as any;
-      try { console.log(`📄 Title Search found ${titleResults.length} results.`); } catch {}
+      const orConditions = searchTokens
+        .map((word) => `title.ilike.%${word}%`)
+        .join(",");
+
+      const { data } = await db
+        .from(Tables.COACH_KNOWLEDGE)
+        .select("title, content")
+        .eq("user_id", mentorId)
+        .or(orConditions)
+        .limit(4);
+
+      titleResults = (data || []) as any;
+      console.log(`📄 Title Search found ${titleResults.length} results.`);
     }
   } catch {
     titleResults = [];
   }
 
-  // --- Strategy 4: Content text search (fallback regex on content) ---
-  let textResults: Array<{ title?: string; content?: string }> = [];
+  // --- Strategy 4: Content text search (fallback ilike on content) ---
+  let textResults: Array<{ title: string; content: string }> = [];
   try {
     if (searchTokens.length) {
-      const orClauses = searchTokens.map((word) => ({
-        content: { $regex: escapeRegex(word), $options: "i" },
-      }));
-      textResults = (await CoachKnowledge.find({
-        userId: userObjectId,
-        $or: orClauses,
-      })
-        .limit(5)
-        .lean()) as any;
+      const orConditions = searchTokens
+        .map((word) => `content.ilike.%${word}%`)
+        .join(",");
+
+      const { data } = await db
+        .from(Tables.COACH_KNOWLEDGE)
+        .select("title, content")
+        .eq("user_id", mentorId)
+        .or(orConditions)
+        .limit(5);
+
+      textResults = (data || []) as any;
     } else {
       textResults = [];
     }
-    try { console.log(`📝 Text/Fallback Search found ${textResults.length} results.`); } catch {}
+    console.log(`📝 Text/Fallback Search found ${textResults.length} results.`);
   } catch {
     textResults = [];
   }
@@ -172,8 +170,6 @@ export async function retrieveContext(query: string, mentorId: string): Promise<
   // Cap at 8 documents to avoid overloading the AI context
   const finalDocs = docs.slice(0, 8);
 
-  try {
-    console.log(`✅ Final Combined Context: ${finalDocs.length} docs: [${finalDocs.map((d) => d.title).join(", ")}]`);
-  } catch {}
+  console.log(`✅ Final Combined Context: ${finalDocs.length} docs: [${finalDocs.map((d) => d.title).join(", ")}]`);
   return finalDocs;
 }

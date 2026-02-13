@@ -1,8 +1,7 @@
 import { Request, Response } from "express";
-import { Interaction } from "../../../Models/Interaction"; // Update the import path as necessary
-import { UserInterface } from "../../../../types/UserInterface"; // Update the import path as necessary
+import { UserInterface } from "../../../../types/UserInterface";
 import { InteractionType } from "../../../../types/enums/InteractionTypeEnum";
-import { Post } from "../../../Models/Post";
+import { findById, findOne, insertOne, Tables } from "../../../../lib/db";
 
 export const createImpression = async (req: Request, res: Response) => {
   try {
@@ -14,17 +13,17 @@ export const createImpression = async (req: Request, res: Response) => {
         .status(404)
         .json({ error: { message: "Post Id is required" } });
     }
-    const post = await Post.findById(postId);
+    const post = await findById(Tables.POSTS, postId);
 
     if (!post) {
       return res.status(404).json({ error: { message: "Post not found" } });
     }
 
-    const interactionExists = await Interaction.findOne({
+    const interactionExists = await findOne(Tables.INTERACTIONS, {
       type: InteractionType.IMPRESSION,
-      post: postId,
-      user: post.user,
-      interactedBy: user._id,
+      post_id: postId,
+      user_id: post.user_id,
+      interacted_by: user._id || user.id,
     });
 
     if (interactionExists) {
@@ -35,15 +34,13 @@ export const createImpression = async (req: Request, res: Response) => {
       });
     }
 
-    const impression = new Interaction({
+    const impression = await insertOne(Tables.INTERACTIONS, {
       type: InteractionType.IMPRESSION,
-      post: postId,
-      user: post.user,
-      interactedBy: user._id,
-      isDeleted: false,
+      post_id: postId,
+      user_id: post.user_id,
+      interacted_by: user._id || user.id,
+      is_deleted: false,
     });
-
-    await impression.save();
 
     return res.json({
       data: impression,

@@ -1,8 +1,7 @@
 import { Request, Response } from "express";
-import { Notification } from "../../../Models/Notification";
 import { UserInterface } from "../../../../types/UserInterface";
-import mongoose from "mongoose";
 import { RolesEnum } from "../../../../types/RolesEnum";
+import { findById, deleteById, softDelete, Tables } from "../../../../lib/db";
 
 export const deleteNotification = async (
   req: Request,
@@ -12,28 +11,22 @@ export const deleteNotification = async (
     const user = req.user as UserInterface;
     const { id } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: "Invalid notification ID." });
-    }
-
-    const notification = await Notification.findById(id);
+    const notification = await findById(Tables.NOTIFICATIONS, id);
 
     if (!notification) {
       return res.status(404).json({ error: "Notification not found." });
     }
 
-    if (notification.sentTo != user._id && user.role !== RolesEnum.ADMIN) {
+    if (notification.sent_to != user.id && user.role !== RolesEnum.ADMIN) {
       return res
         .status(403)
         .json({ error: "You are not authorized to delete this notification." });
     }
 
     if (user.role === RolesEnum.ADMIN) {
-      await notification.deleteOne();
+      await deleteById(Tables.NOTIFICATIONS, id);
     } else {
-      notification.deletedAt = new Date();
-      notification.isDeleted = true;
-      await notification.save();
+      await softDelete(Tables.NOTIFICATIONS, id);
     }
     return res.json({
       message: "Notification deleted successfully.",

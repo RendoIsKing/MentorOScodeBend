@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
-import { Interest } from "../../../Models/Interest";
-import { Types } from "mongoose";
+import { findById, softDelete, Tables } from "../../../../lib/db";
 
 export const deleteInterest = async (
   req: Request,
@@ -9,25 +8,17 @@ export const deleteInterest = async (
   try {
     const { id } = req.params;
 
-    if (!Types.ObjectId.isValid(id)) {
-      return res
-        .status(400)
-        .json({ error: { message: "Invalid interest ID." } });
-    }
-
-    const interest = await Interest.findById(id);
+    const interest = await findById(Tables.INTERESTS, id);
     if (!interest) {
       return res
         .status(404)
         .json({ error: { message: "Interest not found." } });
     }
 
-    interest.isDeleted = true;
-    interest.deletedAt = new Date();
-    await interest.save();
+    await softDelete(Tables.INTERESTS, id);
 
     return res.json({
-      data: interest,
+      data: { ...interest, is_deleted: true },
       message: "Interest deleted successfully.",
     });
   } catch (err) {

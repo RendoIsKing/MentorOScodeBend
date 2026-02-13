@@ -1,37 +1,31 @@
 import { Request, Response } from "express";
-import { Document } from "../../../Models/Document";
-import { User } from "../../../Models/User";
 import { DocumentStatusEnum } from "../../../../types/DocumentStatusEnum";
+import { findById, updateById, Tables } from "../../../../lib/db";
 
 export const rejectDocument = async (
   req: Request,
   res: Response
 ): Promise<Response> => {
   const { id } = req.params;
-  const document = await Document.findById(id);
+  const document = await findById(Tables.DOCUMENTS, id);
   if (!document) {
     return res.status(400).json({ error: { message: "No Document found" } });
   }
 
   try {
-    const data = await Document.findByIdAndUpdate(
-      id,
-      {
-        verifiedBy: null,
-        verifiedAt: null,
-        status: DocumentStatusEnum.Rejected,
-      },
-      { new: true }
-    );
+    const data = await updateById(Tables.DOCUMENTS, id, {
+      verified_by: null,
+      verified_at: null,
+      status: DocumentStatusEnum.Rejected,
+    });
 
-    const user = await User.findById(data?.userId);
-    if (user) {
-      await User.findByIdAndUpdate(user.id, {
-        isVerified: false,
-        hasDocumentVerified: false,
-        isMentor: false,
-        verifiedAt: null,
-        verifiedBy: null,
+    if (data?.user_id) {
+      await updateById(Tables.USERS, data.user_id, {
+        is_verified: false,
+        has_document_verified: false,
+        is_mentor: false,
+        verified_at: null,
+        verified_by: null,
       });
     }
 

@@ -1,7 +1,7 @@
-import mongoose, { Document } from "mongoose";
-
-export interface TipInterface extends Document {
+export interface TipInterface {
+  _id?: string;
+  id?: string;
   message: string;
-  tipTo: mongoose.Types.ObjectId;
-  tipBy: mongoose.Types.ObjectId;
+  tipTo: string;
+  tipBy: string;
 }

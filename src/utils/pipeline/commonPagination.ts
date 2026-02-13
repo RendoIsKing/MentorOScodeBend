@@ -1,30 +1,14 @@
-import { PipelineStage } from "mongoose";
-
+/**
+ * Legacy pagination pipeline — no longer used with Supabase.
+ *
+ * Use `paginate()` from `src/lib/db.ts` instead.
+ * This file is kept as a no-op export for any code that still imports it.
+ */
 export const commonPaginationPipeline = (
   page: number,
   perPage: number,
-  //   defaultPerPage: number,
   skip: number
-): PipelineStage[] => {
-  //   const pipeline: PipelineStage[] =;
-  return [
-    {
-      $facet: {
-        metaData: [
-          { $count: "total" },
-          { $addFields: { page, perPage: perPage } },
-          {
-            $addFields: {
-              pageCount: {
-                $ceil: {
-                  $divide: ["$total", perPage],
-                },
-              },
-            },
-          },
-        ],
-        data: [{ $skip: skip }, { $limit: perPage }],
-      },
-    },
-  ] as PipelineStage[];
+): any[] => {
+  console.warn("[DEPRECATION] commonPaginationPipeline is deprecated. Use paginate() from src/lib/db.ts");
+  return [];
 };

@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
-import { Feature } from "../../../Models/Feature";
 import createSlug from "../../../../utils/regx/createSlug";
+import { findOne, insertOne, Tables } from "../../../../lib/db";
 
 export const createFeature = async (
   req: Request,
@@ -10,17 +10,17 @@ export const createFeature = async (
     const body = req.body;
     const featureSlug = createSlug(body.feature);
 
-    const featureExist = await Feature.findOne({ slug: featureSlug });
+    const featureExist = await findOne(Tables.FEATURES, { slug: featureSlug });
     if (featureExist) {
       return res.status(400).json({
         message: "Feature already existed with this name",
       });
     }
 
-    const feature = await Feature.create({
+    const feature = await insertOne(Tables.FEATURES, {
       ...body,
       slug: featureSlug,
-      isAvailable: true,
+      is_available: true,
     });
     return res.json({
       data: feature,

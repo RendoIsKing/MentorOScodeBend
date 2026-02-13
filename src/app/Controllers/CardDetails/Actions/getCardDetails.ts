@@ -1,19 +1,17 @@
 import { Request, Response } from "express";
 import { extractCardDetailsFromToken } from "./extractCardDetailsFromToken";
-import { cardDetails } from "../../../Models/CardDetails";
 import { UserInterface } from "../../../../types/UserInterface";
 import stripeInstance from "../../../../utils/stripe";
+import { count, insertOne, Tables } from "../../../../lib/db";
 
 export const getCardDetails = async (
   req: Request,
   res: Response
 ): Promise<Response> => {
   try {
-    
-
-    const {tokenId} = req.body;
+    const { tokenId } = req.body;
     const user = req.user as UserInterface;
-    console.log("user ",user)
+    console.log("user ", user);
 
     if (!tokenId) {
       return res.status(400).json({ error: "Token ID is required" });
@@ -31,7 +29,6 @@ export const getCardDetails = async (
 
     const isCardExist = existingCards.data.some((card) => {
       //@ts-ignore
-
       return card.card.fingerprint === paymentMethod.card.fingerprint;
     });
 
@@ -45,15 +42,15 @@ export const getCardDetails = async (
       customer: user.stripeClientId,
     });
 
-    const userCardCount = await cardDetails.countDocuments({
-      userId: user.id,
-      isDeleted: false,
+    const userCardCount = await count(Tables.CARD_DETAILS, {
+      user_id: user.id,
+      is_deleted: false,
     });
     const isDefault = userCardCount === 0;
 
-    const cardDetailsDocument = new cardDetails({
-      userId: user.id,
-      stripeCardId: cardDetail.id,
+    const cardDetailsDocument = await insertOne(Tables.CARD_DETAILS, {
+      user_id: user.id,
+      stripe_card_id: cardDetail.id,
       object: cardDetail.object,
       address_city: cardDetail.address_city,
       address_country: cardDetail.address_country,
@@ -67,27 +64,19 @@ export const getCardDetails = async (
       funding: cardDetail.funding,
       last4: cardDetail.last4,
       tokenization_method: cardDetail.tokenization_method,
-      paymentMethodId: paymentMethod.id,
-      isActive: true,
-      isDefault: isDefault,
-      activatedAt: new Date(),
+      payment_method_id: paymentMethod.id,
+      is_active: true,
+      is_default: isDefault,
+      activated_at: new Date().toISOString(),
     });
 
-    await stripeInstance.customers.update(
-      user.stripeClientId,
-      {
-        // metadata: {
-        //   order_id: '6735',
-        // },
-        invoice_settings: {
-          default_payment_method: paymentMethod.id,
-        },
-      }
-    );
+    await stripeInstance.customers.update(user.stripeClientId, {
+      invoice_settings: {
+        default_payment_method: paymentMethod.id,
+      },
+    });
 
     await stripeInstance.customers.retrieve(user.stripeClientId);
-
-    await cardDetailsDocument.save();
 
     return res.json({
       message: "Card details saved successfully",

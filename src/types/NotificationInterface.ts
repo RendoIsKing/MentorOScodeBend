@@ -1,16 +1,17 @@
-import { Document, Types } from "mongoose";
 import { UserInterface } from "./UserInterface";
 import { FirebaseNotificationEnum } from "./enums/FirebaseNotificationEnum";
 import { IPostSchema } from "./interfaces/postsInterface";
 
-export interface NotificationInterface extends Document {
+export interface NotificationInterface {
+  _id?: string;
+  id?: string;
   title: string;
   description: string;
-  sentTo: Types.ObjectId | UserInterface;
+  sentTo: string | UserInterface;
   readAt?: Date;
   isDeleted: boolean;
   type: FirebaseNotificationEnum;
-  notificationOnPost: Types.ObjectId | IPostSchema;
-  notificationFromUser: Types.ObjectId | UserInterface;
+  notificationOnPost: string | IPostSchema;
+  notificationFromUser: string | UserInterface;
   deletedAt: Date;
 }

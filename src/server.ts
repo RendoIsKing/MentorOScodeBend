@@ -4,7 +4,6 @@ import helmet from "helmet";
 import compression from "compression";
 import passport from "passport";
 import cors from "cors";
-import { connectDatabase } from "./utils/dbConnection";
 import "reflect-metadata";
 //************* */
 import fs from "fs";
@@ -61,9 +60,7 @@ import { initSentry } from './observability/sentry';
 import { withRequestId, httpLogger } from './observability/logging';
 import healthRouter from './routes/health';
 import rateLimit from 'express-rate-limit';
-import mongoSanitize from 'express-mongo-sanitize';
 import hpp from 'hpp';
-import { ensureIndexes } from './utils/ensureIndexes';
 
 const version = "0.0.1";
 //*********** */
@@ -93,9 +90,6 @@ export class Server {
     this.app = express();
     this.port = port;
 
-    // Ensure database connection established early
-    try { void connectDatabase(); } catch {}
-
     // Log dev login flag at boot for clarity
     try { console.info('[BOOT] DEV_LOGIN_ENABLED =', process.env.DEV_LOGIN_ENABLED); } catch {}
 
@@ -104,8 +98,6 @@ export class Server {
     this.registerMiddlewares();
     this.initializePassportAndStrategies();
     this.regsiterRoutes();
-    // Ensure indexes in background (non-blocking)
-    ensureIndexes().catch(()=>{});
     if (process.env.NODE_ENV !== 'test') startSnapshotReconciler();
     expireDataSetCronJob();
     // this.start()
@@ -198,8 +190,6 @@ export class Server {
     );
     this.app.use(express.json({ limit: "50mb" }));
     this.app.use(express.urlencoded({ limit: "50mb", extended: true }));
-    // SECURITY: Sanitize user input to prevent NoSQL injection attacks ($gt, $ne, etc.)
-    this.app.use(mongoSanitize());
     // SECURITY: HTTP security headers via Helmet with Content Security Policy
     this.app.use(helmet({
       // Allow assets from api.mentorio.no to be embedded on www.mentorio.no

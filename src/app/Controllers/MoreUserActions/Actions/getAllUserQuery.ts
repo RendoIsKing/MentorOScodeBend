@@ -1,30 +1,29 @@
 import { Request, Response } from "express";
-import { MoreAction } from "../../../Models/MoreAction";
 import { userActionType } from "../../../../types/enums/userActionTypeEnum";
+import { db, Tables } from "../../../../lib/db";
 
 export const getUserQueries = async (
   req: Request,
   res: Response
 ): Promise<Response> => {
   try {
-    const queries = await MoreAction.find({
-      actionType: {
-        $in: [userActionType.USER_QUERY, userActionType.REPORT],
-      },
-    })
-      .populate({
-        path: "actionByUser",
-        select: "userName",
-      })
-      .populate({
-        path: "actionToUser",
-        select: "userName",
-      })
-      .exec();
+    const { data: queries, error } = await db
+      .from(Tables.MORE_ACTIONS)
+      .select(
+        "*, action_by:users!action_by_user(id, user_name), action_to:users!action_to_user(id, user_name)"
+      )
+      .in("action_type", [userActionType.USER_QUERY, userActionType.REPORT]);
 
-    const customQueries = queries.map((query) => ({
-      ...query.toObject(),
-      actionToUser: query.actionToUser || {},
+    if (error) {
+      console.error(error, "Error while fetching user queries");
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong." } });
+    }
+
+    const customQueries = (queries || []).map((query: any) => ({
+      ...query,
+      action_to: query.action_to || {},
     }));
 
     return res.status(200).json({

@@ -1,16 +1,13 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { Post } from "../../../Models/Post";
-import { IPostSchema } from "../../../../types/interfaces/postsInterface";
-import { Interaction } from "../../../Models/Interaction";
 import { InteractionType } from "../../../../types/enums/InteractionTypeEnum";
 import { validate } from "class-validator";
 import { CommentInput } from "../Inputs/postCommentInput";
 import { plainToClass } from "class-transformer";
-import { User } from "../../../Models/User";
 import { sendNotification } from "../../../../utils/Notifications/notificationService";
 import { FirebaseNotificationEnum } from "../../../../types/enums/FirebaseNotificationEnum";
 import { saveNotification } from "../../Notifications/Actions/saveNotification";
+import { findById, insertOne, Tables } from "../../../../lib/db";
 
 export const commentAction = async (
   req: Request,
@@ -21,9 +18,9 @@ export const commentAction = async (
     const postId = req.params.id;
 
     const postInput = plainToClass(CommentInput, req.body);
-    const postExists = (await Post.findById(postId)) as IPostSchema;
+    const postExists = await findById(Tables.POSTS, postId);
 
-    if (!postExists || postExists?.isDeleted) {
+    if (!postExists || postExists.is_deleted) {
       return res.status(400).json({ error: { message: "Post not exist" } });
     }
 
@@ -32,17 +29,17 @@ export const commentAction = async (
       return res.status(400).json({ errors: validationErrors });
     }
 
-    const commentInteraction = await Interaction.create({
+    const commentInteraction = await insertOne(Tables.INTERACTIONS, {
       comment: req.body.comment,
-      user: postExists.user,
-      interactedBy: user.id,
+      user_id: postExists.user_id,
+      interacted_by: user.id,
       type: InteractionType.COMMENT,
-      post: postId,
+      post_id: postId,
     });
 
     try {
-      const userComment = await User.findById(postExists.user);
-      const interactedByUser = await User.findById(user.id);
+      const userComment = await findById(Tables.USERS, postExists.user_id);
+      const interactedByUser = await findById(Tables.USERS, user.id);
       if (!interactedByUser) {
         return res
           .status(404)
@@ -52,7 +49,7 @@ export const commentAction = async (
         const notificationToken = userComment.fcm_token;
         if (notificationToken) {
           const notificationTitle = "New Comment on your post";
-          const notificationDescription = `${interactedByUser.userName} commented on your post`;
+          const notificationDescription = `${interactedByUser.user_name} commented on your post`;
           await sendNotification(
             notificationToken,
             notificationTitle,
@@ -64,7 +61,7 @@ export const commentAction = async (
           await saveNotification({
             title: notificationTitle,
             description: notificationDescription,
-            sentTo: [userComment._id],
+            sentTo: [userComment.id],
             type: FirebaseNotificationEnum.COMMENT,
             notificationOnPost: postExists.id,
             notificationFromUser: null,

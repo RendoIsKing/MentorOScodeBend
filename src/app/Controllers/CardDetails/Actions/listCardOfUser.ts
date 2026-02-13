@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { cardDetails } from "../../../Models/CardDetails";
+import { db, Tables } from "../../../../lib/db";
 
 export const listAllCardsOfUser = async (
   req: Request,
@@ -12,27 +12,20 @@ export const listAllCardsOfUser = async (
       return res.status(404).json({ error: { message: "User not found." } });
     }
 
-    const cards = await cardDetails.aggregate([
-      {
-        $match: {
-          userId: user._id,
-          isDeleted: false,
-          deletedAt: null,
-        },
-      },
-      {
-        $project: {
-          _id: 1,
-          brand: 1,
-          isDefault: 1,
-          last4: 1,
-          exp_month: 1,
-          exp_year: 1,
-        },
-      },
-    ]);
+    const { data: cards, error } = await db
+      .from(Tables.CARD_DETAILS)
+      .select("id, brand, is_default, last4, exp_month, exp_year")
+      .eq("user_id", user.id)
+      .eq("is_deleted", false);
 
-    return res.json({ data: cards });
+    if (error) {
+      console.error(error, "Error in listing cards of user");
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong." } });
+    }
+
+    return res.json({ data: cards || [] });
   } catch (error) {
     console.error(error, "Error in listing cards of user");
     return res

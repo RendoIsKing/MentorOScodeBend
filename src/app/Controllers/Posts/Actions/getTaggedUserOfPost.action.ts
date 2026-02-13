@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { Post } from "../../../Models/Post";
 import { UserInterface } from "../../../../types/UserInterface";
+import { db, findById, Tables } from "../../../../lib/db";
 
 export const getTaggedUsers = async (
   req: Request,
@@ -10,101 +9,73 @@ export const getTaggedUsers = async (
   try {
     const { id } = req.params;
     const user = req.user as UserInterface;
+    const userId = user._id || user.id;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: "Invalid ID format" });
-    }
-
-    const post = await Post.aggregate([
-      {
-        $match: {
-          _id: new mongoose.Types.ObjectId(id),
-          deletedAt: null,
-          isDeleted: false,
-        },
-      },
-      {
-        $lookup: {
-          from: "users",
-          let: { userTags: "$userTags" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $in: ["$_id", "$$userTags.userId"],
-                },
-              },
-            },
-            {
-              $lookup: {
-                from: "userconnections",
-                let: { userId: "$_id" },
-                pipeline: [
-                  {
-                    $match: {
-                      $expr: {
-                        $and: [
-                          {
-                            $eq: [
-                              "$owner",
-                              new mongoose.Types.ObjectId(user._id),
-                            ],
-                          },
-                          { $eq: ["$followingTo", "$$userId"] },
-                        ],
-                      },
-                    },
-                  },
-                ],
-                as: "isFollowing",
-              },
-            },
-            {
-              $addFields: {
-                isFollowing: { $gt: [{ $size: "$isFollowing" }, 0] },
-              },
-            },
-            {
-              $lookup: {
-                from: "files",
-                localField: "photoId",
-                foreignField: "_id",
-                as: "photo",
-              },
-            },
-            {
-              $unwind: {
-                path: "$photo",
-                preserveNullAndEmptyArrays: true,
-              },
-            },
-
-            {
-              $project: {
-                _id: 1,
-                fullName: 1,
-                userName: 1,
-                photoId: 1,
-                isFollowing: 1,
-                "photo.path": 1,
-              },
-            },
-          ],
-          as: "taggedUsers",
-        },
-      },
-      {
-        $project: {
-          taggedUsers: 1,
-        },
-      },
-    ]);
-
-    if (post.length === 0) {
+    // Verify post exists
+    const post = await findById(Tables.POSTS, id);
+    if (!post || post.is_deleted) {
       return res.status(404).json({ error: "Post not found" });
     }
 
-    return res.json(post[0]);
+    // Get user tags for this post
+    const { data: userTags } = await db
+      .from(Tables.POST_USER_TAGS)
+      .select("user_id")
+      .eq("post_id", id);
+
+    if (!userTags || userTags.length === 0) {
+      return res.json({ taggedUsers: [] });
+    }
+
+    const taggedUserIds = userTags.map((t: any) => t.user_id);
+
+    // Fetch tagged user details
+    const { data: taggedUsers } = await db
+      .from(Tables.USERS)
+      .select("id, full_name, user_name, photo_id")
+      .in("id", taggedUserIds);
+
+    if (!taggedUsers || taggedUsers.length === 0) {
+      return res.json({ taggedUsers: [] });
+    }
+
+    // Check follow status for each tagged user
+    const { data: followData } = await db
+      .from(Tables.USER_CONNECTIONS)
+      .select("following_to")
+      .eq("owner", userId)
+      .in(
+        "following_to",
+        taggedUsers.map((u: any) => u.id)
+      );
+
+    const followingSet = new Set(
+      (followData || []).map((f: any) => f.following_to)
+    );
+
+    // Fetch photos for tagged users
+    const photoIds = taggedUsers
+      .map((u: any) => u.photo_id)
+      .filter(Boolean);
+    const { data: photos } = photoIds.length
+      ? await db.from(Tables.FILES).select("id, path").in("id", photoIds)
+      : { data: [] as any[] };
+
+    const photoMap: Record<string, any> = {};
+    for (const p of photos || []) {
+      photoMap[p.id] = p;
+    }
+
+    const enrichedUsers = taggedUsers.map((u: any) => ({
+      _id: u.id,
+      fullName: u.full_name,
+      userName: u.user_name,
+      photoId: u.photo_id,
+      isFollowing: followingSet.has(u.id),
+      photo: u.photo_id ? photoMap[u.photo_id] || null : null,
+    }));
+
+    return res.json({ taggedUsers: enrichedUsers });
   } catch (error) {
     console.error("Error retrieving tagged users:", error);
     return res.status(500).json({ error: "Internal Server Error" });

@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
-import { Types } from 'mongoose';
 import jwt from 'jsonwebtoken';
-import { ChatThread, ChatMessage } from '../../Models/ChatModels';
+import { db, findOne, findMany, insertOne, deleteById, Tables } from '../../../lib/db';
 
 function resolveUserId(req: any): string | undefined {
   if (req?.user?._id) return String(req.user._id);
+  if (req?.user?.id) return String(req.user.id);
   if (req?.body?.userId) return String(req.body.userId);
   if (req?.query?.userId) return String(req.query.userId);
   const cookie = req.headers?.cookie as string | undefined;
@@ -18,18 +18,42 @@ function resolveUserId(req: any): string | undefined {
   } catch { return undefined; }
 }
 
+/**
+ * Get (or create) a legacy interaction thread by userId + partner.
+ * These threads use the participants array to store [userId] and
+ * rely on a separate "partner" column for the coach identifier.
+ *
+ * NOTE: If your chat_threads table does not have user_id / partner
+ * columns, you can replicate this with participants = [userId] and
+ * store the partner name inside the unread JSONB as { _partner: name }.
+ */
 export const getThread = async (req: Request, res: Response) => {
   try {
     const userId = resolveUserId(req);
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const partner = (req as any).params?.partner || 'coach-engh';
-    const thread = await ChatThread.findOneAndUpdate(
-      { userId, partner },
-      { $setOnInsert: { userId: new Types.ObjectId(userId), partner } },
-      { upsert: true, new: true }
-    );
-    const msgs = await ChatMessage.find({ threadId: thread._id }).sort({ createdAt: 1 }).lean();
-    return res.json({ threadId: thread._id, messages: msgs });
+
+    // Find existing thread
+    let thread = await findOne(Tables.CHAT_THREADS, { user_id: userId, partner });
+
+    // Create if not found (upsert equivalent)
+    if (!thread) {
+      thread = await insertOne(Tables.CHAT_THREADS, {
+        user_id: userId,
+        partner,
+        participants: [userId],
+        last_message_at: new Date().toISOString(),
+        unread: {},
+      });
+    }
+    if (!thread) return res.status(500).json({ message: 'thread creation failed' });
+
+    const msgs = await findMany(Tables.CHAT_MESSAGES, { thread_id: thread.id }, {
+      orderBy: 'created_at',
+      ascending: true,
+    });
+
+    return res.json({ threadId: thread.id, messages: msgs });
   } catch (e) {
     return res.status(500).json({ message: 'thread fetch failed' });
   }
@@ -42,12 +66,26 @@ export const appendMessage = async (req: Request, res: Response) => {
     const partner = (req as any).params?.partner || 'coach-engh';
     const { sender, text } = req.body || {};
     if (!sender || !text) return res.status(400).json({ message: 'sender and text required' });
-    const thread = await ChatThread.findOneAndUpdate(
-      { userId, partner },
-      { $setOnInsert: { userId: new Types.ObjectId(userId), partner } },
-      { upsert: true, new: true }
-    );
-    const msg = await ChatMessage.create({ threadId: thread._id, sender, text });
+
+    // Find or create thread
+    let thread = await findOne(Tables.CHAT_THREADS, { user_id: userId, partner });
+    if (!thread) {
+      thread = await insertOne(Tables.CHAT_THREADS, {
+        user_id: userId,
+        partner,
+        participants: [userId],
+        last_message_at: new Date().toISOString(),
+        unread: {},
+      });
+    }
+    if (!thread) return res.status(500).json({ message: 'thread creation failed' });
+
+    const msg = await insertOne(Tables.CHAT_MESSAGES, {
+      thread_id: thread.id,
+      sender,
+      text,
+    });
+
     return res.json({ data: msg });
   } catch (e) {
     return res.status(500).json({ message: 'append failed' });
@@ -59,10 +97,17 @@ export const clearThread = async (req: Request, res: Response) => {
     const userId = resolveUserId(req);
     if (!userId) return res.status(400).json({ message: 'userId required' });
     const partner = (req as any).params?.partner || 'coach-engh';
-    const thread = await ChatThread.findOne({ userId, partner });
+
+    const thread = await findOne(Tables.CHAT_THREADS, { user_id: userId, partner });
     if (thread) {
-      await ChatMessage.deleteMany({ threadId: thread._id });
+      // Delete all messages belonging to this thread
+      const { error } = await db
+        .from(Tables.CHAT_MESSAGES)
+        .delete()
+        .eq('thread_id', thread.id);
+      if (error) console.error('[clearThread] delete messages failed:', error.message);
     }
+
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ message: 'clear failed' });

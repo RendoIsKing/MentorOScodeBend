@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { cardDetails } from "../../../Models/CardDetails";
-// import stripeInstance from "../../../../utils/stripe";
+import { findOne, softDelete, Tables } from "../../../../lib/db";
 
 export const deleteCard = async (
   req: Request,
@@ -21,21 +20,14 @@ export const deleteCard = async (
         .json({ error: { message: "Card ID is required." } });
     }
 
-    const card = await cardDetails.findOne({
-      _id: cardId,
-      userId: user._id,
-      isDeleted: false,
+    const card = await findOne(Tables.CARD_DETAILS, {
+      id: cardId,
+      user_id: user.id,
+      is_deleted: false,
     });
 
-    // const customerSource = await stripeInstance.customers.deleteSource(
-    //   user.stripeClientId,
-    //   card.stripeCardId
-    // );
-
     if (card) {
-      card.isDeleted = true;
-      card.deletedAt = new Date();
-      await card.save();
+      await softDelete(Tables.CARD_DETAILS, card.id);
 
       return res.json({ message: "Card deleted successfully." });
     } else {

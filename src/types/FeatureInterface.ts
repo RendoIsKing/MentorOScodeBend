@@ -1,6 +1,6 @@
-import { Document } from "mongoose";
-
-export interface FeatureInterface extends Document {
+export interface FeatureInterface {
+  _id?: string;
+  id?: string;
   feature: string;
   slug: string;
   description: string;

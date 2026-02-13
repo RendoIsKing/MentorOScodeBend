@@ -1,8 +1,7 @@
 import { Request, Response } from "express";
 import { z } from 'zod';
 import { OpenAI } from "openai";
-import { UserProfile } from "../../Models/UserProfile";
-import { Types } from "mongoose";
+import { findOne, Tables } from "../../../lib/db";
 
 const OPENAI_KEY = (process.env.OPENAI_API_KEY || process.env.OPENAI_API_TOKEN || process.env.OPENAI_KEY || '').trim();
 function getOpenAI(): OpenAI | null {
@@ -36,11 +35,11 @@ Start every chat by asking key questions to personalize your guidance.
 When creating training plans, ALWAYS follow this exact format:
 - Use Norwegian weekdays (Mandag, Tirsdag, Onsdag, Torsdag, Fredag, Lørdag, Søndag) instead of "Dag 1", "Dag 2", etc.
 - End each day's workout with a motivational message, like:
-  "Det var det for dagen, stå på! Husk målene du har satt deg og kjemp for å oppnå dem - dette får du til!"
-  "Bra jobba! Hver dag du trener er en dag nærmere målet ditt. Kom igjen!"
-  "Stå på! Disiplin gir deg frihet, og hver økt bygger styrken din. Du klarer dette!"
-  "Ikke gi opp nå! Små steg hver dag gir store resultater. Jeg tror på deg!"
-  "Kjemp på! Denne økten gjør deg sterkere både fysisk og mentalt. Gi alt du har!"
+  "Det var det for dagen, st\u00e5 p\u00e5! Husk m\u00e5lene du har satt deg og kjemp for \u00e5 oppn\u00e5 dem - dette f\u00e5r du til!"
+  "Bra jobba! Hver dag du trener er en dag n\u00e6rmere m\u00e5let ditt. Kom igjen!"
+  "St\u00e5 p\u00e5! Disiplin gir deg frihet, og hver \u00f8kt bygger styrken din. Du klarer dette!"
+  "Ikke gi opp n\u00e5! Sm\u00e5 steg hver dag gir store resultater. Jeg tror p\u00e5 deg!"
+  "Kjemp p\u00e5! Denne \u00f8kten gj\u00f8r deg sterkere b\u00e5de fysisk og mentalt. Gi alt du har!"
 `;
 
 /**
@@ -56,14 +55,14 @@ export const chatWithCoachEngh = async (req: Request, res: Response) => {
     if (!parsed.success) return res.status(422).json({ error: 'validation_failed', details: parsed.error.flatten() });
     const { message, history } = parsed.data as any;
 
-    // If userId cookie is available, try to load profile context
+    // If userId is available, try to load profile context via Supabase
     let profileContext = '';
     try {
-      const uid = (req as any)?.user?._id || (req.cookies?.auth_token ? undefined : undefined);
-      if (uid && Types.ObjectId.isValid(uid)) {
-        const prof = await UserProfile.findOne({ userId: new Types.ObjectId(uid) }).lean();
+      const uid = (req as any)?.user?._id || (req as any)?.user?.id;
+      if (uid && typeof uid === 'string' && uid.length > 0) {
+        const prof = await findOne(Tables.USER_PROFILES, { user_id: uid });
         if (prof) {
-          profileContext = `KONTEKST: Mål: ${prof.goals || '-'}, Vekt: ${prof.currentWeightKg || '-'}kg, Styrker: ${prof.strengths || '-'}, Svakheter: ${prof.weaknesses || '-'}, Skader: ${prof.injuryHistory || '-'}, Matpreferanser: ${prof.nutritionPreferences || '-'}, Dager/uke: ${prof.trainingDaysPerWeek || '-'}`;
+          profileContext = `KONTEKST: M\u00e5l: ${prof.goals || '-'}, Vekt: ${prof.current_weight_kg || '-'}kg, Styrker: ${prof.strengths || '-'}, Svakheter: ${prof.weaknesses || '-'}, Skader: ${prof.injury_history || '-'}, Matpreferanser: ${prof.nutrition_preferences || '-'}, Dager/uke: ${prof.training_days_per_week || '-'}`;
         }
       }
     } catch {}
@@ -75,7 +74,7 @@ export const chatWithCoachEngh = async (req: Request, res: Response) => {
       {
         role: "assistant",
         content:
-          "Hei! Jeg er Coach Engh. Før vi begynner: Hva er målet ditt nå, hva sliter du med, hvor ofte trener du, og har du matpreferanser/allergier?",
+          "Hei! Jeg er Coach Engh. F\u00f8r vi begynner: Hva er m\u00e5let ditt n\u00e5, hva sliter du med, hvor ofte trener du, og har du matpreferanser/allergier?",
       },
     ];
 
@@ -99,8 +98,8 @@ export const chatWithCoachEngh = async (req: Request, res: Response) => {
     });
     const reply = response.choices?.[0]?.message?.content || "";
     
-    // Check if this is a plan proposal (updated to handle Norwegian weekdays and motivational endings)
-    const isPlanProposal = /^(Ny|Endring på)\s.+\n\s*##Type:\s*(Treningsplan|Kostholdsplan|Mål)\s*\n\s*Plan:\s*(.+)$/im.test(reply);
+    // Check if this is a plan proposal
+    const isPlanProposal = /^(Ny|Endring p\u00e5)\s.+\n\s*##Type:\s*(Treningsplan|Kostholdsplan|M\u00e5l)\s*\n\s*Plan:\s*(.+)$/im.test(reply);
     if (isPlanProposal) {
       return res.json({ reply, type: "plan_proposal" });
     }
@@ -116,24 +115,24 @@ export const chatWithCoachEngh = async (req: Request, res: Response) => {
 
 const COACH_MAJEN_SYSTEM_PROMPT = `
 You are Coach Majen, a pragmatic, encouraging strength and conditioning coach.
-You keep answers short, concrete, and always include 1–2 specific next steps.
+You keep answers short, concrete, and always include 1\u20132 specific next steps.
 Speak like a friendly Scandinavian coach.
 
 When creating training plans, ALWAYS follow this exact format:
-- Use Norwegian weekdays (Mandag, Tirsdag, Onsdag, Torsdag, Fredag, Lørdag, Søndag) instead of "Dag 1", "Dag 2", etc.
+- Use Norwegian weekdays (Mandag, Tirsdag, Onsdag, Torsdag, Fredag, L\u00f8rdag, S\u00f8ndag) instead of "Dag 1", "Dag 2", etc.
 - End each day's workout with a motivational message from Majen, like:
-  "Det var det for dagen, stå på! Husk målene du har satt deg og kjemp for å oppnå dem - dette får du til!"
-  "Bra jobba! Hver dag du trener er en dag nærmere målet ditt. Kom igjen!"
-  "Stå på! Disiplin gir deg frihet, og hver økt bygger styrken din. Du klarer dette!"
-  "Ikke gi opp nå! Små steg hver dag gir store resultater. Jeg tror på deg!"
-  "Kjemp på! Denne økten gjør deg sterkere både fysisk og mentalt. Gi alt du har!"
+  "Det var det for dagen, st\u00e5 p\u00e5! Husk m\u00e5lene du har satt deg og kjemp for \u00e5 oppn\u00e5 dem - dette f\u00e5r du til!"
+  "Bra jobba! Hver dag du trener er en dag n\u00e6rmere m\u00e5let ditt. Kom igjen!"
+  "St\u00e5 p\u00e5! Disiplin gir deg frihet, og hver \u00f8kt bygger styrken din. Du klarer dette!"
+  "Ikke gi opp n\u00e5! Sm\u00e5 steg hver dag gir store resultater. Jeg tror p\u00e5 deg!"
+  "Kjemp p\u00e5! Denne \u00f8kten gj\u00f8r deg sterkere b\u00e5de fysisk og mentalt. Gi alt du har!"
 
 Examples of correct daily format:
 Mandag: Bryst og Triceps
 1. Benkpress: 4 sett x 6-8 reps
-2. Skråbenk med manualer: 3 sett x 8-10 reps
+2. Skr\u00e5benk med manualer: 3 sett x 8-10 reps
 3. Dips: 3 sett x 6-8 reps
-- Det var det for dagen, stå på! Husk målene du har satt deg og kjemp for å oppnå dem - dette får du til!`;
+- Det var det for dagen, st\u00e5 p\u00e5! Husk m\u00e5lene du har satt deg og kjemp for \u00e5 oppn\u00e5 dem - dette f\u00e5r du til!`;
 
 /**
  * Handle chat messages for Coach Majen and return AI response.
@@ -149,11 +148,11 @@ export const chatWithCoachMajen = async (req: Request, res: Response) => {
     const { message, history } = parsed.data as any;
     let profileContext = '';
     try {
-      const uid = (req as any)?.user?._id;
-      if (uid && Types.ObjectId.isValid(uid)) {
-        const prof = await UserProfile.findOne({ userId: new Types.ObjectId(uid) }).lean();
+      const uid = (req as any)?.user?._id || (req as any)?.user?.id;
+      if (uid && typeof uid === 'string' && uid.length > 0) {
+        const prof = await findOne(Tables.USER_PROFILES, { user_id: uid });
         if (prof) {
-          profileContext = `KONTEKST: Mål: ${prof.goals || '-'}, Trening/uke: ${prof.trainingDaysPerWeek || '-'}, Preferanser: ${prof.nutritionPreferences || '-'}`;
+          profileContext = `KONTEKST: M\u00e5l: ${prof.goals || '-'}, Trening/uke: ${prof.training_days_per_week || '-'}, Preferanser: ${prof.nutrition_preferences || '-'}`;
         }
       }
     } catch {}
@@ -162,7 +161,7 @@ export const chatWithCoachMajen = async (req: Request, res: Response) => {
       { role: 'system', content: COACH_MAJEN_SYSTEM_PROMPT },
       { role: 'system', content: OUTPUT_FORMAT_MEAL_PLAN },
       ...(profileContext ? [{ role: 'system', content: profileContext }] : []),
-      { role: 'assistant', content: 'Hei! Jeg er Coach Majen. Hva trener du mot nå, hvor ofte trener du, og hva er største floken?' }
+      { role: 'assistant', content: 'Hei! Jeg er Coach Majen. Hva trener du mot n\u00e5, hvor ofte trener du, og hva er st\u00f8rste floken?' }
     ];
     const msgs: any[] = Array.isArray(history) && history.length ? [...history] : seed;
     if (message) msgs.push({ role: 'user', content: String(message) });
@@ -183,8 +182,8 @@ export const chatWithCoachMajen = async (req: Request, res: Response) => {
     });
     const reply = response.choices?.[0]?.message?.content || '';
     
-    // Check if this is a plan proposal (updated to handle Norwegian weekdays and motivational endings)
-    const isPlanProposal = /^(Ny|Endring på)\s.+\n\s*##Type:\s*(Treningsplan|Kostholdsplan|Mål)\s*\n\s*Plan:\s*(.+)$/im.test(reply);
+    // Check if this is a plan proposal
+    const isPlanProposal = /^(Ny|Endring p\u00e5)\s.+\n\s*##Type:\s*(Treningsplan|Kostholdsplan|M\u00e5l)\s*\n\s*Plan:\s*(.+)$/im.test(reply);
     if (isPlanProposal) {
       return res.json({ reply, type: "plan_proposal" });
     }
@@ -192,7 +191,6 @@ export const chatWithCoachMajen = async (req: Request, res: Response) => {
     return res.json({ reply });
   } catch (e) {
     console.error('[chatWithCoachMajen] fail', e);
-    // Mirror Engh behavior: return a friendly fallback reply (HTTP 200)
     const msg = typeof (e as any)?.message === 'string' ? (e as any).message : 'ukjent feil';
     const echo = `[Dev fallback] ${msg}. Mitt svar: "${(req.body?.message ?? 'Hei!')}"`;
     return res.status(200).json({ reply: echo });

@@ -1,14 +1,13 @@
 import { Request, Response } from "express";
-import { CoachKnowledge } from "../../../Models/CoachKnowledge";
-import { User } from "../../../Models/User";
+import { insertOne, findById, updateById, Tables } from "../../../../lib/db";
 import { generateEmbedding } from "../../../../services/ai/embeddingService";
 
 /**
  * POST /mentor/knowledge/confirm
  *
  * Called after the mentor reviews the AI refinement analysis.
- * Saves the document to CoachKnowledge with enriched metadata.
- * If classification is "system_prompt", also appends to User.coreInstructions.
+ * Saves the document to coach_knowledge with enriched metadata.
+ * If classification is "system_prompt", also appends to users.core_instructions.
  */
 export const confirmKnowledgeAction = async (req: Request, res: Response) => {
   try {
@@ -50,33 +49,42 @@ export const confirmKnowledgeAction = async (req: Request, res: Response) => {
     // Generate embedding for RAG retrieval
     const embedding = await generateEmbedding(resolvedContent);
 
-    // Save to CoachKnowledge (both system_prompt and rag get saved for list visibility)
-    const doc = await CoachKnowledge.create({
-      userId,
+    const sanitizedKeywords = Array.isArray(keywords)
+      ? keywords.map((k: any) => String(k).trim()).filter(Boolean)
+      : [];
+    const sanitizedCoreRules = Array.isArray(coreRules)
+      ? coreRules.map((r: any) => String(r).trim()).filter(Boolean)
+      : [];
+    const sanitizedEntities = Array.isArray(entities)
+      ? entities.map((e: any) => String(e).trim()).filter(Boolean)
+      : [];
+
+    // Save to coach_knowledge (both system_prompt and rag get saved for list visibility)
+    const doc = await insertOne(Tables.COACH_KNOWLEDGE, {
+      user_id: userId,
       title: resolvedTitle,
       content: resolvedContent,
       type: fileType || "text",
-      mentorName,
-      embedding,
+      mentor_name: mentorName,
+      embedding: JSON.stringify(embedding),
       summary: String(summary || "").trim() || null,
       classification: resolvedClassification,
-      keywords: Array.isArray(keywords)
-        ? keywords.map((k: any) => String(k).trim()).filter(Boolean)
-        : [],
-      coreRules: Array.isArray(coreRules)
-        ? coreRules.map((r: any) => String(r).trim()).filter(Boolean)
-        : [],
-      entities: Array.isArray(entities)
-        ? entities.map((e: any) => String(e).trim()).filter(Boolean)
-        : [],
+      keywords: sanitizedKeywords,
+      core_rules: sanitizedCoreRules,
+      entities: sanitizedEntities,
     });
+
+    if (!doc) {
+      return res.status(500).json({ message: "failed_to_confirm_knowledge" });
+    }
 
     // If classified as system_prompt, append to user's core instructions
     if (resolvedClassification === "system_prompt") {
       try {
-        const coreRulesText = Array.isArray(coreRules) && coreRules.length > 0
-          ? coreRules.map((r: string, i: number) => `${i + 1}. ${r}`).join("\n")
-          : "";
+        const coreRulesText =
+          sanitizedCoreRules.length > 0
+            ? sanitizedCoreRules.map((r: string, i: number) => `${i + 1}. ${r}`).join("\n")
+            : "";
 
         const instructionBlock = [
           `\n\n--- ${resolvedTitle} ---`,
@@ -87,23 +95,20 @@ export const confirmKnowledgeAction = async (req: Request, res: Response) => {
           .filter(Boolean)
           .join("\n");
 
-        await User.findByIdAndUpdate(userId, {
-          $set: {
-            coreInstructions: await (async () => {
-              const user = await User.findById(userId).select("coreInstructions").lean();
-              const existing = String((user as any)?.coreInstructions || "");
-              return existing + instructionBlock;
-            })(),
-          },
+        const user = await findById(Tables.USERS, userId, "core_instructions");
+        const existing = String((user as any)?.core_instructions || "");
+
+        await updateById(Tables.USERS, userId, {
+          core_instructions: existing + instructionBlock,
         });
       } catch (err) {
-        console.error("[confirmKnowledge] Failed to update coreInstructions:", err);
+        console.error("[confirmKnowledge] Failed to update core_instructions:", err);
         // Don't fail the whole request — the knowledge doc is already saved
       }
     }
 
-    const knowledge = doc.toObject();
-    delete (knowledge as any).embedding;
+    // Remove embedding from response
+    const { embedding: _emb, ...knowledge } = doc as any;
 
     return res.json({ success: true, knowledge });
   } catch (error: any) {

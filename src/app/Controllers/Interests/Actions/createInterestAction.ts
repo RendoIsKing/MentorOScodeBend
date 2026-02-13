@@ -3,7 +3,7 @@ import { validate } from "class-validator";
 import { UserInterface } from "../../../../types/UserInterface";
 import { InterestInput } from "../Inputs/postInterestInput";
 import crypto from "crypto";
-import { Interest } from "../../../Models/Interest";
+import { findOne, insertOne, Tables } from "../../../../lib/db";
 
 const generateRandomSlug = (length: number = 8): string => {
   return crypto.randomBytes(length).toString("hex");
@@ -22,9 +22,9 @@ export const createInterest = async (
     const addedBy = req.user as UserInterface;
     const slug = generateRandomSlug();
 
-    const existingInterest = await Interest.findOne({
+    const existingInterest = await findOne(Tables.INTERESTS, {
       title: req.body.title,
-      isDeleted: false,
+      is_deleted: false,
     });
     if (existingInterest) {
       return res
@@ -37,13 +37,12 @@ export const createInterest = async (
         });
     }
 
-    const newInterest = new Interest({
-      ...req.body,
-      addedBy: addedBy.id,
+    const newInterest = await insertOne(Tables.INTERESTS, {
+      title: req.body.title,
+      added_by: addedBy.id,
       slug: slug,
+      is_available: req.body.isAvailable ?? true,
     });
-
-    await newInterest.save();
 
     return res.json({
       data: newInterest,

@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { MoreAction } from "../../../Models/MoreAction";
 import { userActionType } from "../../../../types/enums/userActionTypeEnum";
+import { insertOne, Tables } from "../../../../lib/db";
 
 export const postUserQuery = async (
   req: Request,
@@ -15,13 +15,12 @@ export const postUserQuery = async (
       return res.status(400).json({ error: { message: "Query is required" } });
     }
 
-    const moreAction = new MoreAction({
-      actionByUser: user.id,
+    const moreAction = await insertOne(Tables.MORE_ACTIONS, {
+      action_by_user: user.id,
       query: query,
-      actionType: userActionType.USER_QUERY,
+      action_type: userActionType.USER_QUERY,
     });
 
-    await moreAction.save();
     return res.json({
       data: moreAction,
       message: "Query added successfully.",

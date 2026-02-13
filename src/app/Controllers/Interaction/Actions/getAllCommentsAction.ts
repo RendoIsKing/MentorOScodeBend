@@ -1,39 +1,6 @@
 import { Request, Response } from "express";
-import { Interaction } from "../../../Models/Interaction";
 import { InteractionType } from "../../../../types/enums/InteractionTypeEnum";
-import { File } from "../../../Models/File";
-
-const populateInteractedBy = async (comment: any) => {
-  if (!comment) return null;
-
-  let interaction = { ...comment.toObject() };
-
-  if (interaction.replies && interaction.replies.length > 0) {
-    interaction.replies = await Promise.all(
-      interaction.replies.map(async (replyId: any) => {
-        const reply = await Interaction.findOne({
-          _id: replyId,
-          isDeleted: false,
-        })
-          .populate("interactedBy")
-          .exec();
-        return populateInteractedBy(reply);
-      })
-    );
-  }
-
-  interaction.interactedBy = await Interaction.populate(
-    interaction.interactedBy,
-    { path: "interactedBy" }
-  );
-
-  if (interaction.interactedBy && interaction.interactedBy.photoId) {
-    const photo = await File.findById(interaction.interactedBy.photoId).exec();
-    interaction.interactedBy.photo = photo;
-  }
-
-  return interaction;
-};
+import { db, findMany, Tables } from "../../../../lib/db";
 
 export const getCommentsByPostId = async (
   req: Request,
@@ -42,48 +9,78 @@ export const getCommentsByPostId = async (
   try {
     const { id } = req.params;
 
-    const postComments = await Interaction.find({
-      post: id,
-      type: InteractionType.COMMENT,
-      isDeleted: false,
-      deletedAt: null,
-    })
-      .populate("interactedBy")
-      .exec();
-
-    const populatedComments = await Promise.all(
-      postComments.map(async (comment: any) => {
-        return populateInteractedBy(comment);
-      })
+    // Fetch all non-deleted comments for this post
+    const comments = await findMany(
+      Tables.INTERACTIONS,
+      {
+        post_id: id,
+        type: InteractionType.COMMENT,
+        is_deleted: false,
+      },
+      { orderBy: "created_at", ascending: true }
     );
 
-    const replyIds = new Set<string>();
-    const collectReplyIds = (comment: any) => {
-      if (comment && comment.replies && comment.replies.length > 0) {
-        comment.replies.forEach((reply: any) => {
-          if (reply) {
-            replyIds.add(reply._id.toString());
-            collectReplyIds(reply);
-          }
-        });
+    if (!comments.length) {
+      return res
+        .status(200)
+        .json({ data: [], error: { message: "No comments to show." } });
+    }
+
+    // Fetch user info for all commenters
+    const userIds = [...new Set(comments.map((c: any) => c.interacted_by))];
+    const { data: users } = await db
+      .from(Tables.USERS)
+      .select("*")
+      .in("id", userIds);
+
+    // Fetch user photos
+    const photoIds = (users || [])
+      .map((u: any) => u.photo_id)
+      .filter(Boolean);
+    const { data: photos } = photoIds.length
+      ? await db.from(Tables.FILES).select("*").in("id", photoIds)
+      : { data: [] as any[] };
+
+    const photoMap: Record<string, any> = {};
+    for (const p of photos || []) {
+      photoMap[p.id] = p;
+    }
+
+    const userMap: Record<string, any> = {};
+    for (const u of users || []) {
+      userMap[u.id] = {
+        ...u,
+        photo: u.photo_id ? photoMap[u.photo_id] || null : null,
+      };
+    }
+
+    // Build comment tree using parent_id (replaces replies[] array)
+    const commentMap: Record<string, any> = {};
+    for (const c of comments) {
+      commentMap[c.id] = {
+        ...c,
+        interactedBy: userMap[c.interacted_by] || null,
+        replies: [],
+      };
+    }
+
+    const topLevel: any[] = [];
+    for (const c of comments) {
+      if (c.parent_id && commentMap[c.parent_id]) {
+        commentMap[c.parent_id].replies.push(commentMap[c.id]);
+      } else if (!c.parent_id && !c.is_child_comment) {
+        topLevel.push(commentMap[c.id]);
       }
-    };
+    }
 
-    populatedComments.forEach((comment) => collectReplyIds(comment));
-
-    // Filter out comments that are replies
-    const filteredComments = populatedComments.filter((comment) => {
-      return comment && !replyIds.has(comment._id.toString());
-    });
-
-    if (filteredComments.length === 0) {
+    if (topLevel.length === 0) {
       return res
         .status(200)
         .json({ data: [], error: { message: "No comments to show." } });
     }
 
     return res.json({
-      data: filteredComments,
+      data: topLevel,
       message: "Comments retrieved successfully.",
     });
   } catch (error) {

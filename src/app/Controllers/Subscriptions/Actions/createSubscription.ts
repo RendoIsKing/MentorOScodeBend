@@ -1,12 +1,8 @@
 import { Request, Response } from "express";
 import stripeInstance from "../../../../utils/stripe";
 import { UserInterface } from "../../../../types/UserInterface";
-import { User } from "../../../Models/User";
-import { Subscription } from "../../../Models/Subscription";
+import { findOne, findById, insertOne, Tables } from "../../../../lib/db";
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
-import { SubscriptionPlan } from "../../../Models/SubscriptionPlan";
-import { cardDetails } from "../../../Models/CardDetails";
-import { Transaction } from "../../../Models/Transaction";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
 import { cancelSubscriptions } from "./cancelSubscription";
@@ -20,33 +16,28 @@ export const createSubscription = async (
   const reqUser = req.user as UserInterface;
 
   try {
-    const user = await User.findOne({
-      _id: reqUser?.id,
-      isDeleted: false,
-      deletedAt: null,
+    const user = await findOne(Tables.USERS, {
+      id: reqUser?.id,
+      is_deleted: false,
     });
-    //why find subscription plan => as the data added in table with each user
-    const plan = await SubscriptionPlan.findOne({
-      _id: planId,
-      isDeleted: false,
-      deletedAt: null,
-    });
-    if (!plan) {
+
+    const plan = await findById(Tables.SUBSCRIPTION_PLANS, planId);
+    if (!plan || plan.is_deleted) {
       return res.status(404).json({ error: { message: "Plan not found" } });
     }
 
-    if (!plan.stripeProductObject) {
+    if (!plan.stripe_product_object) {
       return res
         .status(404)
         .json({ error: { message: "Plan/Product not registerd on stripe" } });
     }
 
-    console.log("Plan/Product registerd on stripe", plan.stripeProductObject )
+    console.log("Plan/Product registerd on stripe", plan.stripe_product_object);
 
     if (!user) {
       return res.status(404).json({ error: { message: "User not found" } });
     }
-    if (!user.isStripeCustomer == false && !user.stripeClientId) {
+    if (!user.is_stripe_customer == false && !user.stripe_client_id) {
       return res
         .status(404)
         .json({ error: { message: "User not registerd on stripe" } });
@@ -55,106 +46,68 @@ export const createSubscription = async (
     const cancelParams = { userId: reqUser?.id };
     await cancelSubscriptions(cancelParams);
 
-    // FIXME: cardDetails should be CardDetail
-    // Always have Class names with first letter capital
-    console.log("user.id ",user.id)
-    const card = await cardDetails.findOne({
-      userId: user.id,
-      isDefault: true,
+    console.log("user.id ", user.id);
+    const card = await findOne(Tables.CARD_DETAILS, {
+      user_id: user.id,
+      is_default: true,
     });
 
-    console.log("User card details is", card)
+    console.log("User card details is", card);
     if (!card) {
       return res
         .status(404)
         .json({ error: { message: "Card not found for the user" } });
     }
-    console.log("card.paymentMethodId ",card.paymentMethodId)
-    console.log("user.stripeClientId ",user.stripeClientId)
+    console.log("card.payment_method_id ", card.payment_method_id);
+    console.log("user.stripe_client_id ", user.stripe_client_id);
     const paymentMethod = await stripeInstance.paymentMethods.retrieve(
-      card.paymentMethodId
+      card.payment_method_id
     );
-    console.log("paymentMethod ",paymentMethod)
+    console.log("paymentMethod ", paymentMethod);
 
     const subscription = await stripeInstance.subscriptions.create({
-      customer: user.stripeClientId,
-      default_payment_method: card.paymentMethodId,
+      customer: user.stripe_client_id,
+      default_payment_method: card.payment_method_id,
       items: [
         {
-          price: plan.stripeProductObject.default_price,
+          price: plan.stripe_product_object.default_price,
         },
       ],
       payment_behavior: "default_incomplete",
       payment_settings: { save_default_payment_method: "on_subscription" },
       expand: ["latest_invoice.payment_intent"],
     });
-    console.log("subscription ",subscription)
+    console.log("subscription ", subscription);
 
     const latestInvoice = subscription.latest_invoice;
-    console.log("latestInvoice ",latestInvoice)
+    console.log("latestInvoice ", latestInvoice);
 
     if (!latestInvoice || typeof latestInvoice === "string") {
       throw new Error("Failed to retrieve latest invoice.");
     }
 
-    // const paymentIntent = latestInvoice.payment_intent;
-    // console.log("paymentIntent ",paymentIntent)
-
-    // if (!paymentIntent) {
-    //   console.error(
-    //     "Payment intent is null for subscription:",
-    //     subscription.id
-    //   );
-    //   return res.status(400).send({
-    //     error: { message: "Payment intent is null. Please try again." },
-    //   });
-    // }
-
-    const newSubscription = new Subscription({
-      userId: user?.id,
-      planId: plan.id,
-      StripeSubscriptionId: subscription.id,
-      StripePriceId: plan.stripeProductObject.default_price,
+    const newSubscription = await insertOne(Tables.SUBSCRIPTIONS, {
+      user_id: user.id,
+      plan_id: plan.id,
+      stripe_subscription_id: subscription.id,
+      stripe_price_id: plan.stripe_product_object.default_price,
       status: SubscriptionStatusEnum.ACTIVE,
-      stripeSubscriptionObject: JSON.stringify(subscription),
+      stripe_subscription_object: JSON.stringify(subscription),
     });
 
-    await newSubscription.save();
-
-    const newDebitTransaction = new Transaction({
-      userId: user?.id,
-      // stripePaymentIntentId: paymentIntent.id,
+    const newDebitTransaction = await insertOne(Tables.TRANSACTIONS, {
+      user_id: user.id,
       type: TransactionType.DEBIT,
-      productType: ProductType.SUBSCRIPTION,
-      stripeProductId: plan.stripeProductId,
-      productId: plan.id,
+      product_type: ProductType.SUBSCRIPTION,
+      stripe_product_id: plan.stripe_product_id,
+      product_id: plan.id,
       amount: plan.price,
       status: TransactionStatus.PENDING,
     });
 
-    await newDebitTransaction.save();
-
-    // Comment for now
-    // const newCreditTransaction = new Transaction({
-    //   userId: plan?.userId,
-    //   stripePaymentIntentId: paymentIntent.id,
-    //   type: TransactionType.CREDIT,
-    //   productType: ProductType.SUBSCRIPTION,
-    //   stripeProductId: plan.stripeProductId,
-    //   productId: plan.id,
-    //   amount: plan.price,
-    //   status: TransactionStatus.PENDING,
-    // });
-
-    // await newCreditTransaction.save();
-
     return res.status(200).send({
       status: true,
       subscriptionId: subscription.id,
-      // clientSecret: paymentIntent.client_secret,
-      //@ts-ignore
-      //comment for now
-      // clientSecret: subscription.latest_invoice.payment_intent.client_secret,
     });
   } catch (error) {
     console.error("Error creating subscription:", error);

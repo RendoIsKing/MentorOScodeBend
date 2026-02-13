@@ -1,10 +1,10 @@
-import { Document, Types } from "mongoose";
-
 import { RolesEnum } from "./RolesEnum";
 import { ICollection } from "./interfaces/CollectionInterface";
 import { FileInterface } from "./FileInterface";
 
-export interface UserInterface extends Document {
+export interface UserInterface {
+  _id?: string;
+  id?: string;
   firstName: string;
   lastName: string;
   fullName: string;
@@ -22,15 +22,15 @@ export interface UserInterface extends Document {
   mentorRating?: number | null;
   mentorReviewCount?: number;
   mentorAiVoiceTone?: string;
-  mentorAiKnowledgeBaseFileIds?: Types.ObjectId[];
+  mentorAiKnowledgeBaseFileIds?: string[];
   mentorAiTrainingPhilosophy?: string;
   mentorAiNutritionPhilosophy?: string;
   mentorAiMacroApproach?: string;
   mentorAiDietaryNotes?: string;
   coreInstructions?: string;
   lastLogin: Date;
-  photoId: Types.ObjectId | FileInterface;
-  coverPhotoId: Types.ObjectId | FileInterface;
+  photoId: string | FileInterface;
+  coverPhotoId: string | FileInterface;
   country: string;
   dialCode: string;
   instagramLink: string;
@@ -48,7 +48,7 @@ export interface UserInterface extends Document {
   hasSelectedInterest?: boolean;
   hasDocumentUploaded?: boolean;
   hasDocumentVerified?: boolean;
-  interests: Types.ObjectId[];
+  interests: string[];
   isStripeCustomer: string;
   stripeClientId: string;
   fcm_token: string;
@@ -61,5 +61,5 @@ export interface UserInterface extends Document {
   otp: string;
   otpInvalidAt: Date;
   isFreeSubscription: Boolean;
-  primaryCollection: Types.ObjectId | ICollection;
+  primaryCollection: string | ICollection;
 }

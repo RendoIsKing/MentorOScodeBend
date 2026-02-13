@@ -3,18 +3,17 @@ import { plainToClass } from "class-transformer";
 import { GetAllItemsInputs } from "../Inputs/getPost.input";
 import { validate } from "class-validator";
 import { ValidationErrorResponse } from "../../../../types/ValidationErrorResponse";
-import { Post } from "../../../Models/Post";
-import { commonPaginationPipeline } from "../../../../utils/pipeline/commonPagination";
-import { User } from "../../../Models/User";
 import { PostType } from "../../../../types/enums/postTypeEnum";
 import { InteractionType } from "../../../../types/enums/InteractionTypeEnum";
-import { Types } from "mongoose";
-import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { PostFilterEnum } from "../../../../types/enums/postsFilterEnum";
-import { userConnection } from "../../../Models/Connection";
-import { Interaction } from "../../../Models/Interaction";
+import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
+import { UserInterface } from "../../../../types/UserInterface";
+import { db, findMany, Tables } from "../../../../lib/db";
 
-export const getPostsOfUserByUserName = async (req: Request, res: Response) => {
+export const getPostsOfUserByUserName = async (
+  req: Request,
+  res: Response
+) => {
   try {
     const { userName } = req.query;
     if (!userName) {
@@ -23,15 +22,31 @@ export const getPostsOfUserByUserName = async (req: Request, res: Response) => {
         .json({ error: "userName query parameter is required." });
     }
 
-    // Resolve user by username (case-insensitive) or ObjectId, matching behavior of user.find endpoint
-    const escaped = String(userName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const or: any[] = [{ userName: { $regex: `^${escaped}$`, $options: 'i' } }];
-    if (Types.ObjectId.isValid(String(userName))) {
-      or.push({ _id: new Types.ObjectId(String(userName)) });
-    }
-    const user = await User.findOne({ $or: or });
+    const viewer = req.user as UserInterface;
+    const viewerId = viewer._id || viewer.id;
 
-    if (!user) {
+    // Resolve user by username (case-insensitive) or by ID
+    let profileUser: any = null;
+    const { data: byName } = await db
+      .from(Tables.USERS)
+      .select("id, user_name")
+      .ilike("user_name", String(userName))
+      .limit(1)
+      .maybeSingle();
+
+    if (byName) {
+      profileUser = byName;
+    } else {
+      // Try to resolve by ID
+      const { data: byId } = await db
+        .from(Tables.USERS)
+        .select("id, user_name")
+        .eq("id", String(userName))
+        .maybeSingle();
+      profileUser = byId;
+    }
+
+    if (!profileUser) {
       return res.status(404).json({ error: "User not found." });
     }
 
@@ -49,215 +64,192 @@ export const getPostsOfUserByUserName = async (req: Request, res: Response) => {
     }
 
     const { perPage, page, filter } = postQuery;
-
-    let skip =
+    const skip =
       ((page as number) > 0 ? (page as number) - 1 : 0) * (perPage as number);
 
-    let matchCondition: any = {
-      _id: { $exists: true },
-      user: { $exists: true },
-      type: PostType.POST,
-      deletedAt: null,
-      isDeleted: false,
-    };
+    // Pre-compute filter-specific post IDs
+    let filterPostIds: string[] | null = null;
+    let filterUserIds: string[] | null = null;
 
-    if (filter === PostFilterEnum.POSTS) {
-      matchCondition.user = new Types.ObjectId(user.id);
-    } else if (filter === PostFilterEnum.TAGGED) {
-      matchCondition["userTags.userId"] = new Types.ObjectId(user.id);
+    if (filter === PostFilterEnum.TAGGED) {
+      const { data: tagged } = await db
+        .from(Tables.POST_USER_TAGS)
+        .select("post_id")
+        .eq("user_id", profileUser.id);
+      filterPostIds = (tagged || []).map((t: any) => t.post_id);
+      if (!filterPostIds.length) {
+        return res.json({
+          data: [],
+          meta: { total: 0, page, perPage, pageCount: 0 },
+        });
+      }
     } else if (filter === PostFilterEnum.FOLLOWING) {
-      const userConnections = await userConnection.find(
-        { owner: user.id },
-        { followingTo: 1 }
+      const connections = await findMany(
+        Tables.USER_CONNECTIONS,
+        { owner: profileUser.id },
+        { select: "following_to" }
       );
-
-      const followedUserIds = userConnections.map((conn) => conn.followingTo);
-
-      matchCondition.user = { $in: followedUserIds };
+      filterUserIds = connections.map((c: any) => c.following_to);
+      if (!filterUserIds.length) {
+        return res.json({
+          data: [],
+          meta: { total: 0, page, perPage, pageCount: 0 },
+        });
+      }
     } else if (filter === PostFilterEnum.LIKED) {
-      const likedPosts = await Interaction.find({
-        type: InteractionType.LIKE_POST,
-        interactedBy: user.id,
-      });
-
-      const likedPostIds = likedPosts.map((like) => like.post);
-
-      matchCondition._id = { $in: likedPostIds };
+      const liked = await findMany(
+        Tables.INTERACTIONS,
+        { type: InteractionType.LIKE_POST, interacted_by: profileUser.id },
+        { select: "post_id" }
+      );
+      filterPostIds = liked.map((l: any) => l.post_id);
+      if (!filterPostIds.length) {
+        return res.json({
+          data: [],
+          meta: { total: 0, page, perPage, pageCount: 0 },
+        });
+      }
     } else if (filter === PostFilterEnum.SAVED) {
-      const savedPosts = await Interaction.find({
-        type: InteractionType.COLLECTION_SAVED,
-        interactedBy: user.id,
-      });
-
-      const savedPostIds = savedPosts.map((save) => save.post);
-
-      matchCondition._id = { $in: savedPostIds };
+      const saved = await findMany(
+        Tables.INTERACTIONS,
+        {
+          type: InteractionType.COLLECTION_SAVED,
+          interacted_by: profileUser.id,
+        },
+        { select: "post_id" }
+      );
+      filterPostIds = saved.map((s: any) => s.post_id);
+      if (!filterPostIds.length) {
+        return res.json({
+          data: [],
+          meta: { total: 0, page, perPage, pageCount: 0 },
+        });
+      }
     }
-    const posts = await Post.aggregate([
-      {
-        $match: matchCondition,
-      },
-      // {
-      //   $unwind: "$media",
-      // },
-      {
-        $lookup: {
-          from: "files",
-          localField: "media.mediaId",
-          foreignField: "_id",
-          as: "mediaFiles",
-        },
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "user",
-          foreignField: "_id",
-          as: "userInfo",
-        },
-      },
 
-      {
-        $lookup: {
-          from: "transactions",
-          let: { stripeProductId: "$stripeProductId", userId: user?._id },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$stripeProductId", "$$stripeProductId"] },
-                    { $eq: ["$userId", "$$userId"] },
-                    { $eq: ["$status", TransactionStatus.SUCCESS] },
-                  ],
-                },
-              },
-            },
-            {
-              $limit: 1,
-            },
-          ],
-          as: "paidTransactions",
-        },
-      },
+    // Build query
+    let query = db
+      .from(Tables.POSTS)
+      .select(
+        `*, userInfo:users!user_id(id, full_name, user_name, photo_id)`,
+        { count: "exact" }
+      )
+      .eq("is_deleted", false)
+      .eq("type", PostType.POST);
 
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$type", InteractionType.LIKE_POST] },
-                  ],
-                },
-              },
-            },
-            {
-              $count: "likesCount",
-            },
-          ],
-          as: "likesCount",
-        },
-      },
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$type", InteractionType.COLLECTION_SAVED] },
-                  ],
-                },
-              },
-            },
-            {
-              $count: "savedCount",
-            },
-          ],
-          as: "savedCount",
-        },
-      },
+    if (filter === PostFilterEnum.POSTS || !filter) {
+      query = query.eq("user_id", profileUser.id);
+    } else if (filterPostIds) {
+      query = query.in("id", filterPostIds);
+    } else if (filterUserIds) {
+      query = query.in("user_id", filterUserIds);
+    }
 
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id", userId: user?._id },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$interactedBy", "$$userId"] },
-                    { $eq: ["$type", InteractionType.LIKE_POST] },
-                  ],
-                },
-              },
-            },
-          ],
-          as: "likeInteractions",
-        },
-      },
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id", userId: user._id },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$interactedBy", "$$userId"] },
-                    { $eq: ["$type", InteractionType.COLLECTION_SAVED] },
-                  ],
-                },
-              },
-            },
-          ],
-          as: "savedInteractions",
-        },
-      },
+    const { data: posts, count: total } = await query
+      .order("is_pinned", { ascending: false })
+      .order("created_at", { ascending: false })
+      .range(skip, skip + (perPage as number) - 1);
 
-      {
-        $addFields: {
-          isPaid: { $gt: [{ $size: "$paidTransactions" }, 0] },
-          isLiked: { $gt: [{ $size: "$likeInteractions" }, 0] },
-          isSaved: { $gt: [{ $size: "$savedInteractions" }, 0] },
-          likesCount: {
-            $ifNull: [{ $arrayElemAt: ["$likesCount.likesCount", 0] }, 0],
-          },
-          savedCount: {
-            $ifNull: [{ $arrayElemAt: ["$savedCount.savedCount", 0] }, 0],
-          },
-        },
-      },
-      {
-        $unset: "paidTransactions",
-      },
-      {
-        $sort: {
-          isPinned: -1,
-          createdAt: -1,
-        },
-      },
+    if (!posts || !posts.length) {
+      return res.json({
+        data: [],
+        meta: { total: 0, page, perPage, pageCount: 0 },
+      });
+    }
 
-      ...commonPaginationPipeline(page as number, perPage as number, skip),
+    const postIds = posts.map((p: any) => p.id);
+
+    // Fetch related data in parallel
+    const [
+      mediaResult,
+      likesResult,
+      savedResult,
+      userLikesResult,
+      userSavedResult,
+      transactionsResult,
+    ] = await Promise.all([
+      db.from(Tables.POST_MEDIA).select("*").in("post_id", postIds),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("post_id")
+        .in("post_id", postIds)
+        .eq("type", InteractionType.LIKE_POST),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("post_id")
+        .in("post_id", postIds)
+        .eq("type", InteractionType.COLLECTION_SAVED),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("post_id")
+        .in("post_id", postIds)
+        .eq("type", InteractionType.LIKE_POST)
+        .eq("interacted_by", viewerId),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("post_id")
+        .in("post_id", postIds)
+        .eq("type", InteractionType.COLLECTION_SAVED)
+        .eq("interacted_by", viewerId),
+      (() => {
+        const stripeIds = posts
+          .map((p: any) => p.stripe_product_id)
+          .filter(Boolean);
+        return stripeIds.length
+          ? db
+              .from(Tables.TRANSACTIONS)
+              .select("stripe_product_id")
+              .in("stripe_product_id", stripeIds)
+              .eq("user_id", viewerId)
+              .eq("status", TransactionStatus.SUCCESS)
+          : Promise.resolve({ data: [] as any[] });
+      })(),
     ]);
-    let data = {
-      data: posts[0]?.data ?? [],
-      meta: posts[0]?.metaData?.[0] ?? {},
-    };
 
-    return res.json(data);
+    // Build maps
+    const buildCountMap = (rows: any[]) => {
+      const map: Record<string, number> = {};
+      for (const row of rows || []) {
+        map[row.post_id] = (map[row.post_id] || 0) + 1;
+      }
+      return map;
+    };
+    const buildIdSet = (rows: any[], key = "post_id") =>
+      new Set((rows || []).map((r: any) => r[key]));
+
+    const likeCountMap = buildCountMap(likesResult.data);
+    const savedCountMap = buildCountMap(savedResult.data);
+    const userLikeSet = buildIdSet(userLikesResult.data);
+    const userSavedSet = buildIdSet(userSavedResult.data);
+    const paidProductSet = buildIdSet(
+      transactionsResult.data,
+      "stripe_product_id"
+    );
+
+    const enrichedPosts = posts.map((post: any) => ({
+      ...post,
+      mediaFiles: (mediaResult.data || []).filter(
+        (m: any) => m.post_id === post.id
+      ),
+      userInfo: post.userInfo ? [post.userInfo] : [],
+      isPaid: post.stripe_product_id
+        ? paidProductSet.has(post.stripe_product_id)
+        : false,
+      isLiked: userLikeSet.has(post.id),
+      isSaved: userSavedSet.has(post.id),
+      likesCount: likeCountMap[post.id] || 0,
+      savedCount: savedCountMap[post.id] || 0,
+    }));
+
+    return res.json({
+      data: enrichedPosts,
+      meta: {
+        total: total || 0,
+        page,
+        perPage,
+        pageCount: Math.ceil((total || 0) / (perPage as number)),
+      },
+    });
   } catch (err) {
     console.log("Error while getting posts of user", err);
     return res

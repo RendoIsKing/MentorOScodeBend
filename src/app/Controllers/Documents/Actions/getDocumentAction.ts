@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { Document } from "../../../Models/Document";
+import { findById, Tables } from "../../../../lib/db";
 
 export const getDocumentById = async (
   req: Request,
@@ -8,7 +8,7 @@ export const getDocumentById = async (
   const { id } = req.params;
 
   try {
-    const document = await Document.findById({ _id: id });
+    const document = await findById(Tables.DOCUMENTS, id);
 
     if (document) {
       return res.json({ data: document });

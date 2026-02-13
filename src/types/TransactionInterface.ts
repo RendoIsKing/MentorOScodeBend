@@ -1,15 +1,16 @@
-import { Document, Types } from "mongoose";
 import { TransactionStatus } from "./enums/transactionStatusEnum";
 import { TransactionType } from "./enums/transactionTypeEnum";
 import { ProductType } from "./enums/productEnum";
 
-export interface ITransactionInterface extends Document {
+export interface ITransactionInterface {
+  _id?: string;
+  id?: string;
   amount: number;
   title: TransactionType;
   currency: string;
   status: TransactionStatus;
   type: TransactionType;
-  userId: Types.ObjectId;
+  userId: string;
   stripePaymentIntentId: string;
   stripeProductId: string;
   productId: string;

@@ -1,16 +1,20 @@
-import cron from "node-cron";
-import StudentState from "../models/StudentState";
-import { rebuildSnapshot } from "../services/snapshot/rebuildSnapshot";
+import { db, Tables } from "../lib/db";
 
 export function startSnapshotReconciler() {
-  // 02:30 every night
+  const cron = require("node-cron").default || require("node-cron");
   cron.schedule("30 2 * * *", async () => {
-    const since = new Date(Date.now() - 24*3600*1000);
-    const dirty = await StudentState.find({ lastEventAt: { $gte: since } }, { user: 1 });
-    for (const s of dirty) {
-      try { await rebuildSnapshot((s as any).user); } catch (e) { console.error("Reconcile failed", (s as any).user, e); }
+    const since = new Date(Date.now() - 24*3600*1000).toISOString();
+    const { data: dirty } = await db
+      .from(Tables.STUDENT_STATES)
+      .select("user_id")
+      .gte("last_event_at", since);
+    for (const s of (dirty || [])) {
+      try {
+        const { rebuildSnapshot } = await import("../services/snapshot/rebuildSnapshot");
+        await rebuildSnapshot(s.user_id);
+      } catch (e) {
+        console.error("Reconcile failed", s.user_id, e);
+      }
     }
   });
 }
-
-

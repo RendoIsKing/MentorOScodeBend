@@ -1,5 +1,5 @@
 import stripeInstance from "../../../../utils/stripe";
-import { Subscription } from "../../../Models/Subscription";
+import { findMany, updateById, Tables } from "../../../../lib/db";
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
 
 export interface CancelSubscriptionParams {
@@ -12,20 +12,21 @@ export const cancelSubscriptions = async (
   const { userId } = params;
 
   try {
-    const activeSubscriptions = await Subscription.find({
-      userId,
+    const activeSubscriptions = await findMany(Tables.SUBSCRIPTIONS, {
+      user_id: userId,
       status: SubscriptionStatusEnum.ACTIVE,
     });
 
     if (activeSubscriptions.length > 0) {
       const cancelPromises = activeSubscriptions.map(
-        async (activeSubscription) => {
+        async (activeSubscription: any) => {
           const stripeSubscription = await stripeInstance.subscriptions.cancel(
-            activeSubscription.StripeSubscriptionId
+            activeSubscription.stripe_subscription_id
           );
 
-          activeSubscription.status = SubscriptionStatusEnum.CANCEL;
-          await activeSubscription.save();
+          await updateById(Tables.SUBSCRIPTIONS, activeSubscription.id, {
+            status: SubscriptionStatusEnum.CANCEL,
+          });
 
           return stripeSubscription;
         }

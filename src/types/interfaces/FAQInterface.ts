@@ -1,5 +1,3 @@
-import { Document } from "mongoose";
-
 interface Content {
   title: string;
   subContent: string[];
@@ -10,7 +8,9 @@ interface Topic {
   content: Content[];
 }
 
-export interface FAQInterface extends Document {
+export interface FAQInterface {
+  _id?: string;
+  id?: string;
   topics: Topic[];
   isDeleted: boolean;
   deletedAt: Date | null;

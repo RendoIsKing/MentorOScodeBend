@@ -1,8 +1,6 @@
 import { Request, Response } from "express";
-import { User } from "../../../Models/User";
-import { Interest } from "../../../Models/Interest";
 import { UserInterface } from "../../../../types/UserInterface";
-import { Types } from "mongoose";
+import { findById, findMany, updateById, db, Tables } from "../../../../lib/db";
 
 export const postInterest = async (
   req: Request,
@@ -11,27 +9,38 @@ export const postInterest = async (
   try {
     const { interestIds } = req.body;
 
-    if (!Array.isArray(interestIds) || interestIds.some(id => !Types.ObjectId.isValid(id))) {
+    if (!Array.isArray(interestIds) || interestIds.length === 0) {
       return res.status(400).json({ error: { message: "Invalid interest IDs." } });
     }
 
     const user = req.user as UserInterface;
     const userId = user.id;
 
-    const interests = await Interest.find({ _id: { $in: interestIds }, isDeleted: false });
-    if (interests.length !== interestIds.length) {
+    const interests = await findMany(Tables.INTERESTS, {
+      is_deleted: false,
+    }, { select: "id" });
+
+    const validIds = new Set(interests.map((i: any) => i.id));
+    const allValid = interestIds.every((id: string) => validIds.has(id));
+    if (!allValid) {
       return res.status(404).json({ error: { message: "One or more interests not found." } });
     }
 
-    const userDoc = await User.findById(userId);
-    if (!userDoc) {
-      return res.status(404).json({ error: { message: "User not found." } });
-    }
+    // Delete existing user_interests for this user, then re-insert
+    await db.from(Tables.USER_INTERESTS).delete().eq("user_id", userId);
 
-    userDoc.interests = [...new Set([...userDoc.interests, ...interestIds])];
-    userDoc.hasSelectedInterest = true;
+    const rows = [...new Set(interestIds)].map((interestId: string) => ({
+      user_id: userId,
+      interest_id: interestId,
+    }));
 
-    await userDoc.save();
+    await db.from(Tables.USER_INTERESTS).insert(rows);
+
+    await updateById(Tables.USERS, userId, {
+      has_selected_interest: true,
+    });
+
+    const userDoc = await findById(Tables.USERS, userId);
 
     return res.json({
       data: userDoc,

@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { CoachKnowledge } from "../../../Models/CoachKnowledge";
+import { findMany, Tables } from "../../../../lib/db";
 
 export const getKnowledgeAction = async (req: Request, res: Response) => {
   try {
@@ -8,10 +8,11 @@ export const getKnowledgeAction = async (req: Request, res: Response) => {
       return res.status(401).json({ message: "unauthorized" });
     }
 
-    const docs = await CoachKnowledge.find({ userId })
-      .select("_id title content type createdAt mentorName summary classification keywords coreRules entities")
-      .sort({ createdAt: -1 })
-      .lean();
+    const docs = await findMany(Tables.COACH_KNOWLEDGE, { user_id: userId }, {
+      select: "id, title, content, type, created_at, mentor_name, summary, classification, keywords, core_rules, entities",
+      orderBy: "created_at",
+      ascending: false,
+    });
 
     return res.json({ success: true, data: docs });
   } catch {

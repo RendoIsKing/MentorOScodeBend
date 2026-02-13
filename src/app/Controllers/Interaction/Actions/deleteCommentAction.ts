@@ -1,21 +1,24 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { Interaction } from "../../../Models/Interaction";
 import { RolesEnum } from "../../../../types/RolesEnum";
+import { findById, findMany, updateById, Tables } from "../../../../lib/db";
 
+/**
+ * Recursively soft-delete all child comments via parent_id.
+ * Replaces the old replies[] array traversal.
+ */
 const softDeleteChildComments = async (commentId: string) => {
-  const comment = await Interaction.findById(commentId);
+  const children = await findMany(Tables.INTERACTIONS, {
+    parent_id: commentId,
+    is_deleted: false,
+  });
 
-  if (comment && comment.replies && comment.replies.length > 0) {
-    for (const replyId of comment.replies) {
-      const reply = await Interaction.findById(replyId);
-      if (reply && !reply.isDeleted) {
-        reply.isDeleted = true;
-        reply.deletedAt = new Date();
-        await reply.save();
-        await softDeleteChildComments(reply._id.toString());
-      }
-    }
+  for (const child of children) {
+    await updateById(Tables.INTERACTIONS, child.id, {
+      is_deleted: true,
+      deleted_at: new Date().toISOString(),
+    });
+    await softDeleteChildComments(child.id);
   }
 };
 
@@ -27,14 +30,14 @@ export const softDeleteComment = async (
     const user = req.user as UserInterface;
     const id = req.params.id;
 
-    const comment = await Interaction.findById(id);
+    const comment = await findById(Tables.INTERACTIONS, id);
 
     if (!comment) {
       return res.status(404).json({ error: { message: "Comment not found" } });
     }
 
     if (
-      comment.interactedBy.toString() !== user.id.toString() &&
+      comment.interacted_by?.toString() !== user.id?.toString() &&
       user?.role !== RolesEnum.ADMIN
     ) {
       return res
@@ -42,17 +45,18 @@ export const softDeleteComment = async (
         .json({ error: { message: "You cannot delete this comment" } });
     }
 
-    if (comment.isDeleted) {
+    if (comment.is_deleted) {
       return res
         .status(400)
         .json({ error: { message: "Comment is already deleted" } });
     }
 
-    comment.isDeleted = true;
-    comment.deletedAt = new Date();
-    await comment.save();
+    await updateById(Tables.INTERACTIONS, id, {
+      is_deleted: true,
+      deleted_at: new Date().toISOString(),
+    });
 
-    await softDeleteChildComments(comment._id.toString());
+    await softDeleteChildComments(id);
 
     return res.json({ message: "Comment/child comments deleted successfully" });
   } catch (error) {

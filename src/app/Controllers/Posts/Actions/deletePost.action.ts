@@ -1,6 +1,6 @@
 import { Response, Request } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { Post } from "../../../Models/Post";
+import { findById, softDelete, Tables } from "../../../../lib/db";
 import { RolesEnum } from "../../../../types/RolesEnum";
 
 export const deletePostsAction = async (
@@ -10,23 +10,21 @@ export const deletePostsAction = async (
   try {
     const user = req.user as UserInterface;
     const id = req.params.id;
-    const postExists = await Post.findById(id);
+    const postExists = await findById(Tables.POSTS, id);
 
     if (!postExists) {
       return res.status(400).json({ error: { message: "Post not exist" } });
     }
 
-    if (postExists.user.toString() !== user.id.toString() && user.role !== RolesEnum.ADMIN) {
+    if (
+      postExists.user_id?.toString() !== user.id?.toString() &&
+      user.role !== RolesEnum.ADMIN
+    ) {
       return res.status(400).json({ error: { message: "Invalid post" } });
     }
-    await Post.findByIdAndUpdate(
-      id,
-      {
-        isDeleted: true,
-        deletedAt: new Date(),
-      },
-      { new: true }
-    );
+
+    await softDelete(Tables.POSTS, id);
+
     return res.json({
       data: {
         message: "post deleted successfully.",

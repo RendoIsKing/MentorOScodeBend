@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { SubscriptionPlan } from "../../../Models/SubscriptionPlan";
 import { SubscriptionPlanType } from "../../../../types/enums/subscriptionPlanEnum";
+import { db, findOne, findMany, Tables } from "../../../../lib/db";
 
 export const getSubscriptionPlan = async (
   _req: Request,
@@ -10,84 +10,31 @@ export const getSubscriptionPlan = async (
   try {
     const { id: queryId } = _req.query;
     const user = _req.user as UserInterface;
+    const userId = queryId ? (queryId as string) : user.id;
 
-    let dataToFind: any = {
-      isDeleted: false,
-      $or: [
-        { planType: SubscriptionPlanType.CUSTOM },
-        { planType: SubscriptionPlanType.FIXED },
-      ],
-    };
-
-    // const LIMIT = 10;
-
-    // const perPage =
-    //   _req.query &&
-    //   _req.query.perPage &&
-    //   parseInt(_req.query.perPage as string) > 0
-    //     ? parseInt(_req.query.perPage as string)
-    //     : LIMIT;
-
-    // const page =
-    //   _req.query && _req.query.page && parseInt(_req.query.page as string) > 0
-    //     ? parseInt(_req.query.page as string)
-    //     : 1;
-    // let skip = (page - 1) * perPage;
+    let query = db
+      .from(Tables.SUBSCRIPTION_PLANS)
+      .select("*, features:feature_ids(*)")
+      .eq("user_id", userId)
+      .eq("is_deleted", false)
+      .in("plan_type", [SubscriptionPlanType.CUSTOM, SubscriptionPlanType.FIXED])
+      .order("created_at", { ascending: false });
 
     if (_req.query.search) {
-      dataToFind = {
-        ...dataToFind,
-        $or: [{ title: { $regex: _req.query.search } }],
-      };
-      //   skip = 0;
+      query = query.ilike("title", `%${_req.query.search}%`);
     }
 
-    const userId = queryId ? queryId : user._id;
+    const { data: results, error } = await query;
 
-    const [query]: any = await SubscriptionPlan.aggregate([
-      {
-        $match: {
-          userId: userId,
-        },
-      },
-      {
-        $facet: {
-          results: [
-            { $match: dataToFind },
-            // { $skip: skip },
-            // { $limit: perPage },
-            { $sort: { createdAt: -1 } },
-            {
-              $lookup: {
-                from: "features",
-                localField: "featureIds",
-                foreignField: "_id",
-                as: "featureObjects",
-              },
-            },
-            {
-              $addFields: {
-                featureIds: { $ifNull: ["$featureObjects", []] },
-              },
-            },
-            { $project: { featureObjects: 0 } },
-          ],
-          planCount: [{ $match: dataToFind }, { $count: "count" }],
-        },
-      },
-    ]);
-
-    // const planCount = query.planCount[0]?.count || 0;
-    // const totalPages = Math.ceil(planCount / perPage);
+    if (error) {
+      console.log(error, "Error while fetching subscription plan");
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong." } });
+    }
 
     return res.json({
-      data: query.results,
-      //   meta: {
-      //     perPage: perPage,
-      //     page: _req.query.page || 1,
-      //     pages: totalPages,
-      //     total: planCount,
-      //   },
+      data: results || [],
     });
   } catch (err) {
     console.log(err, "Error while fetching subscription plan");
@@ -97,22 +44,18 @@ export const getSubscriptionPlan = async (
   }
 };
 
-// new addition: 
 export const getOneSubscriptionPlanForAllUsers = async (
   req: Request,
   res: Response
 ): Promise<Response> => {
   try {
-    // Define the price to query
     const queryPrice = 20;
 
-    // Fetch the subscription plan with the specified price
-    const subscriptionPlan = await SubscriptionPlan.findOne({
+    const subscriptionPlan = await findOne(Tables.SUBSCRIPTION_PLANS, {
       price: queryPrice,
-      isDeleted: false,
+      is_deleted: false,
     });
 
-    // Check if a subscription plan was found
     if (!subscriptionPlan) {
       return res.status(404).json({
         success: false,

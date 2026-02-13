@@ -1,8 +1,9 @@
-import { Document, Types } from "mongoose";
 import { HaveMeInterface } from "./HaveMeInterface";
 import { UserInterface } from "../UserInterface";
 
-export interface ICollection extends Document, HaveMeInterface {
+export interface ICollection extends HaveMeInterface {
+  _id?: string;
+  id?: string;
   title: string;
-  owner: Types.ObjectId | UserInterface;
+  owner: string | UserInterface;
 }

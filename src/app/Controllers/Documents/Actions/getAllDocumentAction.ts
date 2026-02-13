@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
-import { RolesEnum } from "../../../../types/RolesEnum";
-import { Document } from "../../../Models/Document";
+import { db, Tables } from "../../../../lib/db";
 
 export const getAllDocuments = async (
   _req: Request,
@@ -20,59 +19,43 @@ export const getAllDocuments = async (
       _req.query && _req.query.page && parseInt(_req.query.page as string) > 0
         ? parseInt(_req.query.page as string)
         : 1;
-    let skip = (page - 1) * perPage;
+    const offset = (page - 1) * perPage;
 
-    let dataToFind: any = {
-      role: { $ne: RolesEnum.ADMIN },
-      isDeleted: false,
-    };
+    let countQuery = db
+      .from(Tables.DOCUMENTS)
+      .select("id", { count: "exact", head: true })
+      .eq("is_deleted", false);
+
+    let dataQuery = db
+      .from(Tables.DOCUMENTS)
+      .select("*, user:users!user_id(id, user_name, full_name, photo_id)")
+      .eq("is_deleted", false)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + perPage - 1);
+
     if (_req.query.search) {
-      dataToFind = {
-        ...dataToFind,
-        $or: [{ title: { $regex: _req.query.search } }],
-      };
-      skip = 0;
+      const search = `%${_req.query.search}%`;
+      countQuery = countQuery.ilike("title", search);
+      dataQuery = dataQuery.ilike("title", search);
     }
-    const [query]: any = await Document.aggregate([
-      {
-        $facet: {
-          results: [
-            { $match: dataToFind },
-            {
-              $lookup: {
-                from: "users",
-                localField: "userId",
-                foreignField: "_id",
-                as: "userInfo",
-              },
-            },
-            {
-              $lookup: {
-                from: "userprofiles",
-                localField: "userId",
-                foreignField: "userId",
-                as: "userProfile",
-              },
-            },
-            {
-              $addFields: {
-                userProfile: { $arrayElemAt: ["$userProfile", 0] },
-              },
-            },
-            { $skip: skip },
-            { $limit: perPage },
-            { $sort: { createdAt: -1 } },
-          ],
-          documentCount: [{ $match: dataToFind }, { $count: "count" }],
-        },
-      },
+
+    const [{ count: total }, { data: results, error }] = await Promise.all([
+      countQuery,
+      dataQuery,
     ]);
 
-    const documentCount = query.documentCount[0]?.count || 0;
+    if (error) {
+      console.log(error, "Error in getting all documents");
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong." } });
+    }
+
+    const documentCount = total || 0;
     const totalPages = Math.ceil(documentCount / perPage);
 
     return res.json({
-      data: query.results,
+      data: results || [],
       meta: {
         perPage: perPage,
         page: _req.query.page || 1,

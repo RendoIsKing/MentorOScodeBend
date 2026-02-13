@@ -1,28 +1,59 @@
 import { Strategy as LocalStrategy, IStrategyOptions } from "passport-local";
-import { compareSync } from "bcryptjs";
+import { supabaseAdmin } from "../../lib/supabase";
 
-import { User } from "../../app/Models/User";
-
+/**
+ * Passport local strategy — uses Supabase Auth for credential verification.
+ *
+ * This is kept for backward compatibility with any routes still using
+ * passport.authenticate('local'). New code should use Supabase Auth directly.
+ */
 const options: IStrategyOptions = {
   usernameField: "email",
   passwordField: "password",
   session: false,
 };
+
 export default new LocalStrategy(options, async (email, password, done) => {
   try {
-    const user = await User.findOne({ email });
-    if (!user) {
+    // Use Supabase Auth to verify credentials
+    const { data, error } = await supabaseAdmin.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error || !data.user) {
       return done(null, false, { message: "Login credentials error" });
     }
 
-    if (!compareSync(password, user.password)) {
+    // Look up user in our users table
+    const { data: user, error: userError } = await supabaseAdmin
+      .from("users")
+      .select("*")
+      .eq("auth_id", data.user.id)
+      .single();
+
+    if (userError || !user) {
       return done(null, false, { message: "Login credentials error" });
     }
 
-    user.lastLogin = new Date(Date.now());
-    await user.save();
+    // Map to legacy shape for passport
+    const legacyUser = {
+      _id: user.id,
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      email: user.email,
+      role: user.role,
+      phoneNumber: user.phone_number,
+      country: user.dial_code,
+      dialCode: user.dial_code,
+      photoId: user.photo_id,
+      isActive: user.is_active,
+      isVerified: user.is_verified,
+      isDeleted: user.is_deleted,
+    };
 
-    return done(null, user, { message: "User found" });
+    return done(null, legacyUser, { message: "User found" });
   } catch (e) {
     return done(null, false, { message: e });
   }
