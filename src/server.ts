@@ -34,6 +34,7 @@ import {
   StudentRoutes,
   MentorRoutes,
   CoachNotesRoutes,
+  CoachPlansRoutes,
 } from "./routes";
 
 import { local, jwt } from "./utils/strategies";
@@ -338,6 +339,7 @@ export class Server {
     this.app.use("/api/backend/v1/stats", StatsRoutes);
     // Student routes must be accessible with cookie-based auth inside the route (no bearer required)
     this.app.use("/api/backend/v1/coach-notes", CoachNotesRoutes);
+    this.app.use("/api/backend/v1/coach-plans", CoachPlansRoutes);
     this.app.use("/api/backend/v1/student", StudentRoutes);
     this.app.use("/api/backend/v1/student", studentSnapshotRouter);
     // Public features list to allow subscription UI to load without auth
