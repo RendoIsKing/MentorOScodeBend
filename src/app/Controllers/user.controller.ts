@@ -665,11 +665,16 @@ export class UsersControllers {
       );
 
       // 2. Build main users query
+      const isAdmin = (user as any).role === RolesEnum.ADMIN;
       let query = db
         .from(Tables.USERS)
         .select("*", { count: "exact" })
-        .eq("role", RolesEnum.USER)
         .eq("is_deleted", false);
+
+      // Non-admin users only see other regular users
+      if (!isAdmin) {
+        query = query.eq("role", RolesEnum.USER);
+      }
 
       if (search) {
         query = query.or(
@@ -769,9 +774,32 @@ export class UsersControllers {
         userSubscriptionsMap[s.user_id].push({ status: s.status });
       });
 
-      // 4. Assemble enriched results
+      // 4. Assemble enriched results with camelCase keys for frontend
       const enrichedUsers = users.map((u: any) => ({
+        // Keep raw snake_case fields
         ...u,
+        // Add camelCase aliases expected by frontend
+        _id: u.id,
+        fullName: u.full_name,
+        userName: u.user_name,
+        firstName: u.first_name,
+        lastName: u.last_name,
+        phoneNumber: u.phone_number,
+        dialCode: u.dial_code,
+        completePhoneNumber: u.complete_phone_number,
+        photoId: u.photo_id,
+        coverPhotoId: u.cover_photo_id,
+        isActive: u.is_active,
+        isDeleted: u.is_deleted,
+        isMentor: u.is_mentor,
+        isVerified: u.is_verified,
+        hasPersonalInfo: u.has_personal_info,
+        hasPhotoInfo: u.has_photo_info,
+        hasConfirmedAge: u.has_confirmed_age,
+        hasDocumentVerified: u.has_document_verified,
+        createdAt: u.created_at,
+        updatedAt: u.updated_at,
+        // Enriched fields
         photo: filesMap[u.photo_id] || null,
         coverPhoto: filesMap[u.cover_photo_id] || null,
         isFollowing: followingSet.has(u.id),
