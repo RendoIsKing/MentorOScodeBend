@@ -6,7 +6,9 @@ import { UserInterface } from "../types/UserInterface";
 import { TrainingPlan, NutritionPlan } from "../app/Models/PlanModels";
 import { SubscriptionPlan } from "../app/Models/SubscriptionPlan";
 import { Subscription } from "../app/Models/Subscription";
+import { WeightEntry } from "../app/Models/WeightEntry";
 import ChangeEvent from "../models/ChangeEvent";
+import { publish } from "../services/events/publish";
 import { objectIdParam } from "../app/Validation/requestSchemas";
 
 const CoachPlansRoutes: Router = Router();
@@ -282,6 +284,138 @@ CoachPlansRoutes.get(
     } catch (err) {
       console.error("[coach-plans] Failed to get nutrition plan:", err);
       return res.status(500).json({ message: "Kunne ikke hente ernæringsplan." });
+    }
+  }
+);
+
+/* ─── Weight Management Endpoints ──────────────────── */
+
+const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+const weightLogSchema = z.object({
+  date: IsoDate,
+  kg: z.number().min(20).max(500),
+});
+
+const weightDeleteSchema = z.object({
+  date: IsoDate,
+});
+
+// GET /coach-plans/:clientId/weights?period=90d — Get weight history
+CoachPlansRoutes.get(
+  "/:clientId/weights",
+  ensureAuth as any,
+  validateZod({ params: objectIdParam("clientId") }),
+  async (req: Request, res: Response) => {
+    try {
+      const coachId = (req.user as UserInterface)?.id;
+      const { clientId } = req.params;
+      if (!coachId) return res.status(401).json({ message: "Unauthorized" });
+
+      const isCoach = await verifyCoachClient(coachId, clientId);
+      if (!isCoach) return res.status(403).json({ message: "Ikke din klient." });
+
+      const periodDays = Number(req.query.days) || 90;
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - periodDays);
+
+      const entries = await WeightEntry.find({
+        userId: new Types.ObjectId(clientId),
+        date: { $gte: startDate.toISOString().slice(0, 10) },
+      })
+        .sort({ date: 1 })
+        .select("date kg -_id")
+        .lean();
+
+      return res.json({ weights: entries });
+    } catch (err) {
+      console.error("[coach-plans] Failed to get weights:", err);
+      return res.status(500).json({ message: "Kunne ikke hente vektdata." });
+    }
+  }
+);
+
+// POST /coach-plans/:clientId/weights — Log weight for client
+CoachPlansRoutes.post(
+  "/:clientId/weights",
+  ensureAuth as any,
+  validateZod({ params: objectIdParam("clientId"), body: weightLogSchema }),
+  async (req: Request, res: Response) => {
+    try {
+      const coachId = (req.user as UserInterface)?.id;
+      const { clientId } = req.params;
+      if (!coachId) return res.status(401).json({ message: "Unauthorized" });
+
+      const isCoach = await verifyCoachClient(coachId, clientId);
+      if (!isCoach) return res.status(403).json({ message: "Ikke din klient." });
+
+      const { date, kg } = req.body;
+
+      // Validate date not in future
+      const todayIso = new Date().toISOString().slice(0, 10);
+      if (date > todayIso) {
+        return res.status(400).json({ message: "Dato kan ikke være i fremtiden." });
+      }
+
+      await WeightEntry.updateOne(
+        { userId: new Types.ObjectId(clientId), date },
+        { $set: { kg } },
+        { upsert: true }
+      );
+
+      try {
+        await ChangeEvent.create({
+          user: new Types.ObjectId(clientId),
+          type: "WEIGHT_LOG",
+          summary: `Vekt ${kg} kg registrert (${date}) av coach`,
+          actor: new Types.ObjectId(coachId),
+          after: { date, kg },
+        });
+        await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(clientId) as any, date, kg });
+      } catch (err) {
+        console.error("[coach-plans] Failed to log weight change event:", err);
+      }
+
+      return res.status(200).json({ ok: true, date, kg });
+    } catch (err) {
+      console.error("[coach-plans] Failed to log weight:", err);
+      return res.status(500).json({ message: "Kunne ikke registrere vekt." });
+    }
+  }
+);
+
+// DELETE /coach-plans/:clientId/weights?date=YYYY-MM-DD — Delete weight entry
+CoachPlansRoutes.delete(
+  "/:clientId/weights",
+  ensureAuth as any,
+  validateZod({ params: objectIdParam("clientId"), query: weightDeleteSchema }),
+  async (req: Request, res: Response) => {
+    try {
+      const coachId = (req.user as UserInterface)?.id;
+      const { clientId } = req.params;
+      const date = req.query.date as string;
+      if (!coachId) return res.status(401).json({ message: "Unauthorized" });
+
+      const isCoach = await verifyCoachClient(coachId, clientId);
+      if (!isCoach) return res.status(403).json({ message: "Ikke din klient." });
+
+      await WeightEntry.deleteOne({ userId: new Types.ObjectId(clientId), date });
+
+      try {
+        await ChangeEvent.create({
+          user: new Types.ObjectId(clientId),
+          type: "WEIGHT_LOG",
+          summary: `Vektregistrering for ${date} slettet av coach`,
+          actor: new Types.ObjectId(coachId),
+        });
+      } catch (err) {
+        console.error("[coach-plans] Failed to log weight delete event:", err);
+      }
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[coach-plans] Failed to delete weight:", err);
+      return res.status(500).json({ message: "Kunne ikke slette vektregistrering." });
     }
   }
 );
