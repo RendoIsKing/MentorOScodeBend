@@ -323,7 +323,9 @@ export class Server {
     } else {
       try { console.info('[DEV] Dev routes disabled'); } catch {}
     }
-    this.app.use("/api/backend/v1/plans", Auth, SubscriptionPlanRoutes);
+    // No global Auth here — each route in SubscriptionPlanRoutes handles its own auth.
+    // The /plans/public/:mentorId endpoint must be accessible without auth.
+    this.app.use("/api/backend/v1/plans", SubscriptionPlanRoutes);
     this.app.use("/api/backend/v1/user-connections", Auth, ConnectionRoutes);
     this.app.use("/api/backend/v1/payment", Auth, PaymentRoutes);
     this.app.use("/api/backend/v1/stats", StatsRoutes);
