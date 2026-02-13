@@ -305,59 +305,48 @@ export class UsersControllers {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
-      const useS3 =
-        String(process.env.MEDIA_STORAGE || "").toLowerCase() === "s3";
-      if (useS3 && S3ClientCtor) {
-        const region =
-          process.env.S3_REGION || process.env.AWS_REGION || "eu-north-1";
-        const accessKeyId =
-          process.env.S3_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID;
-        const secretAccessKey =
-          process.env.S3_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY;
-        const bucket = process.env.S3_BUCKET as string;
-        if (!bucket || !accessKeyId || !secretAccessKey) {
-          return res
-            .status(500)
-            .json({ error: "S3 is not configured properly." });
-        }
-        const s3 = new S3ClientCtor({
-          region,
-          credentials: { accessKeyId, secretAccessKey },
+      // Upload to Supabase Storage (avatars bucket for profile images)
+      const { v4: uuidv4 } = await import("uuid");
+      const { supabaseAdmin } = await import("../../lib/supabase");
+      const ext = (req.file.originalname || "upload").split(".").pop() || "bin";
+      const storagePath = `${uuidv4()}.${ext}`;
+      const bucket = "avatars";
+
+      console.log("[fileUpload] Uploading to Supabase Storage bucket:", bucket, "path:", storagePath);
+
+      const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+        .from(bucket)
+        .upload(storagePath, (req.file as any).buffer, {
+          contentType: (req.file as any).mimetype,
+          upsert: false,
         });
-        const safeName = (req.file.originalname || "upload")
-          .replace(/[^A-Za-z0-9._-]/g, "_")
-          .slice(0, 64);
-        const key = `profile-image/${Date.now()}-${Math.random().toString(36).slice(2)}-${safeName}`;
-        await s3.send(
-          new PutObjectCommandCtor({
-            Bucket: bucket,
-            Key: key,
-            Body: (req.file as any).buffer,
-            ContentType: (req.file as any).mimetype,
-            CacheControl: "public, max-age=31536000, immutable",
-          })
-        );
-        const savedFile = await insertOne(Tables.FILES, { path: key });
-        if (!savedFile) {
-          return res
-            .status(500)
-            .json({ error: "Failed to save file record" });
-        }
-        return res.json({ id: savedFile.id, path: savedFile.path });
-      } else {
-        const savedFile = await insertOne(Tables.FILES, {
-          path: `profile-image/${(req.file as any).filename}`,
-        });
-        if (!savedFile) {
-          return res
-            .status(500)
-            .json({ error: "Failed to save file record" });
-        }
-        return res.json({
-          id: savedFile.id,
-          path: savedFile.path,
-        });
+
+      if (uploadError) {
+        console.error("[fileUpload] Supabase Storage upload error:", uploadError.message);
+        return res.status(500).json({ error: "File upload failed", message: uploadError.message });
       }
+
+      // Get public URL
+      const { data: { publicUrl } } = supabaseAdmin.storage
+        .from(bucket)
+        .getPublicUrl(uploadData.path);
+
+      console.log("[fileUpload] Upload success, publicUrl:", publicUrl);
+
+      // Save file record in database
+      const savedFile = await insertOne(Tables.FILES, {
+        path: publicUrl,
+      });
+      if (!savedFile) {
+        return res
+          .status(500)
+          .json({ error: "Failed to save file record" });
+      }
+      return res.json({
+        id: savedFile.id,
+        path: savedFile.path,
+        publicUrl,
+      });
     } catch (error: any) {
       console.error("Error uploading file:", error);
       return res
@@ -401,6 +390,12 @@ export class UsersControllers {
           302,
           `${proto}://${host}/assets/images/Home/small-profile-img.svg`
         );
+        return;
+      }
+
+      // If path is already a full URL (e.g. Supabase Storage), redirect directly
+      if (rel.startsWith("http://") || rel.startsWith("https://")) {
+        res.redirect(302, rel);
         return;
       }
 
