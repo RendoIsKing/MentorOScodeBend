@@ -130,7 +130,7 @@ export const getSubscriptionPlan = async (
 
     let query = db
       .from(Tables.SUBSCRIPTION_PLANS)
-      .select("*, features:feature_ids(*)")
+      .select("*")
       .eq("user_id", userId)
       .eq("is_deleted", false)
       .in("plan_type", [SubscriptionPlanType.CUSTOM, SubscriptionPlanType.FIXED])
