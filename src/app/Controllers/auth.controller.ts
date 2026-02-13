@@ -636,16 +636,18 @@ class AuthController {
       let accessToken = "";
       let refreshToken = "";
 
-      if (user?.email) {
-        // Set a temp password, sign in to get real tokens
-        const authId = user.auth_id;
-        if (authId) {
+      const authId = user?.auth_id;
+      if (authId) {
+        const { data: authUserData } = await supabaseAdmin.auth.admin.getUserById(authId);
+        const authEmail = authUserData?.user?.email;
+
+        if (authEmail) {
           const tempPw = `google_verified_${authId}_${Date.now()}`;
           await supabaseAdmin.auth.admin.updateUserById(authId, {
             password: tempPw,
           });
           const { data: session } = await supabaseAdmin.auth.signInWithPassword({
-            email: user.email,
+            email: authEmail,
             password: tempPw,
           });
           if (session?.session) {
@@ -726,24 +728,44 @@ class AuthController {
       let accessToken = "";
       let refreshToken = "";
 
-      if (updatedUser?.auth_id && updatedUser?.email) {
-        // Set a temp password, sign in to get real tokens, then clear it
-        const tempPw = `otp_verified_${updatedUser.auth_id}_${Date.now()}`;
-        await supabaseAdmin.auth.admin.updateUserById(updatedUser.auth_id, {
-          password: tempPw,
-        });
-        const { data: session } = await supabaseAdmin.auth.signInWithPassword({
-          email: updatedUser.email,
-          password: tempPw,
-        });
-        if (session?.session) {
-          accessToken = session.session.access_token;
-          refreshToken = session.session.refresh_token;
+      if (updatedUser?.auth_id) {
+        // Get the auth user's actual email (may differ from public.users email
+        // if user was created via phone with a placeholder email)
+        const { data: authUserData, error: authLookupErr } = await supabaseAdmin.auth.admin.getUserById(updatedUser.auth_id);
+        const authEmail = authUserData?.user?.email;
+        console.log("[verifyOtp] auth_id:", updatedUser.auth_id, "authEmail:", authEmail, "publicEmail:", updatedUser.email, "authLookupErr:", authLookupErr?.message);
+
+        if (authEmail) {
+          const tempPw = `otp_verified_${updatedUser.auth_id}_${Date.now()}`;
+          const { error: pwErr } = await supabaseAdmin.auth.admin.updateUserById(updatedUser.auth_id, {
+            password: tempPw,
+          });
+          if (pwErr) console.error("[verifyOtp] password update error:", pwErr.message);
+
+          const { data: session, error: signInErr } = await supabaseAdmin.auth.signInWithPassword({
+            email: authEmail,
+            password: tempPw,
+          });
+          if (signInErr) console.error("[verifyOtp] signIn error:", signInErr.message);
+          if (session?.session) {
+            accessToken = session.session.access_token;
+            refreshToken = session.session.refresh_token;
+            console.log("[verifyOtp] tokens generated successfully, access_token length:", accessToken.length);
+          } else {
+            console.error("[verifyOtp] no session returned from signInWithPassword");
+          }
+        } else {
+          console.error("[verifyOtp] no authEmail found for auth_id:", updatedUser.auth_id);
         }
+      } else {
+        console.error("[verifyOtp] no auth_id on updatedUser, id:", id);
       }
 
       if (accessToken) {
         setAuthCookies(res, accessToken, refreshToken);
+        console.log("[verifyOtp] auth cookies set successfully");
+      } else {
+        console.error("[verifyOtp] WARNING: no accessToken generated, cookies NOT set");
       }
 
       return res.json({
