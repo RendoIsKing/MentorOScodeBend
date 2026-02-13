@@ -3,34 +3,37 @@ import { UserInterface } from "../../../../types/UserInterface";
 import { SubscriptionPlanType } from "../../../../types/enums/subscriptionPlanEnum";
 import { db, findOne, Tables } from "../../../../lib/db";
 
-// ── Default plan values for auto-seed ────────────────────────────────────────
+// ── Coach.Majen-specific auto-seed ───────────────────────────────────────────
+// Only Coach.Majen gets an auto-seeded plan because the plan features are
+// custom-designed for her. Other mentors create plans from the dashboard.
+const COACH_MAJEN_USERNAME = "Coach.Majen";
 const DEFAULT_PLAN_TITLE = "Bli min klient";
 const DEFAULT_PLAN_PRICE_ORE = 50000; // 500 kr
 const DEFAULT_PLAN_DESCRIPTION =
   "Personlig trenings- og kostholdsplan, aktivitetssporing, ubegrenset chat og AI-tilpasning.";
 
 /**
- * Auto-create a default subscription plan for a mentor if they have none.
- * Returns the newly created plan row, or null on failure.
+ * Auto-create Coach.Majen's default plan if she has none.
+ * Returns the newly created plan row, or null if the user isn't Coach.Majen.
  */
-async function autoSeedPlanIfEmpty(
-  mentorUserId: string,
+async function autoSeedCoachMajenPlan(
+  userId: string,
   selectColumns = "*"
 ): Promise<any | null> {
-  // Verify the user actually exists before creating a plan
-  const { data: mentorUser } = await db
+  // Only seed for Coach.Majen
+  const { data: user } = await db
     .from(Tables.USERS)
-    .select("id")
-    .eq("id", mentorUserId)
+    .select("id, user_name")
+    .eq("id", userId)
     .eq("is_deleted", false)
     .maybeSingle();
 
-  if (!mentorUser) return null;
+  if (!user || user.user_name !== COACH_MAJEN_USERNAME) return null;
 
   const { data: newPlan, error } = await db
     .from(Tables.SUBSCRIPTION_PLANS)
     .insert({
-      user_id: mentorUserId,
+      user_id: userId,
       title: DEFAULT_PLAN_TITLE,
       price: DEFAULT_PLAN_PRICE_ORE,
       plan_type: SubscriptionPlanType.CUSTOM,
@@ -40,7 +43,7 @@ async function autoSeedPlanIfEmpty(
     .single();
 
   if (error) {
-    console.error("[autoSeedPlanIfEmpty] Failed to create plan:", error);
+    console.error("[autoSeedCoachMajenPlan] Failed to create plan:", error);
     return null;
   }
   return newPlan;
@@ -81,9 +84,9 @@ export const getMentorPublicPlans = async (
         .json({ error: { message: "Something went wrong." } });
     }
 
-    // Auto-seed a default plan so it appears in the Mentor Dashboard
+    // Auto-seed Coach.Majen's plan if she has none yet
     if (!results || results.length === 0) {
-      const seeded = await autoSeedPlanIfEmpty(mentorId, publicCols);
+      const seeded = await autoSeedCoachMajenPlan(mentorId, publicCols);
       if (seeded) results = [seeded];
     }
 
@@ -133,10 +136,9 @@ export const getSubscriptionPlan = async (
         .json({ error: { message: "Something went wrong." } });
     }
 
-    // Auto-seed a default plan when a user views their own empty plan list
-    // (e.g. Coach.Majen opens her Mentor Dashboard for the first time)
+    // Auto-seed Coach.Majen's plan when she opens her Mentor Dashboard
     if (isFetchingOwnPlans && (!results || results.length === 0)) {
-      const seeded = await autoSeedPlanIfEmpty(userId, "*, features:feature_ids(*)");
+      const seeded = await autoSeedCoachMajenPlan(userId, "*, features:feature_ids(*)");
       if (seeded) results = [seeded];
     }
 

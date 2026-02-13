@@ -19,7 +19,8 @@ const COACH_MAJEN_USERNAME = "Coach.Majen";
 const COACH_MAJEN_CURRENCY = "nok";
 
 /**
- * Find-or-create the mentor's subscription plan.
+ * Find-or-create Coach.Majen's subscription plan.
+ * Only used by the Coach Majen checkout endpoint.
  * Returns the plan row (with id, title, price, description).
  */
 async function ensureMentorPlan(mentorUserId: string) {
