@@ -68,7 +68,7 @@ export const getCoachClientDetail = async (
     let photoUrl: string | null = null;
     if ((client as any).photoId) {
       try {
-        const File = (await import("../../../Models/File")).default;
+        const { File } = await import("../../../Models/File");
         const file = await File.findById((client as any).photoId).select("path").lean();
         if (file) photoUrl = (file as any).path;
       } catch (err) {
