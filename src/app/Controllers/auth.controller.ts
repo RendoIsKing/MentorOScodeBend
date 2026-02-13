@@ -129,7 +129,8 @@ class AuthController {
         });
       }
 
-      // Create Supabase auth user
+      // Create Supabase auth user (or recover if auth user already exists)
+      let authUserId: string;
       const { data: authData, error: authError } =
         await supabaseAdmin.auth.admin.createUser({
           email,
@@ -143,33 +144,69 @@ class AuthController {
         });
 
       if (authError) {
-        console.error("[register] Supabase auth error:", authError.message);
-        return res
-          .status(400)
-          .json({ error: { message: authError.message } });
+        // If user already exists in Supabase Auth but not in public.users,
+        // recover by finding the existing auth user and updating their password
+        if (authError.message.includes("already been registered")) {
+          const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+          const existingAuth = listData?.users?.find(
+            (u: any) => u.email?.toLowerCase() === email.toLowerCase(),
+          );
+          if (existingAuth) {
+            // Update their password to the one provided
+            await supabaseAdmin.auth.admin.updateUserById(existingAuth.id, { password });
+            authUserId = existingAuth.id;
+          } else {
+            return res.status(400).json({ error: { message: authError.message } });
+          }
+        } else {
+          console.error("[register] Supabase auth error:", authError.message);
+          return res
+            .status(400)
+            .json({ error: { message: authError.message } });
+        }
+      } else {
+        authUserId = authData.user.id;
       }
 
-      // Update the public.users row (created by trigger) with additional fields
-      const { data: user, error: userError } = await supabaseAdmin
+      // Ensure a public.users row exists (trigger may have created one, or we need to upsert)
+      let { data: user } = await supabaseAdmin
         .from("users")
-        .update({
-          full_name: fullName || `${firstName} ${lastName}`.trim(),
-          first_name: firstName,
-          last_name: lastName,
-          user_name: userName || null,
-          gender: gender || null,
-          phone_number: phoneNumber,
-          dial_code: dialCode,
-          complete_phone_number: dialCode && phoneNumber ? `${dialCode}--${phoneNumber}` : null,
-          is_active: true,
-          is_verified: true,
-        })
-        .eq("auth_id", authData.user.id)
         .select("*")
-        .single();
+        .eq("auth_id", authUserId)
+        .maybeSingle();
 
-      if (userError) {
-        console.error("[register] user update error:", userError.message);
+      const profileData = {
+        full_name: fullName || `${firstName} ${lastName}`.trim(),
+        first_name: firstName,
+        last_name: lastName,
+        user_name: userName || null,
+        gender: gender || null,
+        email,
+        phone_number: phoneNumber,
+        dial_code: dialCode,
+        complete_phone_number: dialCode && phoneNumber ? `${dialCode}--${phoneNumber}` : null,
+        is_active: true,
+        is_verified: true,
+      };
+
+      if (user) {
+        const { data: updated, error: userError } = await supabaseAdmin
+          .from("users")
+          .update(profileData)
+          .eq("auth_id", authUserId)
+          .select("*")
+          .single();
+        if (userError) console.error("[register] user update error:", userError.message);
+        user = updated || user;
+      } else {
+        // No trigger-created row — insert one manually
+        const { data: inserted, error: insertError } = await supabaseAdmin
+          .from("users")
+          .insert({ ...profileData, auth_id: authUserId })
+          .select("*")
+          .single();
+        if (insertError) console.error("[register] user insert error:", insertError.message);
+        user = inserted;
       }
 
       // Sign in to get tokens
@@ -178,7 +215,7 @@ class AuthController {
 
       if (signInError || !session.session) {
         // User created but can't sign in — return success with user data
-        return res.json({ data: toUserPayload(user || { id: authData.user.id }) });
+        return res.json({ data: toUserPayload(user || { id: authUserId }) });
       }
 
       setAuthCookies(
@@ -305,6 +342,8 @@ class AuthController {
           // Create auth user with phone-based email placeholder
           const placeholderEmail = `phone_${dial}${num}@placeholder.local`;
           const tempPassword = `temp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+          let newAuthUserId: string;
+
           const { data: authData, error: authErr } =
             await supabaseAdmin.auth.admin.createUser({
               email: placeholderEmail,
@@ -314,25 +353,62 @@ class AuthController {
             });
 
           if (authErr) {
-            console.error("[userLogin] create user error:", authErr.message);
-            return res.status(500).json({ message: authErr.message });
+            // If auth user already exists, recover
+            if (authErr.message.includes("already been registered")) {
+              const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+              const existing = listData?.users?.find(
+                (u: any) => u.email?.toLowerCase() === placeholderEmail.toLowerCase(),
+              );
+              if (existing) {
+                newAuthUserId = existing.id;
+              } else {
+                console.error("[userLogin] create user error:", authErr.message);
+                return res.status(500).json({ message: authErr.message });
+              }
+            } else {
+              console.error("[userLogin] create user error:", authErr.message);
+              return res.status(500).json({ message: authErr.message });
+            }
+          } else {
+            newAuthUserId = authData.user.id;
           }
 
-          // Update the trigger-created row
-          const { data: newUser } = await supabaseAdmin
+          // Check if trigger created a row, otherwise insert
+          let { data: triggerRow } = await supabaseAdmin
             .from("users")
-            .update({
-              email: email || null,
-              dial_code: dial,
-              phone_number: num,
-              complete_phone_number: completePhone,
-              is_active: true,
-            })
-            .eq("auth_id", authData.user.id)
             .select("*")
-            .single();
+            .eq("auth_id", newAuthUserId)
+            .maybeSingle();
 
-          user = newUser;
+          if (triggerRow) {
+            const { data: updated } = await supabaseAdmin
+              .from("users")
+              .update({
+                email: email || null,
+                dial_code: dial,
+                phone_number: num,
+                complete_phone_number: completePhone,
+                is_active: true,
+              })
+              .eq("auth_id", newAuthUserId)
+              .select("*")
+              .single();
+            user = updated || triggerRow;
+          } else {
+            const { data: inserted } = await supabaseAdmin
+              .from("users")
+              .insert({
+                auth_id: newAuthUserId,
+                email: email || null,
+                dial_code: dial,
+                phone_number: num,
+                complete_phone_number: completePhone,
+                is_active: true,
+              })
+              .select("*")
+              .single();
+            user = inserted;
+          }
         }
 
         const otp = otpGenerator();
