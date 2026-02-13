@@ -1,7 +1,6 @@
-import { Document } from "mongoose";
-
-
-export interface InterestInterface extends Document {
+export interface InterestInterface {
+  _id?: string;
+  id?: string;
   title: string;
   slug: string;
   addedBy: string;

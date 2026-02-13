@@ -1,10 +1,10 @@
 import { Request, Response } from "express";
 import { validate } from "class-validator";
 import { plainToClass } from "class-transformer";
-import { SubscriptionPlan } from "../../../Models/SubscriptionPlan";
 import { UserInterface } from "../../../../types/UserInterface";
 import { SubscriptionPlanInput } from "../Inputs/subscriptionPlanInput";
 import { SubscriptionPlanType } from "../../../../types/enums/subscriptionPlanEnum";
+import { findOne, insertOne, updateById, Tables, toSnakeCase } from "../../../../lib/db";
 
 export const postSubscriptionPlan = async (
   req: Request,
@@ -23,28 +23,28 @@ export const postSubscriptionPlan = async (
     let subscriptionPlan;
 
     if (subscriptionPlanInput.planType === SubscriptionPlanType.FIXED) {
-      subscriptionPlan = await SubscriptionPlan.findOne({
-        userId: user.id,
-        planType: SubscriptionPlanType.FIXED,
-        isDeleted: false,
+      subscriptionPlan = await findOne(Tables.SUBSCRIPTION_PLANS, {
+        user_id: user.id,
+        plan_type: SubscriptionPlanType.FIXED,
+        is_deleted: false,
       });
 
       if (subscriptionPlan) {
-        subscriptionPlan = await SubscriptionPlan.findByIdAndUpdate(
-          subscriptionPlan._id,
-          { ...subscriptionPlanInput },
-          { new: true }
+        subscriptionPlan = await updateById(
+          Tables.SUBSCRIPTION_PLANS,
+          subscriptionPlan.id,
+          toSnakeCase(subscriptionPlanInput)
         );
       } else {
-        subscriptionPlan = await SubscriptionPlan.create({
-          ...subscriptionPlanInput,
-          userId: user.id,
+        subscriptionPlan = await insertOne(Tables.SUBSCRIPTION_PLANS, {
+          ...toSnakeCase(subscriptionPlanInput),
+          user_id: user.id,
         });
       }
     } else {
-      subscriptionPlan = await SubscriptionPlan.create({
-        ...subscriptionPlanInput,
-        userId: user.id,
+      subscriptionPlan = await insertOne(Tables.SUBSCRIPTION_PLANS, {
+        ...toSnakeCase(subscriptionPlanInput),
+        user_id: user.id,
       });
     }
 

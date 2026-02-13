@@ -1,7 +1,5 @@
 import { Request, Response } from "express";
-import { User } from "../../../Models/User";
-import { Document } from "../../../Models/Document";
-import { Transaction } from "../../../Models/Transaction";
+import { db, count, Tables } from "../../../../lib/db";
 import { DocumentStatusEnum } from "../../../../types/DocumentStatusEnum";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 
@@ -12,58 +10,50 @@ export const getDashboardStats = async (
   res: Response
 ): Promise<Response> => {
   try {
-    const [
-      totalUsers,
-      activeMentors,
-      pendingVerifications,
-      totalTransactions,
-    ] = await Promise.all([
-      User.countDocuments({ isDeleted: false }),
-      User.countDocuments({
-        isDeleted: false,
-        isMentor: true,
-        isVerified: true,
-        isActive: true,
-      }),
-      Document.countDocuments({
-        isDeleted: false,
-        status: DocumentStatusEnum.Pending,
-      }),
-      Transaction.countDocuments({}),
-    ]);
+    const [totalUsers, activeMentors, pendingVerifications, totalTransactions] =
+      await Promise.all([
+        count(Tables.USERS, { is_deleted: false }),
+        count(Tables.USERS, {
+          is_deleted: false,
+          is_mentor: true,
+          is_verified: true,
+          is_active: true,
+        }),
+        count(Tables.DOCUMENTS, {
+          is_deleted: false,
+          status: DocumentStatusEnum.Pending,
+        }),
+        count(Tables.TRANSACTIONS),
+      ]);
 
-    const revenueAgg = await Transaction.aggregate([
-      { $match: { status: TransactionStatus.SUCCESS } },
-      { $group: { _id: null, total: { $sum: "$amount" } } },
-    ]);
-    const totalRevenue = revenueAgg?.[0]?.total ?? 0;
+    // Total revenue
+    const { data: revenueRows } = await db
+      .from(Tables.TRANSACTIONS)
+      .select("amount")
+      .eq("status", TransactionStatus.SUCCESS);
+    const totalRevenue = (revenueRows || []).reduce(
+      (s: number, t: any) => s + (t.amount || 0),
+      0
+    );
 
+    // User growth (last 7 days)
     const end = new Date();
     const start = new Date();
     start.setDate(end.getDate() - 6);
     start.setHours(0, 0, 0, 0);
 
-    const growthAgg = await User.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: start, $lte: end },
-          isDeleted: false,
-        },
-      },
-      {
-        $group: {
-          _id: {
-            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
-          },
-          count: { $sum: 1 },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]);
+    const { data: growthRows } = await db
+      .from(Tables.USERS)
+      .select("created_at")
+      .eq("is_deleted", false)
+      .gte("created_at", start.toISOString())
+      .lte("created_at", end.toISOString());
 
-    const growthMap = new Map<string, number>(
-      growthAgg.map((row) => [row._id, row.count])
-    );
+    const growthMap = new Map<string, number>();
+    (growthRows || []).forEach((row: any) => {
+      const key = new Date(row.created_at).toISOString().slice(0, 10);
+      growthMap.set(key, (growthMap.get(key) || 0) + 1);
+    });
 
     const userGrowth = Array.from({ length: 7 }, (_, idx) => {
       const d = new Date(start);
@@ -72,17 +62,20 @@ export const getDashboardStats = async (
       return { date: key, count: growthMap.get(key) || 0 };
     });
 
-    const recentUsers = await User.find({ isDeleted: false })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .select("fullName email userName createdAt")
-      .lean();
+    // Recent users
+    const { data: recentUsers } = await db
+      .from(Tables.USERS)
+      .select("full_name, email, user_name, created_at")
+      .eq("is_deleted", false)
+      .order("created_at", { ascending: false })
+      .limit(5);
 
-    const recentTransactions = await Transaction.find({})
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .select("amount currency status createdAt userId")
-      .lean();
+    // Recent transactions
+    const { data: recentTransactions } = await db
+      .from(Tables.TRANSACTIONS)
+      .select("amount, currency, status, created_at, user_id")
+      .order("created_at", { ascending: false })
+      .limit(5);
 
     return res.json({
       data: {
@@ -94,11 +87,13 @@ export const getDashboardStats = async (
           totalTransactions,
         },
         userGrowth,
-        recentUsers,
-        recentTransactions,
+        recentUsers: recentUsers || [],
+        recentTransactions: recentTransactions || [],
       },
     });
   } catch (error) {
-    return res.status(500).json({ error: { message: "Something went wrong." } });
+    return res
+      .status(500)
+      .json({ error: { message: "Something went wrong." } });
   }
 };

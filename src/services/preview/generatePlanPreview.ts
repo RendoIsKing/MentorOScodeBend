@@ -1,18 +1,45 @@
 import crypto from "crypto";
-import ProfileModel from "../../models/Profile";
-import { PlanPreview as IPlanPreview, PreviewDay, PreviewExercise } from "../../models/PlanPreview";
+
+type PreviewExercise = {
+  name: string;
+  sets: number;
+  reps: string;
+  rpe?: string;
+  rationale?: string;
+};
+
+type PreviewDay = {
+  day: string;
+  focus: string;
+  exercises?: PreviewExercise[];
+};
+
+type PlanPreview = {
+  user: string;
+  trainingWeek: PreviewDay[];
+  nutrition: any;
+  hash: string;
+};
 
 type GenInput = {
   userId: string;
-  profile: Awaited<ReturnType<typeof ProfileModel.findOne>>;
+  profile: any;
 };
 
-const dayNames = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-function subForInjury(name: string, injuries: string[] = []): { name: string; rationale?: string } {
+function subForInjury(
+  name: string,
+  injuries: string[] = []
+): { name: string; rationale?: string } {
   if (injuries.includes("knee")) {
-    if (/squat/i.test(name)) return { name: "Leg Press", rationale: "Knee-friendly swap for Squat" };
-    if (/lunge/i.test(name)) return { name: "Step-ups", rationale: "Reduced knee shear vs Lunges" };
+    if (/squat/i.test(name))
+      return { name: "Leg Press", rationale: "Knee-friendly swap for Squat" };
+    if (/lunge/i.test(name))
+      return {
+        name: "Step-ups",
+        rationale: "Reduced knee shear vs Lunges",
+      };
   }
   return { name };
 }
@@ -20,17 +47,25 @@ function subForInjury(name: string, injuries: string[] = []): { name: string; ra
 function baseExercises(exp: string): PreviewExercise[] {
   const ex: PreviewExercise[] = [
     { name: "Back Squat", sets: 3, reps: "8-10", rpe: "7-8" },
-    { name: "Bench Press", sets: 3, reps: "6-8",  rpe: "7-8" },
+    { name: "Bench Press", sets: 3, reps: "6-8", rpe: "7-8" },
     { name: "Lat Pulldown", sets: 3, reps: "10-12", rpe: "7-8" },
   ];
   if (exp === "beginner") return ex;
-  if (exp === "intermediate") return [...ex, { name: "Romanian Deadlift", sets: 3, reps: "6-8", rpe: "7-8" }];
-  return [...ex, { name: "Romanian Deadlift", sets: 4, reps: "5-7", rpe: "8" }];
+  if (exp === "intermediate")
+    return [
+      ...ex,
+      { name: "Romanian Deadlift", sets: 3, reps: "6-8", rpe: "7-8" },
+    ];
+  return [
+    ...ex,
+    { name: "Romanian Deadlift", sets: 4, reps: "5-7", rpe: "8" },
+  ];
 }
 
 export function kcalFrom(profile: any): number {
   const bw = profile?.bodyWeightKg ?? 70;
-  const mult = profile?.goals === "cut" ? 28 : profile?.goals === "gain" ? 33 : 30;
+  const mult =
+    profile?.goals === "cut" ? 28 : profile?.goals === "gain" ? 33 : 30;
   return Math.round(bw * mult);
 }
 
@@ -44,24 +79,28 @@ export function macrosFrom(profile: any, kcal: number) {
   return { proteinGrams: protein, carbsGrams: carbs, fatGrams: fat };
 }
 
-export function generateDeterministicPreview({ userId, profile }: GenInput): IPlanPreview {
+export function generateDeterministicPreview({
+  userId,
+  profile,
+}: GenInput): PlanPreview {
   const p: any = profile || {};
   const exp = p?.experienceLevel ?? "beginner";
   const injuries = p?.injuries ?? [];
 
   const days: PreviewDay[] = dayNames.map((d, i) => {
     if (exp === "beginner") {
-      if ([0,2,4].includes(i)) {
-        const ex = baseExercises(exp).map(e => {
+      if ([0, 2, 4].includes(i)) {
+        const ex = baseExercises(exp).map((e) => {
           const swap = subForInjury(e.name, injuries);
           return { ...e, name: swap.name, rationale: swap.rationale };
         });
         return { day: d, focus: "Full Body", exercises: ex };
       }
-      if ([1,5].includes(i)) return { day: d, focus: "Cardio (Zone 2) 25–35min" };
+      if ([1, 5].includes(i))
+        return { day: d, focus: "Cardio (Zone 2) 25–35min" };
       return { day: d, focus: "Rest / Mobility 10–15min" };
     }
-    const full = baseExercises(exp).map(e => {
+    const full = baseExercises(exp).map((e) => {
       const swap = subForInjury(e.name, injuries);
       return { ...e, name: swap.name, rationale: swap.rationale };
     });
@@ -93,7 +132,10 @@ export function generateDeterministicPreview({ userId, profile }: GenInput): IPl
   });
 
   const hash = crypto.createHash("sha256").update(raw).digest("hex");
-  return { user: (p as any).user, trainingWeek: days, nutrition, hash } as IPlanPreview;
+  return {
+    user: p?.user || userId,
+    trainingWeek: days,
+    nutrition,
+    hash,
+  } as PlanPreview;
 }
-
-

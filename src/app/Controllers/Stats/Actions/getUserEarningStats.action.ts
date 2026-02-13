@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { Transaction } from "../../../Models/Transaction";
-import { Types } from "mongoose";
+import { db, Tables } from "../../../../lib/db";
 import { ProductType } from "../../../../types/enums/productEnum";
 import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
 
@@ -13,75 +12,44 @@ export const getUserEarningStats = async (
     const user = req.user as UserInterface;
     const { startDate, endDate } = req.body;
 
-    const transaction = await Transaction.aggregate([
-      {
-        $match: {
-          userId: new Types.ObjectId(user.id),
-          createdAt: { $gte: new Date(startDate), $lt: new Date(endDate) },
-          type: TransactionType.CREDIT,
-        },
-      },
-      {
-        $facet: {
-          Subcription: [
-            {
-              $match: {
-                productType: ProductType.SUBSCRIPTION,
-              },
-            },
-            {
-              $group: {
-                _id: null,
-                count: {
-                  $sum: "$amount",
-                },
-              },
-            },
-          ],
-          Tips: [
-            {
-              $match: {
-                productType: ProductType.TIPS,
-              },
-            },
-            {
-              $group: {
-                _id: null,
-                count: {
-                  $sum: "$amount",
-                },
-              },
-            },
-          ],
-          Posts: [
-            {
-              $match: {
-                productType: ProductType.POSTS,
-              },
-            },
-            {
-              $group: {
-                _id: null,
-                count: {
-                  $sum: "$amount",
-                },
-              },
-            },
-          ],
-        },
-      },
-    ]);
+    // Fetch credit transactions in the date range
+    const { data: transactions } = await db
+      .from(Tables.TRANSACTIONS)
+      .select("amount, product_type")
+      .eq("user_id", user.id)
+      .eq("type", TransactionType.CREDIT)
+      .gte("created_at", new Date(startDate).toISOString())
+      .lt("created_at", new Date(endDate).toISOString());
 
-    const data = Object.entries(transaction[0]).map((item) => {
-      return {
-        invoice: item[0],
-        gross: (item as any)[1][0]?.count,
-        netAmt: (item as any)[1][0]?.count,
+    const rows = transactions || [];
+
+    const sumByType = (type: string) =>
+      rows
+        .filter((t: any) => t.product_type === type)
+        .reduce((acc: number, t: any) => acc + (t.amount || 0), 0);
+
+    const data = [
+      {
+        invoice: "Subcription",
+        gross: sumByType(ProductType.SUBSCRIPTION),
+        netAmt: sumByType(ProductType.SUBSCRIPTION),
         paymentMethod: "Card",
-      };
-    });
+      },
+      {
+        invoice: "Tips",
+        gross: sumByType(ProductType.TIPS),
+        netAmt: sumByType(ProductType.TIPS),
+        paymentMethod: "Card",
+      },
+      {
+        invoice: "Posts",
+        gross: sumByType(ProductType.POSTS),
+        netAmt: sumByType(ProductType.POSTS),
+        paymentMethod: "Card",
+      },
+    ];
 
-    return res.status(200).json({ data: data });
+    return res.status(200).json({ data });
   } catch (error) {
     console.error("Error fetching user earning stats", error);
     return res.status(500).json({ error: "Something went wrong." });

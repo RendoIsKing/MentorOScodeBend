@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
 import { stripe_currency } from "../../../../utils/consts/stripeCurrency";
 import stripeInstance from "../../../../utils/stripe";
-import { SubscriptionPlan } from "../../../Models/SubscriptionPlan";
 import { plainToClass } from "class-transformer";
 import { validate } from "class-validator";
 import { UserInterface } from "../../../../types/UserInterface";
@@ -12,7 +11,7 @@ import {
   associateFeatureToProduct,
 } from "../../Features/Actions/associateFeatureToProduct";
 import { SubscriptionPlanType } from "../../../../types/enums/subscriptionPlanEnum";
-import { Types } from "mongoose";
+import { findOne, insertOne, updateById, Tables, toSnakeCase } from "../../../../lib/db";
 
 export const createProduct = async (
   req: Request,
@@ -30,10 +29,10 @@ export const createProduct = async (
     }
 
     if (subscriptionPlanInput.planType === SubscriptionPlanType.FIXED) {
-      const plan = await SubscriptionPlan.findOne({
-        userId: new Types.ObjectId(user.id),
-        planType: SubscriptionPlanType.FIXED,
-        isDeleted: false,
+      const plan = await findOne(Tables.SUBSCRIPTION_PLANS, {
+        user_id: user.id,
+        plan_type: SubscriptionPlanType.FIXED,
+        is_deleted: false,
       });
       if (plan) {
         return res.status(422).json({
@@ -52,24 +51,24 @@ export const createProduct = async (
       default_price_data: {
         currency: stripe_currency,
         recurring: {
-          interval: "month", // @future should be dynamic from api, @todo if not dynamic move to constants
+          interval: "month",
         },
         unit_amount: body.price,
-        // name: body.name,
       },
     });
 
     let productFeatures: ProductFeature[] = [];
-    let updatedProduct;
 
-    const product = await SubscriptionPlan.create({
-      ...subscriptionPlanInput,
-      userId: user.id,
-      stripeProductId: stripeProduct.id,
-      stripeProductObject: stripeProduct,
+    const product = await insertOne(Tables.SUBSCRIPTION_PLANS, {
+      ...toSnakeCase(subscriptionPlanInput),
+      user_id: user.id,
+      stripe_product_id: stripeProduct.id,
+      stripe_product_object: stripeProduct,
     });
 
-    if (subscriptionPlanInput.entitlements) {
+    let updatedProduct = product;
+
+    if (subscriptionPlanInput.entitlements && product) {
       const featureIds = await RegisterFeatureOnStripe(
         subscriptionPlanInput.entitlements
       );
@@ -86,20 +85,21 @@ export const createProduct = async (
       productFeatures = await associateFeatureToProduct(
         featureAssociationParams
       );
-      updatedProduct = await SubscriptionPlan.findByIdAndUpdate(
-        product.id,
-        {
-          $addToSet: {
-            featureIds: { $each: existingFeatureIds },
-            stripeProductFeatureIds: { $each: stripeFeatureIds },
-            stripeProductFeatureId: {
-              $each: productFeatures.map((pf) => pf.stripeProductFeatureId),
-            },
-          },
-        },
 
-        { new: true }
-      );
+      updatedProduct = await updateById(Tables.SUBSCRIPTION_PLANS, product.id, {
+        feature_ids: [
+          ...(product.feature_ids || []),
+          ...existingFeatureIds,
+        ],
+        stripe_product_feature_ids: [
+          ...(product.stripe_product_feature_ids || []),
+          ...stripeFeatureIds,
+        ],
+        stripe_product_feature_id: [
+          ...(product.stripe_product_feature_id || []),
+          ...productFeatures.map((pf) => pf.stripeProductFeatureId),
+        ],
+      });
     }
 
     return res.json({ data: updatedProduct });

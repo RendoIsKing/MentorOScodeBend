@@ -1,8 +1,9 @@
-import { Document } from "mongoose";
 import { FeatureInterface } from "./FeatureInterface";
 import { SubscriptionPlanType } from "./enums/subscriptionPlanEnum";
 
-export interface SubscriptionPlanInterface extends Document {
+export interface SubscriptionPlanInterface {
+  _id?: string;
+  id?: string;
   title: string;
   description: string;
   planType: SubscriptionPlanType;

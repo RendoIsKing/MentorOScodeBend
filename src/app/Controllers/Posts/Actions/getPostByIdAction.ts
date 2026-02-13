@@ -1,8 +1,7 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { Post } from "../../../Models/Post";
 import { UserInterface } from "../../../../types/UserInterface";
 import { InteractionType } from "../../../../types/enums/InteractionTypeEnum";
+import { db, Tables } from "../../../../lib/db";
 
 export const getPostById = async (
   req: Request,
@@ -11,254 +10,113 @@ export const getPostById = async (
   try {
     const { id } = req.params;
     const user = req.user as UserInterface;
+    const userId = user._id || user.id;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: "Invalid ID format" });
+    // Fetch the post with user info
+    const { data: post, error } = await db
+      .from(Tables.POSTS)
+      .select(
+        `*, userInfo:users!user_id(id, full_name, user_name, photo_id)`
+      )
+      .eq("id", id)
+      .eq("is_deleted", false)
+      .maybeSingle();
+
+    if (error || !post) {
+      return res.status(404).json({ error: "Post not found", posts: [] });
     }
 
-    const posts = await Post.aggregate([
-      {
-        $match: {
-          _id: new mongoose.Types.ObjectId(id),
-          deletedAt: null,
-          isDeleted: false,
-        },
-      },
-      // {
-      //   $unwind: "$media",
-      // },
-      {
-        $lookup: {
-          from: "files",
-          localField: "media.mediaId",
-          foreignField: "_id",
-          as: "mediaFiles",
-        },
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "user",
-          foreignField: "_id",
-          as: "userInfo",
-        },
-      },
-      {
-        $lookup: {
-          from: "files",
-          localField: "userInfo.photoId",
-          foreignField: "_id",
-          as: "userPhoto",
-        },
-      },
-
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$type", InteractionType.LIKE_POST] },
-                  ],
-                },
-              },
-            },
-            {
-              $count: "likesCount",
-            },
-          ],
-          as: "likesCount",
-        },
-      },
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id", userId: user?._id },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$interactedBy", "$$userId"] },
-                    { $eq: ["$type", InteractionType.LIKE_POST] },
-                  ],
-                },
-              },
-            },
-          ],
-          as: "likeInteractions",
-        },
-      },
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id", userId: user?._id },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$interactedBy", "$$userId"] },
-                    { $eq: ["$type", InteractionType.COLLECTION_SAVED] },
-                  ],
-                },
-              },
-            },
-          ],
-          as: "savedInteractions",
-        },
-      },
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$type", InteractionType.COLLECTION_SAVED] },
-                  ],
-                },
-              },
-            },
-            {
-              $count: "savedCount",
-            },
-          ],
-          as: "savedCount",
-        },
-      },
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$type", InteractionType.COMMENT] },
-                    { $eq: ["$isDeleted", false] },
-                  ],
-                },
-              },
-            },
-            {
-              $count: "commentsCount",
-            },
-          ],
-          as: "commentsCount",
-        },
-      },
-      {
-        $lookup: {
-          from: "userconnections",
-          let: { userId: { $arrayElemAt: ["$userInfo._id", 0] } },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$followingTo", "$$userId"] },
-                    { $eq: ["$owner", new mongoose.Types.ObjectId(user._id)] },
-                  ],
-                },
-              },
-            },
-          ],
-          as: "followInfo",
-        },
-      },
-
-      {
-        $addFields: {
-          isFollowing: { $gt: [{ $size: "$followInfo" }, 0] },
-          isLiked: { $gt: [{ $size: "$likeInteractions" }, 0] },
-          isSaved: { $gt: [{ $size: "$savedInteractions" }, 0] },
-          // Viewer ownership for modal actions
-          isOwner: { $eq: ["$user", new mongoose.Types.ObjectId(user._id)] },
-          commentsCount: {
-            $ifNull: [{ $arrayElemAt: ["$commentsCount.commentsCount", 0] }, 0],
-          },
-          savedCount: {
-            $ifNull: [{ $arrayElemAt: ["$savedCount.savedCount", 0] }, 0],
-          },
-          likesCount: {
-            $ifNull: [{ $arrayElemAt: ["$likesCount.likesCount", 0] }, 0],
-          },
-        },
-      },
-      {
-        $unset: "followInfo",
-      },
-      {
-        $lookup: {
-          from: "users",
-          let: { userTags: "$userTags" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $in: ["$_id", "$$userTags.userId"],
-                },
-              },
-            },
-            {
-              $project: {
-                _id: 1,
-                userName: 1,
-              },
-            },
-          ],
-          as: "userTagsUsers",
-        },
-      },
-      {
-        $addFields: {
-          userTags: {
-            $map: {
-              input: "$userTags",
-              as: "tag",
-              in: {
-                $mergeObjects: [
-                  "$$tag",
-                  {
-                    userName: {
-                      $arrayElemAt: [
-                        "$userTagsUsers.userName",
-                        {
-                          $indexOfArray: ["$userTagsUsers._id", "$$tag.userId"],
-                        },
-                      ],
-                    },
-                  },
-                ],
-              },
-            },
-          },
-        },
-      },
-      {
-        $project: {
-          userTagsUsers: 0,
-        },
-      },
+    // Fetch related data in parallel
+    const [
+      mediaResult,
+      userPhotoResult,
+      likesCountResult,
+      userLikeResult,
+      userSavedResult,
+      savedCountResult,
+      commentsCountResult,
+      followResult,
+      userTagsResult,
+    ] = await Promise.all([
+      db.from(Tables.POST_MEDIA).select("*").eq("post_id", id),
+      post.userInfo?.photo_id
+        ? db.from(Tables.FILES).select("*").eq("id", post.userInfo.photo_id)
+        : Promise.resolve({ data: [] as any[] }),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("id", { count: "exact", head: true })
+        .eq("post_id", id)
+        .eq("type", InteractionType.LIKE_POST),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("id")
+        .eq("post_id", id)
+        .eq("type", InteractionType.LIKE_POST)
+        .eq("interacted_by", userId)
+        .limit(1),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("id")
+        .eq("post_id", id)
+        .eq("type", InteractionType.COLLECTION_SAVED)
+        .eq("interacted_by", userId)
+        .limit(1),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("id", { count: "exact", head: true })
+        .eq("post_id", id)
+        .eq("type", InteractionType.COLLECTION_SAVED),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("id", { count: "exact", head: true })
+        .eq("post_id", id)
+        .eq("type", InteractionType.COMMENT)
+        .eq("is_deleted", false),
+      post.userInfo?.id
+        ? db
+            .from(Tables.USER_CONNECTIONS)
+            .select("id")
+            .eq("following_to", post.userInfo.id)
+            .eq("owner", userId)
+            .limit(1)
+        : Promise.resolve({ data: [] as any[] }),
+      db.from(Tables.POST_USER_TAGS).select("*").eq("post_id", id),
     ]);
 
-    if (posts.length === 0) {
-      return res.status(404).json({ error: "Post not found", posts });
+    // Resolve user tag usernames
+    let enrichedUserTags = userTagsResult.data || [];
+    if (enrichedUserTags.length > 0) {
+      const tagUserIds = enrichedUserTags.map((t: any) => t.user_id);
+      const { data: tagUsers } = await db
+        .from(Tables.USERS)
+        .select("id, user_name")
+        .in("id", tagUserIds);
+      const tagUserMap: Record<string, string> = {};
+      for (const u of tagUsers || []) {
+        tagUserMap[u.id] = u.user_name;
+      }
+      enrichedUserTags = enrichedUserTags.map((tag: any) => ({
+        ...tag,
+        userName: tagUserMap[tag.user_id] || tag.user_name,
+      }));
     }
 
-    return res.json(posts[0]);
+    const result = {
+      ...post,
+      mediaFiles: mediaResult.data || [],
+      userInfo: post.userInfo ? [post.userInfo] : [],
+      userPhoto: userPhotoResult.data || [],
+      isFollowing: (followResult.data || []).length > 0,
+      isLiked: (userLikeResult.data || []).length > 0,
+      isSaved: (userSavedResult.data || []).length > 0,
+      isOwner: post.user_id === userId,
+      likesCount: likesCountResult.count || 0,
+      savedCount: savedCountResult.count || 0,
+      commentsCount: commentsCountResult.count || 0,
+      userTags: enrichedUserTags,
+    };
+
+    return res.json(result);
   } catch (error) {
     console.error("Error retrieving Post:", error);
     return res.status(500).json({ error: "Internal Server Error" });

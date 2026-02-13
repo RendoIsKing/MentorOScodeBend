@@ -1,6 +1,6 @@
 import createSlug from "../../../../utils/regx/createSlug";
 import stripeInstance from "../../../../utils/stripe";
-import { Feature } from "../../../Models/Feature";
+import { findOne, updateById, Tables } from "../../../../lib/db";
 
 export class EntitlementInput {
   feature: string;
@@ -19,7 +19,7 @@ export const RegisterFeatureOnStripe = async (
     const createFeaturePromises = entitlements.map(async (entitlement) => {
       const featureSlug = createSlug(entitlement.feature);
 
-      const existingFeature = await Feature.findOne({
+      const existingFeature = await findOne(Tables.FEATURES, {
         feature: entitlement.feature,
       });
 
@@ -27,10 +27,10 @@ export const RegisterFeatureOnStripe = async (
         throw new Error(`Feature "${entitlement.feature}" doesnt exists.`);
       }
 
-      if (existingFeature.stripeFeatureId) {
+      if (existingFeature.stripe_feature_id) {
         return {
           existingFeatureId: existingFeature.id,
-          stripeFeatureId: existingFeature.stripeFeatureId,
+          stripeFeatureId: existingFeature.stripe_feature_id,
         };
       }
 
@@ -39,11 +39,11 @@ export const RegisterFeatureOnStripe = async (
         lookup_key: featureSlug,
       });
 
-      existingFeature.stripeFeatureId = stripeFeature.id;
-      existingFeature.stripeFeatureObject = stripeFeature;
-      await existingFeature.save();
+      await updateById(Tables.FEATURES, existingFeature.id, {
+        stripe_feature_id: stripeFeature.id,
+        stripe_feature_object: stripeFeature,
+      });
 
-      // return stripeFeature.id;
       return {
         existingFeatureId: existingFeature.id,
         stripeFeatureId: stripeFeature.id,

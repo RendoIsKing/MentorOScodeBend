@@ -1,14 +1,21 @@
 import {Request, Response} from 'express';
 import {validate} from 'class-validator';
 import {ValidationErrorResponse} from '../../types/ValidationErrorResponse';
-import {Category} from '../Models/Category';
 import {CreateCategoryInput} from "../Inputs/createCategory.input";
-import {Module} from "../Models/Module";
 import {CreateSubCategoryInput} from "../Inputs/CreateSubCategory.input";
+import {
+  findById,
+  insertOne,
+  updateById,
+  softDelete,
+  Tables,
+  db,
+} from '../../lib/db';
 
-const ObjectId = require('mongoose').Types.ObjectId;
+const isValidUUID = (id: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
-const LIMIT = 10
+const LIMIT = 10;
 
 export class CategoryController {
     static create = async (req: Request, res: Response): Promise<Response> => {
@@ -17,7 +24,7 @@ export class CategoryController {
         const categoryInput = new CreateCategoryInput();
 
         categoryInput.title = input.title;
-        categoryInput.moduleId = input.moduleId;
+        categoryInput.moduleId = input.moduleId as any;
         const errors = await validate(categoryInput);
         if (errors.length) {
             const errorsInfo: ValidationErrorResponse[] = errors.map(error => ({
@@ -31,20 +38,20 @@ export class CategoryController {
             return res.status(400).json({error: {message: 'VALIDATIONS_ERROR', info: "title is required"}});
         }
         try {
-            if (!ObjectId.isValid(input.moduleId)) {
+            if (!isValidUUID(String(input.moduleId))) {
                 return res.status(400).json({error: {message: 'Invalid moduleId.'}});
             }
-            const module = await Module.findById(input.moduleId);
+            const module = await findById(Tables.MODULES, String(input.moduleId));
             if (!module) {
                 return res.status(400).json({error: {message: 'Invalid moduleId.'}});
             }
-            const dataToSave: any = {
+            const dataToSave = {
                 title: input.title,
-                moduleId: input.moduleId,
-                isActive: true
-            }
+                module_id: String(input.moduleId),
+                is_active: true,
+            };
 
-            const category = await Category.create(dataToSave);
+            const category = await insertOne(Tables.CATEGORIES, dataToSave);
 
             return res.json({data: category, message: "category created sucessfully"})
         } catch (err) {
@@ -57,44 +64,48 @@ export class CategoryController {
     static index = async (_req: any, res: Response): Promise<Response> => {
         try {
             const perPage = (_req.query && _req.query.perPage > 0 ? parseInt(_req.query.perPage) : LIMIT);
-            let skip = (_req.query && _req.query.page > 0 ? parseInt(_req.query.page) - 1 : 0) * perPage;
+            const page = (_req.query && _req.query.page > 0 ? parseInt(_req.query.page) : 1);
+            const offset = (page - 1) * perPage;
 
-            let dataToFind: any = {isActive: true};
+            let countQuery = db
+                .from(Tables.CATEGORIES)
+                .select("id", { count: "exact", head: true })
+                .eq("is_active", true)
+                .or("is_deleted.is.null,is_deleted.eq.false");
+            let dataQuery = db
+                .from(Tables.CATEGORIES)
+                .select("*")
+                .eq("is_active", true)
+                .or("is_deleted.is.null,is_deleted.eq.false")
+                .order("created_at", { ascending: false })
+                .range(offset, offset + perPage - 1);
 
-            if (_req.query.title) {
-                dataToFind.title = _req.query.title;
-                const escapedTitle = String(_req.query.title).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                dataToFind = {...dataToFind, title: {$regex: new RegExp(".*" + escapedTitle + ".*", "i")}}
-                skip = 0;
+            if (_req.query?.title) {
+                const search = `%${_req.query.title}%`;
+                countQuery = countQuery.ilike("title", search);
+                dataQuery = dataQuery.ilike("title", search);
             }
 
-            if (_req.query.moduleId) {
-                dataToFind.moduleId = _req.query.moduleId;
-                dataToFind = {...dataToFind, moduleId: ObjectId(_req.query.moduleId)};
-                skip = 0;
+            if (_req.query?.moduleId) {
+                countQuery = countQuery.eq("module_id", _req.query.moduleId);
+                dataQuery = dataQuery.eq("module_id", _req.query.moduleId);
             }
-            const [query]: any = await Category.aggregate([{
-                $facet: {
-                    results: [
-                        {$match: dataToFind},
-                        // { $lookup: {from: 'Module', localField: 'moduleId', foreignField: 'id', as: 'module'}},
-                        {$skip: skip},
-                        {$limit: perPage},
-                        {$sort:{createdAt:-1}}
-                    ],
-                    moduleCount: [
-                        {$match: dataToFind},
-                        {$count: 'count'}
-                    ]
-                }
-            }]);
 
-            const categoryCount = query.moduleCount[0]?.count || 0;
-            const totalPages = Math.ceil(categoryCount / perPage);
+            const [{ count: categoryCount }, { data: results, error }] = await Promise.all([
+                countQuery,
+                dataQuery,
+            ]);
+
+            if (error) {
+                return res.status(500).json({error: {message: 'Something went wrong.'}});
+            }
+
+            const total = categoryCount || 0;
+            const totalPages = Math.ceil(total / perPage);
 
             return res.json({
-                data: query.results,
-                meta: {"perPage": perPage, "page": _req.query.page || 1, "pages": totalPages, "total": categoryCount,}
+                data: results || [],
+                meta: {"perPage": perPage, "page": page, "pages": totalPages, "total": total,}
             });
         } catch (err) {
             console.log(err)
@@ -106,10 +117,20 @@ export class CategoryController {
         const {id} = req.params;
 
         try {
-            const category = await Category.findById(id).populate('moduleId');
+            const category = await findById(Tables.CATEGORIES, id);
 
             if (category) {
-                return res.json({data: {category}});
+                const module = (category as any).module_id
+                    ? await findById(Tables.MODULES, (category as any).module_id)
+                    : null;
+                return res.json({
+                    data: {
+                        category: {
+                            ...category,
+                            module, // populated module (replaces moduleId in Mongoose populate)
+                        },
+                    },
+                });
             }
 
             return res.status(404).json({error: {message: 'category not found.'}});
@@ -123,22 +144,17 @@ export class CategoryController {
         const {id} = req.params;
         const input: CreateCategoryInput = req.body;
         try {
-            const dataToSave: any = {...input};
-            const categoryData = await Category.findByIdAndUpdate(
-                id,
-                {
-                    ...dataToSave
-                }
-            );
+            const snakeCaseData: Record<string, any> = {};
+            if (input.title != null) snakeCaseData.title = input.title;
+            if (input.moduleId != null) snakeCaseData.module_id = input.moduleId;
+
+            const categoryData = await updateById(Tables.CATEGORIES, id, snakeCaseData);
 
             if (!categoryData) {
                 return res.status(400).json({error: {message: 'category to update does not exists.'}});
             }
-            const categoryUpdatedData = await Category.findById(
-                id,
-                '-isActive -activatedAt -isDeleted -deletedAt'
-            )
-           
+
+            const categoryUpdatedData = await findById(Tables.CATEGORIES, id);
 
             return res.json({data: {categoryUpdatedData}})
         } catch (err) {
@@ -150,18 +166,11 @@ export class CategoryController {
         const {id} = req.params;
 
         try {
-            const categoryData = await Category.findByIdAndUpdate(
-                id,
-                {
-                    isDeleted: true,
-                    deletedAt: new Date()
-                }
-            );
-
-            if (!categoryData) {
+            const existing = await findById(Tables.CATEGORIES, id);
+            if (!existing) {
                 return res.status(400).json({error: {message: 'category to delete does not exists.'}});
             }
-
+            await softDelete(Tables.CATEGORIES, id);
             return res.json({data: {message: 'category deleted successfully.'}});
         } catch (err) {
             return res.status(500).json({error: {message: 'Something went wrong.'}});
@@ -174,7 +183,7 @@ export class CategoryController {
         const categoryInput = new CreateSubCategoryInput();
 
         categoryInput.title = input.title;
-        categoryInput.categoryId = input.categoryId;
+        categoryInput.categoryId = input.categoryId as any;
         const errors = await validate(categoryInput);
 
         if (errors.length) {
@@ -187,19 +196,33 @@ export class CategoryController {
         }
 
         try {
-            if (!ObjectId.isValid(input.categoryId)) {
+            if (!isValidUUID(String(input.categoryId))) {
                 return res.status(400).json({error: {message: 'Invalid categoryId.'}});
             }
-            const category = await Category.findById(input.categoryId)
+            const category = await findById(Tables.CATEGORIES, String(input.categoryId));
             if (!category) {
                 return res.status(400).json({error: {message: 'Invalid categoryId.'}});
             }
-            const subCategory=await Category.create({title: input.title, parentId: input.categoryId,isActive:true})
-            const categoryData = await Category.findById(subCategory.id, '-isActive -activatedAt -isDeleted -deletedAt').populate('parentId')
+            const subCategory = await insertOne(Tables.CATEGORIES, {
+                title: input.title,
+                parent_id: String(input.categoryId),
+                module_id: (category as any).module_id ?? null,
+                is_active: true,
+            });
+            if (!subCategory) {
+                return res.status(500).json({error: {message: 'Something went wrong.'}});
+            }
+            const parent = (subCategory as any).parent_id
+                ? await findById(Tables.CATEGORIES, (subCategory as any).parent_id)
+                : null;
+            const categoryData = {
+                ...subCategory,
+                parent: parent, // populated parent (replaces parentId in Mongoose populate)
+            };
 
             return res.json({data: categoryData, message: 'sub category created successfully.'});
         } catch (err) {
-            console.log("ERR",err)
+            console.log("ERR", err);
             return res.status(500).json({error: {message: 'Something went wrong.'}});
         }
     }

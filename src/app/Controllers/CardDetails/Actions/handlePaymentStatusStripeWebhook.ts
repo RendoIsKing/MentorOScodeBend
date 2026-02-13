@@ -1,13 +1,10 @@
 import { Request, Response } from "express";
-import { User } from "../../../Models/User";
-import { Transaction } from "../../../Models/Transaction";
-import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import stripeInstance from "../../../../utils/stripe";
-import { Subscription } from "../../../Models/Subscription";
-import { Types } from 'mongoose';
-import * as Sentry from '@sentry/node';
+import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
 import { ProductType } from "../../../../types/enums/productEnum";
+import * as Sentry from "@sentry/node";
+import { db, findOne, updateById, upsert, Tables } from "../../../../lib/db";
 
 /**
  * Handle Stripe webhook events for payment/subscription updates.
@@ -37,10 +34,19 @@ export const handlePaymentStatusWebhookStripe = async (
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
   } catch (err) {
-    console.error(`Webhook signature verification failed.`, (err as any)?.message || err);
+    console.error(
+      `Webhook signature verification failed.`,
+      (err as any)?.message || err
+    );
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
-  try { Sentry.addBreadcrumb({ category: 'stripe', message: 'webhook', data: { type: event?.type } }); } catch {}
+  try {
+    Sentry.addBreadcrumb({
+      category: "stripe",
+      message: "webhook",
+      data: { type: event?.type },
+    });
+  } catch {}
   switch (event.type) {
     case "customer.subscription.created":
     case "customer.subscription.trial_will_end":
@@ -75,63 +81,93 @@ const handleSubscriptionEvent = async (event: any) => {
   const subscriptionData = event.data.object;
 
   try {
-    let updatedSubscription = await Subscription.findOneAndUpdate(
-      {
-        StripeSubscriptionId: subscriptionData.id,
-        status: SubscriptionStatusEnum.INACTIVE,
-      },
-      {
-        status: SubscriptionStatusEnum.ACTIVE,
-        startDate: new Date(subscriptionData.start_date * 1000),
-        endDate: new Date(subscriptionData.current_period_end * 1000),
-        stripeSubscriptionObject: JSON.stringify(subscriptionData),
-      },
-      { new: true }
-    );
+    // Try to find and update existing subscription
+    const existing = await findOne(Tables.SUBSCRIPTIONS, {
+      stripe_subscription_id: subscriptionData.id,
+      status: SubscriptionStatusEnum.INACTIVE,
+    });
 
-    if (!updatedSubscription) {
-      // Fallback: upsert by user (metadata.userId or stripe customer -> User)
-      let userId: any;
-      const metaUserId = (subscriptionData?.metadata && (subscriptionData.metadata.userId || subscriptionData.metadata.userid)) || undefined;
+    let updatedSubscription;
+
+    if (existing) {
+      updatedSubscription = await updateById(Tables.SUBSCRIPTIONS, existing.id, {
+        status: SubscriptionStatusEnum.ACTIVE,
+        start_date: new Date(subscriptionData.start_date * 1000).toISOString(),
+        end_date: new Date(
+          subscriptionData.current_period_end * 1000
+        ).toISOString(),
+        stripe_subscription_object: JSON.stringify(subscriptionData),
+      });
+    } else {
+      // Fallback: resolve userId from metadata or stripe customer
+      let userId: string | undefined;
+      const metaUserId =
+        subscriptionData?.metadata?.userId ||
+        subscriptionData?.metadata?.userid;
       if (metaUserId) userId = metaUserId;
+
       if (!userId && subscriptionData?.customer) {
         try {
-          const user = await User.findOne({ stripeClientId: subscriptionData.customer }).lean();
-          if (user?._id) userId = String(user._id);
+          const user = await findOne(Tables.USERS, {
+            stripe_client_id: subscriptionData.customer,
+          });
+          if (user?.id) userId = user.id;
         } catch {}
       }
+
       if (!userId) {
-        console.error('Unable to resolve user for subscription', typeof subscriptionData.customer === 'string' ? subscriptionData.customer.slice(-6) : 'unknown');
+        console.error(
+          "Unable to resolve user for subscription",
+          typeof subscriptionData.customer === "string"
+            ? subscriptionData.customer.slice(-6)
+            : "unknown"
+        );
         return;
       }
-      const priceId = (()=>{
-        try { return subscriptionData?.items?.data?.[0]?.price?.id || ''; } catch { return ''; }
+
+      const priceId = (() => {
+        try {
+          return subscriptionData?.items?.data?.[0]?.price?.id || "";
+        } catch {
+          return "";
+        }
       })();
-      updatedSubscription = await Subscription.findOneAndUpdate(
-        { StripeSubscriptionId: subscriptionData.id },
+
+      updatedSubscription = await upsert(
+        Tables.SUBSCRIPTIONS,
         {
-          userId: new Types.ObjectId(userId),
-          planId: new Types.ObjectId(),
-          StripeSubscriptionId: subscriptionData.id,
-          StripePriceId: priceId || 'price_unknown',
+          stripe_subscription_id: subscriptionData.id,
+          user_id: userId,
+          stripe_price_id: priceId || "price_unknown",
           status: SubscriptionStatusEnum.ACTIVE,
-          startDate: new Date(subscriptionData.start_date * 1000),
-          endDate: new Date(subscriptionData.current_period_end * 1000),
-          stripeSubscriptionObject: JSON.stringify(subscriptionData),
+          start_date: new Date(
+            subscriptionData.start_date * 1000
+          ).toISOString(),
+          end_date: new Date(
+            subscriptionData.current_period_end * 1000
+          ).toISOString(),
+          stripe_subscription_object: JSON.stringify(subscriptionData),
         },
-        { upsert: true, new: true }
+        "stripe_subscription_id"
       );
     }
 
     try {
-      if (!updatedSubscription) return; // TS guard
-      // Mark user as subscribed and persist entitlement flag for access guard
-      await User.updateOne({ _id: updatedSubscription.userId }, { $set: { status: 'SUBSCRIBED' } });
+      if (!updatedSubscription) return;
+      await updateById(Tables.USERS, updatedSubscription.user_id, {
+        status: "SUBSCRIBED",
+      });
     } catch (e) {
-      console.error('user entitlement update failed', e);
+      console.error("user entitlement update failed", e);
     }
     if (updatedSubscription) {
-      try { Sentry.addBreadcrumb({ category: 'stripe', message: 'subscription-updated', data: { id: String(updatedSubscription._id) } }); } catch {}
+      try {
+        Sentry.addBreadcrumb({
+          category: "stripe",
+          message: "subscription-updated",
+          data: { id: String(updatedSubscription.id) },
+        });
+      } catch {}
     }
   } catch (error) {
     console.error("Error handling subscription event:", error);
@@ -143,7 +179,13 @@ const handleSubscriptionEvent = async (event: any) => {
  */
 const handlePaymentIntentCreated = async (event: any) => {
   const paymentIntent = event.data.object;
-  try { Sentry.addBreadcrumb({ category: 'stripe', message: 'payment-intent-created', data: { id: paymentIntent?.id } }); } catch {}
+  try {
+    Sentry.addBreadcrumb({
+      category: "stripe",
+      message: "payment-intent-created",
+      data: { id: paymentIntent?.id },
+    });
+  } catch {}
 };
 
 /**
@@ -151,23 +193,32 @@ const handlePaymentIntentCreated = async (event: any) => {
  */
 const handlePaymentSuccess = async (event: any) => {
   const paymentIntent = event.data.object;
-  const user = await User.findOne({ stripeClientId: paymentIntent.customer });
+  const user = await findOne(Tables.USERS, {
+    stripe_client_id: paymentIntent.customer,
+  });
   if (!user) {
-    console.error("User not found for customer ID:", typeof paymentIntent.customer === 'string' ? paymentIntent.customer.slice(-6) : 'unknown');
+    console.error(
+      "User not found for customer ID:",
+      typeof paymentIntent.customer === "string"
+        ? paymentIntent.customer.slice(-6)
+        : "unknown"
+    );
     return;
   }
-  const updatedTransaction = await Transaction.updateMany(
-    {
-      stripePaymentIntentId: paymentIntent.id,
-      status: TransactionStatus.PENDING,
-    },
-    {
-      status: TransactionStatus.SUCCESS,
-    },
-    { new: true }
-  );
 
-  try { Sentry.addBreadcrumb({ category: 'stripe', message: 'payment-success', data: { count: updatedTransaction?.modifiedCount } }); } catch {}
+  await db
+    .from(Tables.TRANSACTIONS)
+    .update({ status: TransactionStatus.SUCCESS })
+    .eq("stripe_payment_intent_id", paymentIntent.id)
+    .eq("status", TransactionStatus.PENDING);
+
+  try {
+    Sentry.addBreadcrumb({
+      category: "stripe",
+      message: "payment-success",
+      data: {},
+    });
+  } catch {}
 };
 
 /**
@@ -192,27 +243,23 @@ const handleCheckoutSessionCompleted = async (event: any) => {
 
     if (session.payment_status === "paid") {
       // Update any pending transaction for this payment
-      const updated = await Transaction.updateMany(
-        {
-          userId: new Types.ObjectId(userId),
-          productType: productType || ProductType.COACHING,
-          status: TransactionStatus.PENDING,
-          $or: [
-            { stripePaymentIntentId: paymentIntentId },
-            { stripePaymentIntentId: session.id },
-          ],
-        },
-        { status: TransactionStatus.SUCCESS }
-      );
+      const { data: updated } = await db
+        .from(Tables.TRANSACTIONS)
+        .update({ status: TransactionStatus.SUCCESS })
+        .eq("user_id", userId)
+        .eq("product_type", productType || ProductType.COACHING)
+        .eq("status", TransactionStatus.PENDING)
+        .or(`stripe_payment_intent_id.eq.${paymentIntentId},stripe_payment_intent_id.eq.${session.id}`)
+        .select();
 
       // If no pending transaction was found, create a success record
-      if (updated.modifiedCount === 0) {
-        await Transaction.create({
-          userId: new Types.ObjectId(userId),
+      if (!updated || updated.length === 0) {
+        await db.from(Tables.TRANSACTIONS).insert({
+          user_id: userId,
           amount: session.amount_total || 0,
           type: "debit",
-          productType: productType || ProductType.COACHING,
-          stripePaymentIntentId: paymentIntentId,
+          product_type: productType || ProductType.COACHING,
+          stripe_payment_intent_id: paymentIntentId,
           status: TransactionStatus.SUCCESS,
         });
       }
@@ -237,23 +284,30 @@ const handleCheckoutSessionCompleted = async (event: any) => {
  */
 const handlePaymentFailed = async (event: any) => {
   const paymentIntent = event.data.object;
-  const user = await User.findOne({ stripeClientId: paymentIntent.customer });
+  const user = await findOne(Tables.USERS, {
+    stripe_client_id: paymentIntent.customer,
+  });
   if (!user) {
-    console.error("User not found for customer ID:", typeof paymentIntent.customer === 'string' ? paymentIntent.customer.slice(-6) : 'unknown');
+    console.error(
+      "User not found for customer ID:",
+      typeof paymentIntent.customer === "string"
+        ? paymentIntent.customer.slice(-6)
+        : "unknown"
+    );
     return;
   }
 
-  const updatedTransaction = await Transaction.updateMany(
-    {
-      stripePaymentIntentId: paymentIntent.id,
-      status: TransactionStatus.PENDING,
-    },
-    {
-      status: TransactionStatus.FAILED,
-    },
-    { new: true }
-  );
+  await db
+    .from(Tables.TRANSACTIONS)
+    .update({ status: TransactionStatus.FAILED })
+    .eq("stripe_payment_intent_id", paymentIntent.id)
+    .eq("status", TransactionStatus.PENDING);
 
-  await Transaction.create(updatedTransaction);
-  try { Sentry.addBreadcrumb({ category: 'stripe', message: 'payment-failed', data: { count: updatedTransaction?.modifiedCount } }); } catch {}
+  try {
+    Sentry.addBreadcrumb({
+      category: "stripe",
+      message: "payment-failed",
+      data: {},
+    });
+  } catch {}
 };

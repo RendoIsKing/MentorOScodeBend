@@ -4,32 +4,43 @@ if (process.env.NODE_ENV !== 'production') {
     require('dotenv').config();
   } catch {}
 }
-try { console.log('[BOOT:index] DEV_LOGIN_ENABLED =', process.env.DEV_LOGIN_ENABLED); } catch {}
+
 import { Server } from "./server";
-import { connectDatabase } from "./utils/dbConnection";
+import { supabaseAdmin } from "./lib/supabase";
 
 (async () => {
   try {
-    await connectDatabase();
+    // Verify Supabase connection
+    const { error } = await supabaseAdmin.from('users').select('id').limit(1);
+    if (error) {
+      console.error('[BOOT] Supabase connection test failed:', error.message);
+      // Non-fatal: the table might not exist yet if migrations haven't run
+    } else {
+      console.log('[BOOT] Supabase connection verified');
+    }
   } catch (err) {
-    console.error('Database connection error: ', err);
-    process.exit(1);
+    console.error('[BOOT] Supabase connection error:', err);
   }
+
   // ── Startup migration: ensure Coach.Majen has isMentor=true ──
   try {
-    const { User: MigUser } = await import("./app/Models/User");
-    // Match both "Coach.Majen" and "coach-majen" variants (case-insensitive)
     const mentorUserNames = ["Coach.Majen", "coach-majen"];
     for (const uname of mentorUserNames) {
-      // First, check if the user exists at all
-      const existing = await MigUser.findOne(
-        { userName: { $regex: `^${uname.replace(/\./g, "\\.")}$`, $options: "i" } }
-      ).select("_id userName isMentor").lean();
+      const { data: existing } = await supabaseAdmin
+        .from("users")
+        .select("id, user_name, is_mentor")
+        .ilike("user_name", uname)
+        .limit(1)
+        .maybeSingle();
+
       if (existing) {
-        console.log(`[MIGRATION] Found user "${(existing as any).userName}" (${String(existing._id)}), isMentor=${(existing as any).isMentor}`);
-        if (!(existing as any).isMentor) {
-          await MigUser.updateOne({ _id: existing._id }, { $set: { isMentor: true } });
-          console.log(`[MIGRATION] ✅ Set isMentor=true for "${(existing as any).userName}"`);
+        console.log(`[MIGRATION] Found user "${existing.user_name}" (${existing.id}), is_mentor=${existing.is_mentor}`);
+        if (!existing.is_mentor) {
+          await supabaseAdmin
+            .from("users")
+            .update({ is_mentor: true })
+            .eq("id", existing.id);
+          console.log(`[MIGRATION] ✅ Set is_mentor=true for "${existing.user_name}"`);
         }
       } else {
         console.log(`[MIGRATION] No user found matching "${uname}"`);
@@ -44,10 +55,8 @@ import { connectDatabase } from "./utils/dbConnection";
 
   const shutdown = async (signal: string) => {
     try { console.log(`[SHUTDOWN] Received ${signal}`); } catch {}
-    try { await import('mongoose').then(m=>m.connection.close()); } catch {}
     try { process.exit(0); } catch {}
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 })();
-console.log("Force redeploy: AI auto-reply diagnostic logging v2");

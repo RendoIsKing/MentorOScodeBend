@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
-import { MoreAction } from "../../../Models/MoreAction";
+import { db, Tables } from "../../../../lib/db";
 import { userActionType } from "../../../../types/enums/userActionTypeEnum";
-import mongoose from "mongoose";
 
 export const updateUserReport = async (
   req: Request,
@@ -17,24 +16,15 @@ export const updateUserReport = async (
         .json({ error: { message: "Report status is required." } });
     }
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: { message: "Invalid ID format." } });
-    }
+    const { data: updatedDocument, error } = await db
+      .from(Tables.MORE_ACTIONS)
+      .update({ report_status: reportStatus })
+      .eq("id", id)
+      .eq("action_type", userActionType.REPORT)
+      .select()
+      .single();
 
-    const updatedDocument = await MoreAction.findOneAndUpdate(
-      {
-        _id: id,
-        actionType: userActionType.REPORT,
-      },
-      {
-        reportStatus: reportStatus,
-      },
-      {
-        new: true,
-      }
-    );
-
-    if (!updatedDocument) {
+    if (error || !updatedDocument) {
       return res
         .status(404)
         .json({ error: { message: "Document not found." } });

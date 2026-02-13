@@ -1,7 +1,7 @@
-import mongoose, { Document } from "mongoose";
-
-export interface CardDetailsInterface extends Document {
-  userId: mongoose.Types.ObjectId;
+export interface CardDetailsInterface {
+  _id?: string;
+  id?: string;
+  userId: string;
   stripeCardId: string;
   object: string;
   address_city: string | null;

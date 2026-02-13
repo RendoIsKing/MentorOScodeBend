@@ -1,15 +1,12 @@
 import { Request, Response } from "express";
-import { Post } from "../../../Models/Post";
+import { findOne, Tables } from "../../../../lib/db";
 
 export const getFirstPost = async (
   req: Request,
   res: Response
 ): Promise<Response> => {
   try {
-    const post = await Post.findOne({
-      deletedAt: null,
-      isDeleted: false,
-    }).exec();
+    const post = await findOne(Tables.POSTS, { is_deleted: false });
 
     if (!post) {
       return res.status(404).json({ error: "No posts found" });

@@ -2,11 +2,8 @@ import { Response, Request } from "express";
 import { plainToClass } from "class-transformer";
 import { validate } from "class-validator";
 import { ValidationErrorResponse } from "../../../../types/ValidationErrorResponse";
-import { commonPaginationPipeline } from "../../../../utils/pipeline/commonPagination";
-import { Transaction } from "../../../Models/Transaction";
 import { GetAllItemsInputs } from "../../Posts/Inputs/getPost.input";
-
-export const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+import { db, Tables } from "../../../../lib/db";
 
 export const getAllTransactions = async (req: Request, res: Response) => {
   try {
@@ -24,59 +21,38 @@ export const getAllTransactions = async (req: Request, res: Response) => {
     }
 
     const { perPage, page } = transQuery;
+    const pageNum = (page as number) > 0 ? (page as number) : 1;
+    const limit = perPage as number;
+    const offset = (pageNum - 1) * limit;
 
-    let skip =
-      ((page as number) > 0 ? (page as number) - 1 : 0) * (perPage as number);
+    // Get total count
+    const { count: total } = await db
+      .from(Tables.TRANSACTIONS)
+      .select("id", { count: "exact", head: true });
 
-    const transactions = await Transaction.aggregate([
-      {
-        $sort: { createdAt: -1 },
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "userId",
-          foreignField: "_id",
-          as: "userInfo",
-        },
-      },
-      {
-        $project: {
-          _id: 1,
-          userId: 1,
-          amount: 1,
-          stripePaymentIntentId: 1,
-          stripeProductId: 1,
-          productId: 1,
-          status: 1,
-          type: 1,
-          createdAt: 1,
-          updatedAt: 1,
-          userInfo: {
-            $arrayElemAt: [
-              {
-                $map: {
-                  input: "$userInfo",
-                  as: "user",
-                  in: {
-                    _id: "$$user._id",
-                    userName: "$$user.userName",
-                  },
-                },
-              },
-              0, // Get the first element of the array
-            ],
-          },
-        },
-      },
-      ...commonPaginationPipeline(page as number, perPage as number, skip),
-    ]);
-    let data = {
-      data: transactions[0]?.data ?? [],
-      meta: transactions[0]?.metaData?.[0] ?? {},
-    };
+    // Get transactions with user info
+    const { data: transactions, error } = await db
+      .from(Tables.TRANSACTIONS)
+      .select("*, user:users!user_id(id, user_name)")
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
 
-    return res.json(data);
+    if (error) {
+      console.log("Error while fetching all transactions", error);
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong." } });
+    }
+
+    return res.json({
+      data: transactions || [],
+      meta: {
+        perPage: limit,
+        page: pageNum,
+        pages: Math.ceil((total || 0) / limit),
+        total: total || 0,
+      },
+    });
   } catch (err) {
     console.log("Error while fetching all transactions", err);
     return res

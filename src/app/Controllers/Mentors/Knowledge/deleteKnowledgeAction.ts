@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
-import { Types } from "mongoose";
-import { CoachKnowledge } from "../../../Models/CoachKnowledge";
+import { db, Tables } from "../../../../lib/db";
 
 export const deleteKnowledgeAction = async (req: Request, res: Response) => {
   try {
@@ -10,11 +9,21 @@ export const deleteKnowledgeAction = async (req: Request, res: Response) => {
     }
 
     const { id } = req.params || {};
-    if (!id || !Types.ObjectId.isValid(id)) {
+    if (!id) {
       return res.status(422).json({ message: "invalid id" });
     }
 
-    await CoachKnowledge.deleteOne({ _id: id, userId });
+    const { error } = await db
+      .from(Tables.COACH_KNOWLEDGE)
+      .delete()
+      .eq("id", id)
+      .eq("user_id", userId);
+
+    if (error) {
+      console.error("[deleteKnowledge] Supabase error:", error.message);
+      return res.status(500).json({ message: "failed_to_delete_knowledge" });
+    }
+
     return res.json({ success: true });
   } catch {
     return res.status(500).json({ message: "failed_to_delete_knowledge" });

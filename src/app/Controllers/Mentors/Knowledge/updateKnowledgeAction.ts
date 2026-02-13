@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
-import { CoachKnowledge } from "../../../Models/CoachKnowledge";
-import { User } from "../../../Models/User";
+import { findOne, findById, updateById, findMany, Tables } from "../../../../lib/db";
 import { generateEmbedding } from "../../../../services/ai/embeddingService";
 
 /**
@@ -8,7 +7,7 @@ import { generateEmbedding } from "../../../../services/ai/embeddingService";
  *
  * Update the analysis metadata of an existing knowledge document.
  * Allows editing title, summary, classification, keywords, coreRules, entities.
- * If classification changes to/from system_prompt, updates the mentor's coreInstructions.
+ * If classification changes to/from system_prompt, updates the mentor's core_instructions.
  */
 export const updateKnowledgeAction = async (req: Request, res: Response) => {
   try {
@@ -22,7 +21,8 @@ export const updateKnowledgeAction = async (req: Request, res: Response) => {
       return res.status(422).json({ message: "Document ID is required." });
     }
 
-    const doc = await CoachKnowledge.findOne({ _id: id, userId });
+    // Find the existing document (owned by this user)
+    const doc = await findOne<any>(Tables.COACH_KNOWLEDGE, { id, user_id: userId });
     if (!doc) {
       return res.status(404).json({ message: "Document not found." });
     }
@@ -38,81 +38,82 @@ export const updateKnowledgeAction = async (req: Request, res: Response) => {
 
     const oldClassification = doc.classification;
 
-    // Update fields if provided
-    if (title !== undefined) doc.title = String(title).trim();
-    if (summary !== undefined) doc.summary = String(summary).trim();
+    // Build update payload — only include provided fields
+    const updates: Record<string, any> = {};
+
+    if (title !== undefined) updates.title = String(title).trim();
+    if (summary !== undefined) updates.summary = String(summary).trim();
     if (classification !== undefined) {
-      doc.classification = classification === "system_prompt" ? "system_prompt" : "rag";
+      updates.classification = classification === "system_prompt" ? "system_prompt" : "rag";
     }
-    if (Array.isArray(keywords)) doc.keywords = keywords.map((k: any) => String(k).trim()).filter(Boolean);
-    if (Array.isArray(coreRules)) doc.coreRules = coreRules.map((r: any) => String(r).trim()).filter(Boolean);
-    if (Array.isArray(entities)) doc.entities = entities.map((e: any) => String(e).trim()).filter(Boolean);
+    if (Array.isArray(keywords)) {
+      updates.keywords = keywords.map((k: any) => String(k).trim()).filter(Boolean);
+    }
+    if (Array.isArray(coreRules)) {
+      updates.core_rules = coreRules.map((r: any) => String(r).trim()).filter(Boolean);
+    }
+    if (Array.isArray(entities)) {
+      updates.entities = entities.map((e: any) => String(e).trim()).filter(Boolean);
+    }
 
     // Regenerate embedding if title or keywords changed (affects retrieval)
     if (title !== undefined || (Array.isArray(keywords) && keywords.length > 0)) {
       try {
-        const embeddingContent = [doc.title, ...(doc.keywords || []), doc.summary || ""].filter(Boolean).join(" ");
+        const embeddingContent = [
+          updates.title || doc.title,
+          ...(updates.keywords || doc.keywords || []),
+          updates.summary || doc.summary || "",
+        ]
+          .filter(Boolean)
+          .join(" ");
         const embedding = await generateEmbedding(embeddingContent);
         if (embedding?.length) {
-          (doc as any).embedding = embedding;
+          updates.embedding = JSON.stringify(embedding);
         }
       } catch (e) {
         console.error("[updateKnowledge] Failed to regenerate embedding:", e);
       }
     }
 
-    await doc.save();
+    // Persist updates
+    const updated = await updateById<any>(Tables.COACH_KNOWLEDGE, id, updates);
+    if (!updated) {
+      return res.status(500).json({ message: "failed_to_update_knowledge" });
+    }
 
-    // Handle classification changes for coreInstructions
-    const newClassification = doc.classification;
+    // Handle classification changes for core_instructions
+    const newClassification = updates.classification ?? oldClassification;
 
     if (oldClassification !== newClassification) {
       if (newClassification === "system_prompt") {
-        // Add to coreInstructions
-        const instructionBlock = `\n\n--- ${doc.title} ---\n${(doc.coreRules || []).join("\n")}`;
-        await User.updateOne(
-          { _id: userId },
-          { $set: { coreInstructions: (await User.findById(userId).select("coreInstructions").lean() as any)?.coreInstructions + instructionBlock } }
-        );
+        // Add to core_instructions
+        const rules = updates.core_rules || doc.core_rules || [];
+        const instructionBlock = `\n\n--- ${updated.title} ---\n${rules.join("\n")}`;
+        const user = await findById<any>(Tables.USERS, userId, "core_instructions");
+        const existing = String(user?.core_instructions || "");
+        await updateById(Tables.USERS, userId, {
+          core_instructions: existing + instructionBlock,
+        });
       } else if (oldClassification === "system_prompt") {
-        // Was system_prompt, now rag — rebuild coreInstructions from remaining system_prompt docs
-        const systemDocs = await CoachKnowledge.find({
-          userId,
-          classification: "system_prompt",
-        }).select("title coreRules").lean();
-
-        const rebuilt = systemDocs
-          .map((d: any) => `--- ${d.title} ---\n${(d.coreRules || []).join("\n")}`)
-          .join("\n\n");
-
-        await User.updateOne(
-          { _id: userId },
-          { $set: { coreInstructions: rebuilt } }
-        );
+        // Was system_prompt, now rag — rebuild core_instructions from remaining system_prompt docs
+        await rebuildCoreInstructions(userId);
       }
-    } else if (newClassification === "system_prompt" && (coreRules !== undefined || title !== undefined)) {
+    } else if (
+      newClassification === "system_prompt" &&
+      (coreRules !== undefined || title !== undefined)
+    ) {
       // Classification stayed system_prompt but coreRules or title changed — rebuild
-      const systemDocs = await CoachKnowledge.find({
-        userId,
-        classification: "system_prompt",
-      }).select("title coreRules").lean();
-
-      const rebuilt = systemDocs
-        .map((d: any) => `--- ${d.title} ---\n${(d.coreRules || []).join("\n")}`)
-        .join("\n\n");
-
-      await User.updateOne(
-        { _id: userId },
-        { $set: { coreInstructions: rebuilt } }
-      );
+      await rebuildCoreInstructions(userId);
     }
 
-    const result = doc.toObject();
+    // Remove embedding from response
+    const { embedding: _emb, ...knowledge } = updated;
+
     return res.json({
       success: true,
       knowledge: {
-        ...result,
-        id: result._id,
+        ...knowledge,
+        id: knowledge.id,
       },
     });
   } catch (error: any) {
@@ -124,3 +125,24 @@ export const updateKnowledgeAction = async (req: Request, res: Response) => {
     });
   }
 };
+
+/**
+ * Rebuild the user's core_instructions from all system_prompt classified knowledge docs.
+ */
+async function rebuildCoreInstructions(userId: string) {
+  try {
+    const systemDocs = await findMany<any>(
+      Tables.COACH_KNOWLEDGE,
+      { user_id: userId, classification: "system_prompt" },
+      { select: "title, core_rules" }
+    );
+
+    const rebuilt = systemDocs
+      .map((d: any) => `--- ${d.title} ---\n${(d.core_rules || []).join("\n")}`)
+      .join("\n\n");
+
+    await updateById(Tables.USERS, userId, { core_instructions: rebuilt });
+  } catch (err) {
+    console.error("[updateKnowledge] Failed to rebuild core_instructions:", err);
+  }
+}

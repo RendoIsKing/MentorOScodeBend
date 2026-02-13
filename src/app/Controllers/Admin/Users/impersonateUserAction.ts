@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { User } from "../../../Models/User";
+import { findById, Tables } from "../../../../lib/db";
 import { generateAccessToken } from "../../../../utils/jwt";
 import { UserInterface } from "../../../../types/UserInterface";
 
@@ -9,9 +9,9 @@ export const impersonateUser = async (
 ): Promise<Response> => {
   try {
     const userId = req.params.id;
-    const user = await User.findById(userId);
+    const user = await findById(Tables.USERS, userId);
 
-    if (!user || user.isDeleted) {
+    if (!user || user.is_deleted) {
       return res.status(404).json({ error: { message: "User not found." } });
     }
 
@@ -21,9 +21,9 @@ export const impersonateUser = async (
       data: {
         token,
         user: {
-          _id: user._id,
-          fullName: user.fullName,
-          userName: user.userName,
+          _id: user.id,
+          fullName: user.full_name,
+          userName: user.user_name,
           email: user.email,
           role: user.role,
         },

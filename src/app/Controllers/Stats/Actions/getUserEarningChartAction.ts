@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { Transaction } from "../../../Models/Transaction";
-import { Types } from "mongoose";
+import { db, Tables } from "../../../../lib/db";
 import { ProductType } from "../../../../types/enums/productEnum";
 import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
 import getDatesInRange from "../../../../utils/getDatesBetRange";
@@ -14,112 +13,51 @@ export const getUserEarningChart = async (
     const user = req.user as UserInterface;
     const { startDate, endDate } = req.body;
 
-    const transaction = await Transaction.aggregate([
-      {
-        $match: {
-          userId: new Types.ObjectId(user.id),
-          createdAt: { $gte: new Date(startDate), $lt: new Date(endDate) },
-          type: TransactionType.CREDIT,
-        },
-      },
-      {
-        $addFields: {
-          customDate: {
-            $dateToString: {
-              format: "%Y-%m-%d",
-              date: "$createdAt",
-            },
-          },
-        },
-      },
-      {
-        $facet: {
-          subscription: [
-            {
-              $match: {
-                productType: ProductType.SUBSCRIPTION,
-              },
-            },
-            {
-              $group: {
-                _id: "$customDate",
-                count: {
-                  $sum: "$amount",
-                },
-              },
-            },
-          ],
-          tips: [
-            {
-              $match: {
-                productType: ProductType.TIPS,
-              },
-            },
-            {
-              $group: {
-                _id: "$customDate",
-                count: {
-                  $sum: "$amount",
-                },
-              },
-            },
-          ],
-          posts: [
-            {
-              $match: {
-                productType: ProductType.POSTS,
-              },
-            },
-            {
-              $group: {
-                _id: "$customDate",
-                count: {
-                  $sum: "$amount",
-                },
-              },
-            },
-          ],
-        },
-      },
-    ]);
+    const { data: transactions } = await db
+      .from(Tables.TRANSACTIONS)
+      .select("amount, product_type, created_at")
+      .eq("user_id", user.id)
+      .eq("type", TransactionType.CREDIT)
+      .gte("created_at", new Date(startDate).toISOString())
+      .lt("created_at", new Date(endDate).toISOString());
+
+    const rows = transactions || [];
 
     const dateRange = getDatesInRange(startDate, endDate);
-    let dateSet: Set<any> = new Set(dateRange);
+    const dateSet = new Set<string>(dateRange);
 
-    Object.entries(transaction[0]).forEach((item) => {
-      const date = (item as any)[1].map((sub: any) => sub._id);
-      date.map((date: any) => dateSet.add(date));
+    // Group by product_type and date
+    const grouped: Record<string, Record<string, number>> = {
+      subscription: {},
+      tips: {},
+      posts: {},
+    };
+
+    rows.forEach((t: any) => {
+      const d = new Date(t.created_at).toISOString().slice(0, 10);
+      dateSet.add(d);
+      const key =
+        t.product_type === ProductType.SUBSCRIPTION
+          ? "subscription"
+          : t.product_type === ProductType.TIPS
+          ? "tips"
+          : "posts";
+      grouped[key][d] = (grouped[key][d] || 0) + (t.amount || 0);
     });
 
-    let dateSetArray = [...dateSet];
+    const dateSetArray = [...dateSet].sort();
 
-    const statsData = Object.entries(transaction[0]).map((item) => {
-      return {
-        label: item[0],
-        data: dateSetArray.map((date: any) => {
-          const exist = (item as any)[1].find((subs: any) => subs._id == date);
-          if (exist) {
-            return exist.count / 100;
-          } else {
-            return 0;
-          }
-        }),
-        paymentMethod: "Card",
-      };
-    });
-
-    // const { id } = req.params;
-
-    // let formattedDates = dateSetArray.map((date) => dateFormatter(date));
+    const statsData = Object.entries(grouped).map(([label, dateMap]) => ({
+      label,
+      data: dateSetArray.map((date) => (dateMap[date] || 0) / 100),
+      paymentMethod: "Card",
+    }));
 
     return res.status(200).json({
       data: {
         labels: dateSetArray,
         datasets: statsData,
       },
-      //   dateSetArray,
-      //   dateSet,
-      //   transaction,
     });
   } catch (error) {
     console.error("Error while fetching user earnings", error);

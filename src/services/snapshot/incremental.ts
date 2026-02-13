@@ -1,39 +1,59 @@
-import StudentSnapshot from "../../models/StudentSnapshot";
-import StudentState from "../../models/StudentState";
-import TrainingPlanVersion from "../../models/TrainingPlanVersion";
-import WorkoutLog from "../../models/WorkoutLog";
-import { Types } from "mongoose";
+import { findOne, upsert, updateById, db, Tables } from "../../lib/db";
 
-// kept for future KPI delta; not used in tests
-// function movingAvg(series: { t: string; v: number }[], window = 7) {
-//   if (!series.length) return { latestAvg: null as number|null, prevAvg: null as number|null, delta: null as number|null };
-//   const parse = (d: string) => new Date(d + "T00:00:00Z").getTime();
-//   const sorted = [...series].sort((a, b) => parse(a.t) - parse(b.t));
-//   const recent = sorted.slice(-window);
-//   const prev = sorted.slice(-window*2, -window);
-//   const sum = (arr: any[]) => arr.reduce((s, x) => s + x.v, 0);
-//   const latestAvg = recent.length ? sum(recent) / recent.length : null;
-//   const prevAvg = prev.length ? sum(prev) / prev.length : null;
-//   const delta = latestAvg != null && prevAvg != null ? latestAvg - prevAvg : null;
-//   return { latestAvg, prevAvg, delta };
-// }
+export async function onWeightLogged(userId: string, date: string, kg: number) {
+  let snap = await findOne(Tables.STUDENT_SNAPSHOTS, { user_id: userId });
+  if (!snap) {
+    snap = await upsert(
+      Tables.STUDENT_SNAPSHOTS,
+      { user_id: userId, weight_series: [], kpis: {} },
+      "user_id"
+    );
+  }
 
-export async function onWeightLogged(user: Types.ObjectId, date: string, kg: number) {
-  const snap = (await StudentSnapshot.findOne({ user })) || new (StudentSnapshot as any)({ user, weightSeries: [] });
-  const map = new Map((snap.weightSeries || []).map((p: any) => [p.t, p.v]));
+  const map = new Map((snap.weight_series || []).map((p: any) => [p.t, p.v]));
   map.set(date, kg);
-  snap.weightSeries = Array.from(map.entries()).sort((ea, eb) => String(ea[0]).localeCompare(String(eb[0]))).map(([t, v]) => ({ t, v }));
-  snap.kpis = { ...(snap.kpis || {}), lastCheckIn: date, adherence7d: snap.kpis?.adherence7d, nextWorkout: snap.kpis?.nextWorkout } as any;
-  await snap.save();
+  const weightSeries = Array.from(map.entries())
+    .sort((ea, eb) => String(ea[0]).localeCompare(String(eb[0])))
+    .map(([t, v]) => ({ t, v }));
+
+  const kpis = {
+    ...(snap.kpis || {}),
+    lastCheckIn: date,
+    adherence7d: snap.kpis?.adherence7d,
+    nextWorkout: snap.kpis?.nextWorkout,
+  };
+
+  await updateById(Tables.STUDENT_SNAPSHOTS, snap.id, {
+    weight_series: weightSeries,
+    kpis,
+  });
 }
 
-export async function onPlanUpdated(user: Types.ObjectId) {
-  const snap = (await StudentSnapshot.findOne({ user })) || new (StudentSnapshot as any)({ user, weightSeries: [] });
-  const state = await StudentState.findOne({ user });
-  const tp = state?.currentTrainingPlanVersion ? await TrainingPlanVersion.findById(state.currentTrainingPlanVersion) : null;
-  const daysPerWeek = tp ? (tp.days || []).filter((d: any) => (d.exercises?.length ?? 0) > 0).length : 0;
+export async function onPlanUpdated(userId: string) {
+  let snap = await findOne(Tables.STUDENT_SNAPSHOTS, { user_id: userId });
+  if (!snap) {
+    snap = await upsert(
+      Tables.STUDENT_SNAPSHOTS,
+      { user_id: userId, weight_series: [], kpis: {} },
+      "user_id"
+    );
+  }
+
+  const state = await findOne(Tables.STUDENT_STATES, { user_id: userId });
+  const tp = state?.current_training_plan_version_id
+    ? await db
+        .from(Tables.TRAINING_PLAN_VERSIONS)
+        .select("*")
+        .eq("id", state.current_training_plan_version_id)
+        .single()
+        .then((r: any) => r.data)
+    : null;
+
+  const daysPerWeek = tp
+    ? (tp.days || []).filter((d: any) => (d.exercises?.length ?? 0) > 0).length
+    : 0;
   const todayIdx = new Date().getUTCDay();
-  const order = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const order = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const hasWork = (d: any) => (d.exercises?.length ?? 0) > 0;
   let nextWorkout: string | undefined;
   if (tp) {
@@ -41,31 +61,73 @@ export async function onPlanUpdated(user: Types.ObjectId) {
       const idx = (todayIdx + i) % 7;
       const dayName = order[idx];
       const day = (tp.days || []).find((d: any) => d.day === dayName);
-      if (day && hasWork(day)) { nextWorkout = dayName; break; }
+      if (day && hasWork(day)) {
+        nextWorkout = dayName;
+        break;
+      }
     }
   }
-  snap.trainingPlanSummary = { daysPerWeek } as any;
-  snap.kpis = { ...(snap.kpis || {}), nextWorkout } as any;
-  await snap.save();
+
+  await updateById(Tables.STUDENT_SNAPSHOTS, snap.id, {
+    training_plan_summary: { daysPerWeek },
+    kpis: { ...(snap.kpis || {}), nextWorkout },
+  });
 }
 
-export async function onWorkoutLogged(user: Types.ObjectId, date: string) {
-  const snap = (await StudentSnapshot.findOne({ user })) || new (StudentSnapshot as any)({ user, weightSeries: [] });
-  const since = new Date(Date.now() - 7*24*3600*1000);
-  const seven = await WorkoutLog.find({ user, date: { $gte: since.toISOString().slice(0,10) } });
-  const unique = new Set(seven.map((w: any) => w.date)).size;
-  const state = await StudentState.findOne({ user });
-  const tp = state?.currentTrainingPlanVersion ? await TrainingPlanVersion.findById(state.currentTrainingPlanVersion) : null;
-  const daysPerWeek = tp ? (tp.days || []).filter((d: any) => (d.exercises?.length ?? 0) > 0).length : 0;
+export async function onWorkoutLogged(userId: string, date: string) {
+  let snap = await findOne(Tables.STUDENT_SNAPSHOTS, { user_id: userId });
+  if (!snap) {
+    snap = await upsert(
+      Tables.STUDENT_SNAPSHOTS,
+      { user_id: userId, weight_series: [], kpis: {} },
+      "user_id"
+    );
+  }
+
+  const since = new Date(Date.now() - 7 * 24 * 3600 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  const { data: seven } = await db
+    .from(Tables.WORKOUT_LOGS)
+    .select("date")
+    .eq("user_id", userId)
+    .gte("date", since);
+
+  const unique = new Set((seven || []).map((w: any) => w.date)).size;
+
+  const state = await findOne(Tables.STUDENT_STATES, { user_id: userId });
+  const tp = state?.current_training_plan_version_id
+    ? await db
+        .from(Tables.TRAINING_PLAN_VERSIONS)
+        .select("*")
+        .eq("id", state.current_training_plan_version_id)
+        .single()
+        .then((r: any) => r.data)
+    : null;
+
+  const daysPerWeek = tp
+    ? (tp.days || []).filter((d: any) => (d.exercises?.length ?? 0) > 0).length
+    : 0;
   const adherence7d = daysPerWeek ? Math.min(1, unique / daysPerWeek) : 0;
-  snap.kpis = { ...(snap.kpis || {}), adherence7d, lastCheckIn: date, nextWorkout: (snap.kpis as any)?.nextWorkout } as any;
-  await snap.save();
+
+  await updateById(Tables.STUDENT_SNAPSHOTS, snap.id, {
+    kpis: {
+      ...(snap.kpis || {}),
+      adherence7d,
+      lastCheckIn: date,
+      nextWorkout: snap.kpis?.nextWorkout,
+    },
+  });
 }
 
-export async function onWeightDeleted(user: Types.ObjectId, date: string) {
-  const snap = (await StudentSnapshot.findOne({ user })) || new (StudentSnapshot as any)({ user, weightSeries: [] });
-  snap.weightSeries = (snap.weightSeries || []).filter((p: any) => p.t !== date);
-  await snap.save();
+export async function onWeightDeleted(userId: string, date: string) {
+  let snap = await findOne(Tables.STUDENT_SNAPSHOTS, { user_id: userId });
+  if (!snap) return;
+
+  const weightSeries = (snap.weight_series || []).filter(
+    (p: any) => p.t !== date
+  );
+  await updateById(Tables.STUDENT_SNAPSHOTS, snap.id, {
+    weight_series: weightSeries,
+  });
 }
-
-

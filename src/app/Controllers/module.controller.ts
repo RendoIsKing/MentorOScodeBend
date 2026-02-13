@@ -1,9 +1,16 @@
 import {Request, Response} from 'express';
 import {validate} from 'class-validator';
 import {ValidationErrorResponse} from '../../types/ValidationErrorResponse';
-import {RolesEnum} from '../../types/RolesEnum';
-import {Module} from "../Models/Module";
 import {UpdateModuleInput} from "../Inputs/UpdateModule.input";
+import {
+  findById,
+  findOne,
+  insertOne,
+  updateById,
+  deleteById,
+  Tables,
+  db,
+} from '../../lib/db';
 
 const LIMIT = 10;
 
@@ -27,15 +34,14 @@ export class ModuleController {
             return res.status(400).json({error: {message: 'VALIDATIONS_ERROR', info: errorsInfo}});
         }
         try {
-            const checkModule = await Module.findOne({title: input.title});
+            const checkModule = await findOne(Tables.MODULES, {title: input.title});
 
             // @ts-ignore
             if (checkModule) {
                 return res.status(400).json({error: {message: 'module already preset with same name.'}});
             }
-            const moduleData = await Module.create({
+            const moduleData = await insertOne(Tables.MODULES, {
                 title: input.title,
-
             });
             return res.json({data: moduleData, message: "module created sucessfully"})
         } catch (err) {
@@ -46,37 +52,39 @@ export class ModuleController {
     static index = async (_req: any, res: Response): Promise<Response> => {
         try {
             const perPage = (_req.query && _req.query.perPage > 0 ? parseInt(_req.query.perPage) : LIMIT);
-            let skip = (_req.query && _req.query.page > 0 ? parseInt(_req.query.page) - 1 : 0) * perPage;
+            const page = (_req.query && _req.query.page > 0 ? parseInt(_req.query.page) : 1);
+            const offset = (page - 1) * perPage;
 
-            let dataToFind: any = {role: {$ne: RolesEnum.ADMIN}};
+            let countQuery = db
+                .from(Tables.MODULES)
+                .select("id", { count: "exact", head: true });
+            let dataQuery = db
+                .from(Tables.MODULES)
+                .select("*")
+                .order("created_at", { ascending: false })
+                .range(offset, offset + perPage - 1);
 
-            if (_req.query.title) {
-                dataToFind.title = _req.query.title;
-                dataToFind = {...dataToFind, title: {$regex: new RegExp(".*" + _req.query.title + ".*", "i")}}
-                skip = 0;
+            if (_req.query?.title) {
+                const search = `%${_req.query.title}%`;
+                countQuery = countQuery.ilike("title", search);
+                dataQuery = dataQuery.ilike("title", search);
             }
 
-            const [query]: any = await Module.aggregate([{
-                $facet: {
-                    results: [
-                        {$match: dataToFind},
-                        {$skip: skip},
-                        {$limit: perPage},
-                        {$sort:{createdAt:-1}}
-                    ],
-                    moduleCount: [
-                        {$match: dataToFind},
-                        {$count: 'count'}
-                    ]
-                }
-            }]);
+            const [{ count: moduleCount }, { data: results, error }] = await Promise.all([
+                countQuery,
+                dataQuery,
+            ]);
 
-            const moduleCount = query.moduleCount[0]?.count || 0;
-            const totalPages = Math.ceil(moduleCount / perPage);
+            if (error) {
+                return res.status(500).json({error: {message: 'Something went wrong.'}});
+            }
+
+            const total = moduleCount || 0;
+            const totalPages = Math.ceil(total / perPage);
 
             return res.json({
-                data: query.results,
-                meta: {"perPage": perPage, "page": _req.query.page || 1, "pages": totalPages, "total": moduleCount,}
+                data: results || [],
+                meta: {"perPage": perPage, "page": page, "pages": totalPages, "total": total,}
             });
         } catch (err) {
             console.log(err)
@@ -88,7 +96,7 @@ export class ModuleController {
         const {id} = req.params;
 
         try {
-            const module = await Module.findById(id);
+            const module = await findById(Tables.MODULES, id);
 
             if (module) {
                 return res.json({data: module});
@@ -105,15 +113,7 @@ export class ModuleController {
         const {id} = req.params;
         const input: UpdateModuleInput = req.body;
         try {
-            const moduleData = await Module.findByIdAndUpdate(
-                id,
-                {
-                    ...input
-                },
-                {
-                    new: true,
-                }
-            );
+            const moduleData = await updateById(Tables.MODULES, id, {...input});
 
             if (!moduleData) {
                 return res.status(400).json({error: {message: 'module to update does not exists.'}});
@@ -129,9 +129,9 @@ export class ModuleController {
         const {id} = req.params;
 
         try {
-            const moduleData = await Module.findByIdAndDelete(id);
+            const deleted = await deleteById(Tables.MODULES, id);
 
-            if (!moduleData) {
+            if (!deleted) {
                 return res.status(400).json({error: {message: 'Module to delete does not exists.'}});
             }
 

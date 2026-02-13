@@ -1,5 +1,4 @@
 import { IsNotEmpty, IsOptional, IsString, IsBoolean } from 'class-validator';
-import { Types } from 'mongoose';
 
 export class InterestInput {
 
@@ -12,7 +11,7 @@ export class InterestInput {
   slug?: string;
 
   @IsNotEmpty({ message: 'Added by (userId) is required.' })
-  addedBy: Types.ObjectId;
+  addedBy: string;
 
   @IsOptional()
   @IsBoolean({ message: 'isAvailable should be a boolean.' })

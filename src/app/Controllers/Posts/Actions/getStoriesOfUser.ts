@@ -3,15 +3,12 @@ import { plainToClass } from "class-transformer";
 import { GetAllItemsInputs } from "../Inputs/getPost.input";
 import { validate } from "class-validator";
 import { ValidationErrorResponse } from "../../../../types/ValidationErrorResponse";
-import { Post } from "../../../Models/Post";
-import { commonPaginationPipeline } from "../../../../utils/pipeline/commonPagination";
-import { User } from "../../../Models/User";
 import { PostType } from "../../../../types/enums/postTypeEnum";
-import { Types } from "mongoose";
-import { twentyFourHoursAgo } from "./getAllStoriesAction";
 import { Privacy } from "../../../../types/enums/privacyEnums";
 import { InteractionType } from "../../../../types/enums/InteractionTypeEnum";
 import { UserInterface } from "../../../../types/UserInterface";
+import { db, findOne, Tables } from "../../../../lib/db";
+import { twentyFourHoursAgo } from "./getAllStoriesAction";
 
 export const getStoriesOfUserByUserName = async (
   req: Request,
@@ -25,13 +22,16 @@ export const getStoriesOfUserByUserName = async (
         .json({ error: "userName query parameter is required." });
     }
 
-    const user = await User.findOne({ userName });
+    const profileUser = await findOne(Tables.USERS, {
+      user_name: String(userName),
+    });
 
-    if (!user) {
+    if (!profileUser) {
       return res.status(404).json({ error: "User not found." });
     }
 
     const loggedInUser = req.user as UserInterface;
+    const loggedInUserId = loggedInUser._id || loggedInUser.id;
 
     const postQuery = plainToClass(GetAllItemsInputs, req.query);
     const errors = await validate(postQuery);
@@ -47,105 +47,85 @@ export const getStoriesOfUserByUserName = async (
     }
 
     const { perPage, page } = postQuery;
-
-    let skip =
+    const skip =
       ((page as number) > 0 ? (page as number) - 1 : 0) * (perPage as number);
 
-    const posts = await Post.aggregate([
-      {
-        $match: {
-          user: new Types.ObjectId(user.id),
-          type: PostType.STORY,
-          createdAt: { $gte: twentyFourHoursAgo },
-          privacy: Privacy.PUBLIC,
-          deletedAt: null,
-          isDeleted: false,
-        },
-      },
-      // {
-      //   $unwind: "$media",
-      // },
-      {
-        $lookup: {
-          from: "files",
-          localField: "media.mediaId",
-          foreignField: "_id",
-          as: "mediaFiles",
-        },
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "user",
-          foreignField: "_id",
-          as: "userInfo",
-        },
-      },
-      {
-        $unwind: "$userInfo",
-      },
-      {
-        $lookup: {
-          from: "files",
-          localField: "userInfo.photoId",
-          foreignField: "_id",
-          as: "userInfo.photo",
-        },
-      },
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    {
-                      $eq: [
-                        "$interactedBy",
-                        new Types.ObjectId(loggedInUser._id),
-                      ],
-                    },
-                    { $eq: ["$type", InteractionType.LIKE_STORY] },
-                  ],
-                },
-              },
-            },
-          ],
-          as: "likes",
-        },
-      },
-      {
-        $addFields: {
-          isLiked: { $gt: [{ $size: "$likes" }, 0] },
-        },
-      },
-      {
-        $project: {
-          _id: 1,
-          user: 1,
-          media: 1,
-          content: 1,
-          isActive: 1,
-          isDeleted: 1,
-          type: 1,
-          createdAt: 1,
-          updatedAt: 1,
-          mediaFiles: 1,
-          userInfo: 1,
-          isLiked: 1,
-        },
-      },
-      ...commonPaginationPipeline(page as number, perPage as number, skip),
+    // Fetch stories
+    const { data: stories, count: total } = await db
+      .from(Tables.POSTS)
+      .select("*", { count: "exact" })
+      .eq("user_id", profileUser.id)
+      .eq("type", PostType.STORY)
+      .eq("privacy", Privacy.PUBLIC)
+      .eq("is_deleted", false)
+      .gte("created_at", twentyFourHoursAgo.toISOString())
+      .order("created_at", { ascending: false })
+      .range(skip, skip + (perPage as number) - 1);
+
+    if (!stories || !stories.length) {
+      return res.json({
+        data: [],
+        meta: { total: 0, page, perPage, pageCount: 0 },
+      });
+    }
+
+    const storyIds = stories.map((s: any) => s.id);
+
+    // Fetch media and like status in parallel
+    const [mediaResult, userLikesResult, userPhotoResult] = await Promise.all([
+      db.from(Tables.POST_MEDIA).select("*").in("post_id", storyIds),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("post_id")
+        .in("post_id", storyIds)
+        .eq("type", InteractionType.LIKE_STORY)
+        .eq("interacted_by", loggedInUserId),
+      profileUser.photo_id
+        ? db
+            .from(Tables.FILES)
+            .select("*")
+            .eq("id", profileUser.photo_id)
+        : Promise.resolve({ data: [] as any[] }),
     ]);
-    let data = {
-      data: posts[0]?.data ?? [],
-      meta: posts[0]?.metaData?.[0] ?? {},
+
+    const userLikeSet = new Set(
+      (userLikesResult.data || []).map((r: any) => r.post_id)
+    );
+
+    // Build userInfo object (unwound, matching the original $unwind)
+    const userInfo = {
+      ...profileUser,
+      photo: userPhotoResult.data || [],
     };
 
-    return res.json(data);
+    const enrichedStories = stories.map((story: any) => ({
+      _id: story.id,
+      user: story.user_id,
+      media: (mediaResult.data || [])
+        .filter((m: any) => m.post_id === story.id)
+        .map((m: any) => ({ mediaId: m.media_id, mediaType: m.media_type })),
+      content: story.content,
+      isActive: story.is_active,
+      isDeleted: story.is_deleted,
+      type: story.type,
+      createdAt: story.created_at,
+      updatedAt: story.updated_at,
+      mediaFiles: (mediaResult.data || []).filter(
+        (m: any) => m.post_id === story.id
+      ),
+      userInfo,
+      isLiked: userLikeSet.has(story.id),
+    }));
+
+    return res.json({
+      data: enrichedStories,
+      meta: {
+        total: total || 0,
+        page,
+        perPage,
+        pageCount: Math.ceil((total || 0) / (perPage as number)),
+      },
+    });
   } catch (err) {
     console.log("Error while getting stories of user", err);
     return res

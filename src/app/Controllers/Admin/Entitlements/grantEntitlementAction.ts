@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { User } from "../../../Models/User";
+import { findOne, updateById, Tables } from "../../../../lib/db";
 
 export const grantEntitlement = async (
   req: Request,
@@ -8,31 +8,48 @@ export const grantEntitlement = async (
   try {
     const { email, role } = req.body;
     if (!email || !role) {
-      return res.status(400).json({ error: { message: "email and role are required." } });
+      return res
+        .status(400)
+        .json({ error: { message: "email and role are required." } });
     }
 
-    const user = await User.findOne({ email: String(email).toLowerCase(), isDeleted: false });
+    const user = await findOne(Tables.USERS, {
+      email: String(email).toLowerCase(),
+      is_deleted: false,
+    });
     if (!user) {
-      return res.status(404).json({ error: { message: "User not found." } });
+      return res
+        .status(404)
+        .json({ error: { message: "User not found." } });
     }
 
     const roleValue = String(role).toLowerCase();
+    let updates: Record<string, any> = {};
+
     if (roleValue === "mentor") {
-      user.isMentor = true;
-      user.hasDocumentVerified = true;
-      user.isVerified = true;
-      user.verifiedAt = new Date();
+      updates = {
+        is_mentor: true,
+        has_document_verified: true,
+        is_verified: true,
+        verified_at: new Date().toISOString(),
+      };
     } else if (roleValue === "verified") {
-      user.isVerified = true;
-      user.verifiedAt = new Date();
+      updates = {
+        is_verified: true,
+        verified_at: new Date().toISOString(),
+      };
     } else {
-      return res.status(400).json({ error: { message: "Invalid role." } });
+      return res
+        .status(400)
+        .json({ error: { message: "Invalid role." } });
     }
 
-    await user.save();
+    const updated = await updateById(Tables.USERS, user.id, updates);
 
-    return res.json({ data: user, message: "Entitlement granted." });
+    return res.json({ data: updated, message: "Entitlement granted." });
   } catch (error) {
-    return res.status(500).json({ error: { message: "Something went wrong." } });
+    return res
+      .status(500)
+      .json({ error: { message: "Something went wrong." } });
   }
 };

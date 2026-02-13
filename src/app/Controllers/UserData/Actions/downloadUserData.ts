@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { UserData } from "../../../Models/UserData";
+import { findMany, Tables } from "../../../../lib/db";
 import { UserInterface } from "../../../../types/UserInterface";
 import archiver from "archiver";
 import fs from "fs";
@@ -15,8 +15,8 @@ export const downloadUserData = async (
 ): Promise<any> => {
   try {
     const user = req.user as UserInterface;
-    const userId = user.id;
-    const userData: any = await UserData.find({ userId }).lean();
+    const userId = (user as any).id || user.id;
+    const userData: any = await findMany(Tables.USER_DATA, { user_id: userId });
 
     if (!userData) {
       return res

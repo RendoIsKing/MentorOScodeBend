@@ -1,17 +1,18 @@
-import { Document, Types } from "mongoose";
 import { InteractionType } from "../enums/InteractionTypeEnum";
 import { IPostSchema } from "./postsInterface";
 import { UserInterface } from "../UserInterface";
 import { ICollection } from "./CollectionInterface";
 import { HaveMeInterface } from "./HaveMeInterface";
 
-export interface IInteractionSchema extends Document, HaveMeInterface {
+export interface IInteractionSchema extends HaveMeInterface {
+  _id?: string;
+  id?: string;
   type: InteractionType;
-  post: Types.ObjectId | IPostSchema | any;
-  user: Types.ObjectId | UserInterface; // user which is owning this post
-  interactedBy: Types.ObjectId | UserInterface;
+  post: string | IPostSchema | any;
+  user: string | UserInterface; // user which is owning this post
+  interactedBy: string | UserInterface;
   comment?: string;
-  collectionId?: Types.ObjectId[] | ICollection[];
-  replies?: Types.ObjectId[] | IInteractionSchema[];
-  likes?: Types.ObjectId[] | IInteractionSchema[];
+  collectionId?: string[] | ICollection[];
+  replies?: string[] | IInteractionSchema[];
+  likes?: string[] | IInteractionSchema[];
 }

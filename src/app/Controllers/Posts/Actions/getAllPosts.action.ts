@@ -3,17 +3,11 @@ import { plainToClass } from "class-transformer";
 import { GetAllItemsInputs } from "../Inputs/getPost.input";
 import { validate } from "class-validator";
 import { ValidationErrorResponse } from "../../../../types/ValidationErrorResponse";
-import { Post } from "../../../Models/Post";
-import { commonPaginationPipeline } from "../../../../utils/pipeline/commonPagination";
 import { UserInterface } from "../../../../types/UserInterface";
 import { PostType } from "../../../../types/enums/postTypeEnum";
 import { InteractionType } from "../../../../types/enums/InteractionTypeEnum";
 import { PostFilterEnum } from "../../../../types/enums/postsFilterEnum";
-import { userConnection } from "../../../Models/Connection";
-import { Types } from "mongoose";
-import { Subscription } from "../../../Models/Subscription";
-import { SubscriptionPlan } from "../../../Models/SubscriptionPlan";
-import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
+import { db, findMany, Tables } from "../../../../lib/db";
 
 export const getAllPostsActions = async (req: Request, res: Response) => {
   try {
@@ -32,276 +26,206 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
     }
 
     const { perPage, page, filter, search } = postQuery;
-    // Optional toggle to include the requesting user's own posts in the feed
     const includeSelfParam = (
       (req.query.includeSelf as string) || ""
-    ).toString().toLowerCase();
-    const includeSelfRequested = ["true", "1", "yes"].includes(includeSelfParam);
-    // Default behavior: for FOR_YOU feed, always include self posts
-    const includeSelf = filter === PostFilterEnum.FOR_YOU ? true : includeSelfRequested;
+    )
+      .toString()
+      .toLowerCase();
+    const includeSelfRequested = ["true", "1", "yes"].includes(
+      includeSelfParam
+    );
+    const includeSelf =
+      filter === PostFilterEnum.FOR_YOU ? true : includeSelfRequested;
 
-    let skip =
+    const skip =
       ((page as number) > 0 ? (page as number) - 1 : 0) * (perPage as number);
 
-    let matchStage: any = {
-      _id: { $exists: true },
-      type: PostType.POST,
-      user: includeSelf
-        ? { $exists: true }
-        : {
-            $exists: true,
-            $ne: new Types.ObjectId(user._id),
-          },
-      deletedAt: null,
-      isDeleted: false,
-    };
+    const userId = user._id || user.id;
+
+    // Build query
+    let query = db
+      .from(Tables.POSTS)
+      .select(
+        `*, userInfo:users!user_id(id, full_name, user_name, photo_id)`,
+        { count: "exact" }
+      )
+      .eq("is_deleted", false)
+      .eq("type", PostType.POST);
+
+    if (!includeSelf) {
+      query = query.neq("user_id", userId);
+    }
 
     if (filter === PostFilterEnum.ALL) {
-      // Public feed: only PUBLIC posts from anyone (optionally exclude own)
-      matchStage.privacy = 'public';
+      query = query.eq("privacy", "public");
     }
 
     if (filter === PostFilterEnum.FOLLOWING) {
-      const userConnections = await userConnection.find(
-        { owner: user.id },
-        { followingTo: 1 }
+      const connections = await findMany(
+        Tables.USER_CONNECTIONS,
+        { owner: userId },
+        { select: "following_to" }
       );
-
-      const followedUserIds = userConnections.map((conn) => conn.followingTo);
-
-      matchStage.user = { $in: followedUserIds };
-      // Followers feed: allow PUBLIC and FOLLOWERS visibility
-      matchStage.privacy = { $in: ['public','followers'] } as any;
+      const followedIds = connections.map((c: any) => c.following_to);
+      if (followedIds.length === 0) {
+        return res.json({
+          data: [],
+          meta: { total: 0, page, perPage, pageCount: 0 },
+        });
+      }
+      query = query
+        .in("user_id", followedIds)
+        .in("privacy", ["public", "followers"]);
     }
 
     if (filter === PostFilterEnum.SUBSCRIBED) {
-      const subscriptions = await Subscription.find(
-        { userId: user.id, status: SubscriptionStatusEnum.ACTIVE },
-        { planId: 1 }
+      const subscriptions = await findMany(
+        Tables.SUBSCRIPTIONS,
+        { user_id: userId, status: "active" },
+        { select: "plan_id" }
       );
-
-      const planIds = subscriptions.map((sub) => sub.planId);
-
-      const subscriptionPlans = await SubscriptionPlan.find(
-        { _id: { $in: planIds }, isDeleted: false, deletedAt: null },
-        { userId: 1 }
+      const planIds = subscriptions.map((s: any) => s.plan_id);
+      if (planIds.length === 0) {
+        return res.json({
+          data: [],
+          meta: { total: 0, page, perPage, pageCount: 0 },
+        });
+      }
+      const plans = await findMany(
+        Tables.SUBSCRIPTION_PLANS,
+        { id: planIds, is_deleted: false },
+        { select: "user_id" }
       );
-
-      const subscribedUserIds = subscriptionPlans.map((plan) => plan.userId);
-
-      matchStage.user = { $in: subscribedUserIds };
-      // Subscribed feed: allow PUBLIC and SUBSCRIBER visibility
-      matchStage.privacy = { $in: ['public','subscriber'] } as any;
+      const subscribedUserIds = plans.map((p: any) => p.user_id);
+      if (subscribedUserIds.length === 0) {
+        return res.json({
+          data: [],
+          meta: { total: 0, page, perPage, pageCount: 0 },
+        });
+      }
+      query = query
+        .in("user_id", subscribedUserIds)
+        .in("privacy", ["public", "subscriber"]);
     }
-    // else if (filter === PostFilterEnum.FOR_YOU) {
-    // }
 
     if (search) {
-      matchStage = {
-        ...matchStage,
-        $or: [
-          { content: { $regex: search, $options: "i" } },
-          { tags: { $regex: search, $options: "i" } },
-        ],
-      };
+      query = query.or(
+        `content.ilike.%${search}%,tags.cs.{${search}}`
+      );
     }
 
-    const posts = await Post.aggregate([
-      { $match: matchStage },
-      // ...(isFollowing
-      //   ? [
-      //       {
-      //         $lookup: {
-      //           from: "userconnections",
-      //           let: { userId: "$user" },
-      //           pipeline: [
-      //             {
-      //               $match: {
-      //                 $expr: {
-      //                   $and: [
-      //                     { $eq: ["$owner", user._id] },
-      //                     { $eq: ["$followingTo", "$$userId"] },
-      //                   ],
-      //                 },
-      //               },
-      //             },
-      //           ],
-      //           as: "connections",
-      //         },
-      //       },
-      //       {
-      //         $match: {
-      //           "connections.0": { $exists: true },
-      //         },
-      //       },
-      //     ]
-      //   : []),
-      {
-        $lookup: {
-          from: "files",
-          localField: "media.mediaId",
-          foreignField: "_id",
-          as: "mediaFiles",
-        },
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "user",
-          foreignField: "_id",
-          as: "userInfo",
-        },
-      },
-      {
-        $lookup: {
-          from: "files",
-          localField: "userInfo.photoId",
-          foreignField: "_id",
-          as: "userPhoto",
-        },
-      },
-      // {
-      //   $addFields: {
-      //     "userInfo.photo": { $arrayElemAt: ["$userPhoto", 0] },
-      //   },
-      // },
+    // Execute with pagination
+    const { data: posts, count: total } = await query
+      .order("created_at", { ascending: false })
+      .range(skip, skip + (perPage as number) - 1);
 
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$type", InteractionType.LIKE_POST] },
-                  ],
-                },
-              },
-            },
-            {
-              $count: "likesCount",
-            },
-          ],
-          as: "likesCount",
-        },
-      },
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id", userId: user?._id },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$interactedBy", "$$userId"] },
-                    { $eq: ["$type", InteractionType.LIKE_POST] },
-                  ],
-                },
-              },
-            },
-          ],
-          as: "likeInteractions", //for isLiked key
-        },
-      },
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id", userId: user._id },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$interactedBy", "$$userId"] },
-                    { $eq: ["$type", InteractionType.COLLECTION_SAVED] },
-                  ],
-                },
-              },
-            },
-          ],
-          as: "savedInteractions", //for isSaved Key
-        },
-      },
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$type", InteractionType.COLLECTION_SAVED] },
-                  ],
-                },
-              },
-            },
-            {
-              $count: "savedCount",
-            },
-          ],
-          as: "savedCount",
-        },
-      },
+    if (!posts || !posts.length) {
+      return res.json({
+        data: [],
+        meta: { total: 0, page, perPage, pageCount: 0 },
+      });
+    }
 
-      {
-        $lookup: {
-          from: "interactions",
-          let: { postId: "$_id" },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $and: [
-                    { $eq: ["$post", "$$postId"] },
-                    { $eq: ["$type", InteractionType.COMMENT] },
-                    { $eq: ["$isDeleted", false] },
-                  ],
-                },
-              },
-            },
-            {
-              $count: "commentsCount",
-            },
-          ],
-          as: "commentsCount",
-        },
-      },
-      {
-        $addFields: {
-          isLiked: { $gt: [{ $size: "$likeInteractions" }, 0] },
-          isSaved: { $gt: [{ $size: "$savedInteractions" }, 0] },
-          // Viewer ownership flag for easier UI logic
-          isOwner: { $eq: ["$user", new Types.ObjectId(user._id)] },
-          commentsCount: {
-            $ifNull: [{ $arrayElemAt: ["$commentsCount.commentsCount", 0] }, 0],
-          },
-          savedCount: {
-            $ifNull: [{ $arrayElemAt: ["$savedCount.savedCount", 0] }, 0],
-          },
-          likesCount: {
-            $ifNull: [{ $arrayElemAt: ["$likesCount.likesCount", 0] }, 0],
-          },
-        },
-      },
-      {
-        $sort: { createdAt: -1 },
-      },
-      ...commonPaginationPipeline(page as number, perPage as number, skip),
+    const postIds = posts.map((p: any) => p.id);
+
+    // Fetch related data in parallel
+    const [
+      mediaResult,
+      userPhotoResult,
+      likesResult,
+      userLikesResult,
+      userSavedResult,
+      commentsResult,
+      savedResult,
+    ] = await Promise.all([
+      db.from(Tables.POST_MEDIA).select("*").in("post_id", postIds),
+      (() => {
+        const photoIds = posts
+          .map((p: any) => p.userInfo?.photo_id)
+          .filter(Boolean);
+        return photoIds.length
+          ? db.from(Tables.FILES).select("*").in("id", photoIds)
+          : Promise.resolve({ data: [] as any[] });
+      })(),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("post_id")
+        .in("post_id", postIds)
+        .eq("type", InteractionType.LIKE_POST),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("post_id")
+        .in("post_id", postIds)
+        .eq("type", InteractionType.LIKE_POST)
+        .eq("interacted_by", userId),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("post_id")
+        .in("post_id", postIds)
+        .eq("type", InteractionType.COLLECTION_SAVED)
+        .eq("interacted_by", userId),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("post_id")
+        .in("post_id", postIds)
+        .eq("type", InteractionType.COMMENT)
+        .eq("is_deleted", false),
+      db
+        .from(Tables.INTERACTIONS)
+        .select("post_id")
+        .in("post_id", postIds)
+        .eq("type", InteractionType.COLLECTION_SAVED),
     ]);
-    let data = {
-      data: posts[0]?.data ?? [],
-      meta: posts[0]?.metaData?.[0] ?? {},
-    };
 
-    return res.json(data);
+    // Build count maps
+    const buildCountMap = (rows: any[]) => {
+      const map: Record<string, number> = {};
+      for (const row of rows || []) {
+        map[row.post_id] = (map[row.post_id] || 0) + 1;
+      }
+      return map;
+    };
+    const buildIdSet = (rows: any[]) =>
+      new Set((rows || []).map((r: any) => r.post_id));
+
+    const likeCountMap = buildCountMap(likesResult.data || []);
+    const commentCountMap = buildCountMap(commentsResult.data || []);
+    const savedCountMap = buildCountMap(savedResult.data || []);
+    const userLikeSet = buildIdSet(userLikesResult.data || []);
+    const userSavedSet = buildIdSet(userSavedResult.data || []);
+
+    const photoMap: Record<string, any> = {};
+    for (const photo of userPhotoResult.data || []) {
+      photoMap[photo.id] = photo;
+    }
+
+    // Enrich posts
+    const enrichedPosts = posts.map((post: any) => ({
+      ...post,
+      mediaFiles: (mediaResult.data || []).filter(
+        (m: any) => m.post_id === post.id
+      ),
+      userInfo: post.userInfo ? [post.userInfo] : [],
+      userPhoto: post.userInfo?.photo_id
+        ? [photoMap[post.userInfo.photo_id]].filter(Boolean)
+        : [],
+      isLiked: userLikeSet.has(post.id),
+      isSaved: userSavedSet.has(post.id),
+      isOwner: post.user_id === userId,
+      likesCount: likeCountMap[post.id] || 0,
+      commentsCount: commentCountMap[post.id] || 0,
+      savedCount: savedCountMap[post.id] || 0,
+    }));
+
+    return res.json({
+      data: enrichedPosts,
+      meta: {
+        total: total || 0,
+        page,
+        perPage,
+        pageCount: Math.ceil((total || 0) / (perPage as number)),
+      },
+    });
   } catch (err) {
     console.log("Error while retrieving posts", err);
     return res

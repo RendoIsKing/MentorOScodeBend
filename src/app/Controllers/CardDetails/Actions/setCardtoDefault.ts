@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
-import { cardDetails } from "../../../Models/CardDetails";
+import { db, updateById, Tables } from "../../../../lib/db";
 import { setDefaultCardOnStripe } from "../../../../utils/stripe/setDefaultCardOnStripe";
 
 export const setDefaultCard = async (
@@ -21,18 +21,18 @@ export const setDefaultCard = async (
         .json({ error: { message: "Card ID is required." } });
     }
 
-    await cardDetails.updateMany(
-      { userId: user._id },
-      { $set: { isDefault: false } }
-    );
+    // Set all user's cards to non-default
+    await db
+      .from(Tables.CARD_DETAILS)
+      .update({ is_default: false })
+      .eq("user_id", user.id);
 
-    const updatedCard = await cardDetails.findOneAndUpdate(
-      { _id: cardId, userId: user._id },
-      { $set: { isDefault: true } },
-      { new: true }
-    );
+    // Set selected card as default
+    const updatedCard = await updateById(Tables.CARD_DETAILS, cardId, {
+      is_default: true,
+    });
 
-    if (!updatedCard) {
+    if (!updatedCard || updatedCard.user_id !== user.id) {
       return res.status(404).json({
         error: {
           message:
@@ -43,7 +43,7 @@ export const setDefaultCard = async (
 
     try {
       await setDefaultCardOnStripe({
-        paymentMethodId: updatedCard.paymentMethodId,
+        paymentMethodId: updatedCard.payment_method_id,
         customerId: user.stripeClientId,
       });
     } catch (error) {

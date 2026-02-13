@@ -1,10 +1,10 @@
 import { Request, Response } from "express";
 import { validate } from "class-validator";
 import { plainToClass } from "class-transformer";
-import { SubscriptionPlan } from "../../../Models/SubscriptionPlan";
 import { UserInterface } from "../../../../types/UserInterface";
 import { SubscriptionPlanInput } from "../Inputs/subscriptionPlanInput";
 import { SubscriptionPlanType } from "../../../../types/enums/subscriptionPlanEnum";
+import { findById, findOne, updateById, insertOne, Tables, toSnakeCase } from "../../../../lib/db";
 
 export const updateSubscriptionPlan = async (
   req: Request,
@@ -23,7 +23,7 @@ export const updateSubscriptionPlan = async (
       return res.status(400).json({ errors: validationErrors });
     }
 
-    const subscriptionPlan = await SubscriptionPlan.findById(planId);
+    const subscriptionPlan = await findById(Tables.SUBSCRIPTION_PLANS, planId);
 
     if (!subscriptionPlan) {
       return res
@@ -31,7 +31,7 @@ export const updateSubscriptionPlan = async (
         .json({ error: { message: "Subscription plan not found." } });
     }
 
-    if (subscriptionPlan.userId.toString() !== user.id) {
+    if (subscriptionPlan.user_id !== user.id) {
       return res
         .status(403)
         .json({
@@ -41,41 +41,43 @@ export const updateSubscriptionPlan = async (
           },
         });
     }
-    //@ts-ignore
-    let subscriptionPlanToUpdate;
+
+    let updatedPlan;
 
     if (subscriptionPlanInput.planType === SubscriptionPlanType.FIXED) {
-      subscriptionPlanToUpdate = await SubscriptionPlan.findOne({
-        userId: user.id,
-        planType: SubscriptionPlanType.FIXED,
-        isDeleted: false,
+      const existingFixed = await findOne(Tables.SUBSCRIPTION_PLANS, {
+        user_id: user.id,
+        plan_type: SubscriptionPlanType.FIXED,
+        is_deleted: false,
       });
 
-      if (subscriptionPlan) {
-        subscriptionPlanToUpdate = await SubscriptionPlan.findByIdAndUpdate(
-          subscriptionPlan._id,
-          { ...subscriptionPlanInput },
-          { new: true }
+      if (existingFixed) {
+        updatedPlan = await updateById(
+          Tables.SUBSCRIPTION_PLANS,
+          subscriptionPlan.id,
+          toSnakeCase(subscriptionPlanInput)
         );
       } else {
-        subscriptionPlanToUpdate = await SubscriptionPlan.create({
-          ...subscriptionPlanInput,
-          userId: user.id,
+        updatedPlan = await insertOne(Tables.SUBSCRIPTION_PLANS, {
+          ...toSnakeCase(subscriptionPlanInput),
+          user_id: user.id,
         });
       }
 
       return res.json({
-        data: subscriptionPlan,
+        data: updatedPlan,
         message: "Fixed Plan updated successfully.",
       });
     }
 
-    Object.assign(subscriptionPlan, subscriptionPlanInput);
-
-    await subscriptionPlan.save();
+    updatedPlan = await updateById(
+      Tables.SUBSCRIPTION_PLANS,
+      subscriptionPlan.id,
+      toSnakeCase(subscriptionPlanInput)
+    );
 
     return res.json({
-      data: subscriptionPlan,
+      data: updatedPlan,
       message: "Plan updated successfully.",
     });
   } catch (err) {

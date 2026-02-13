@@ -1,12 +1,11 @@
-import {Document, Types} from "mongoose";
-
-export interface CategoryInterface extends Document {
-    _id: Types.ObjectId;
-    moduleId: Types.ObjectId;
-    title: string;
-    video: string;
-    isActive: boolean;
-    activatedAt: Date;
-    isDeleted: boolean;
-    deletedAt: Date
+export interface CategoryInterface {
+  _id?: string;
+  id?: string;
+  moduleId: string;
+  title: string;
+  video: string;
+  isActive: boolean;
+  activatedAt: Date;
+  isDeleted: boolean;
+  deletedAt: Date;
 }

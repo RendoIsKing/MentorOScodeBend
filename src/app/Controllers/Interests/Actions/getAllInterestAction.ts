@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { Interest } from "../../../Models/Interest";
+import { paginate, Tables } from "../../../../lib/db";
 
 export const getAllInterest = async (
   _req: Request,
@@ -19,37 +19,25 @@ export const getAllInterest = async (
       _req.query && _req.query.page && parseInt(_req.query.page as string) > 0
         ? parseInt(_req.query.page as string)
         : 1;
-    let skip = (page - 1) * perPage;
 
-    const [query]: any = await Interest.aggregate([
+    const result = await paginate(
+      Tables.INTERESTS,
+      { is_deleted: false },
       {
-        $match: {
-          $or: [{ isDeleted: { $ne: true } }, { deletedAt: null }],
-        },
-      },
-
-      {
-        $facet: {
-          results: [
-            { $skip: skip },
-            { $limit: perPage },
-            { $sort: { createdAt: -1 } },
-          ],
-          interestCount: [{ $count: "count" }],
-        },
-      },
-    ]);
-
-    const interestCount = query.interestCount[0]?.count || 0;
-    const totalPages = Math.ceil(interestCount / perPage);
+        orderBy: "created_at",
+        ascending: false,
+        page,
+        pageSize: perPage,
+      }
+    );
 
     return res.json({
-      data: query.results,
+      data: result.data,
       meta: {
-        perPage: perPage,
-        page: _req.query.page || 1,
-        pages: totalPages,
-        total: interestCount,
+        perPage: result.pageSize,
+        page: result.page,
+        pages: Math.ceil(result.total / result.pageSize),
+        total: result.total,
       },
     });
   } catch (err) {

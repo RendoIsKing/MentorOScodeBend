@@ -1,32 +1,66 @@
-import StudentSnapshot from "../../models/StudentSnapshot";
-import StudentState from "../../models/StudentState";
-import TrainingPlanVersion from "../../models/TrainingPlanVersion";
-import NutritionPlanVersion from "../../models/NutritionPlanVersion";
-import { WeightEntry } from "../../app/Models/WeightEntry";
-import { Types } from "mongoose";
+import { db, findOne, upsert, Tables } from "../../lib/db";
 
-export async function rebuildSnapshot(user: Types.ObjectId) {
-  const state = await StudentState.findOne({ user });
-  const [tp, np] = await Promise.all([
-    state?.currentTrainingPlanVersion ? TrainingPlanVersion.findById(state.currentTrainingPlanVersion) : null,
-    state?.currentNutritionPlanVersion ? NutritionPlanVersion.findById(state.currentNutritionPlanVersion) : null
+export async function rebuildSnapshot(userId: string) {
+  const state = await findOne(Tables.STUDENT_STATES, { user_id: userId });
+
+  const [tpResult, npResult] = await Promise.all([
+    state?.current_training_plan_version_id
+      ? db
+          .from(Tables.TRAINING_PLAN_VERSIONS)
+          .select("*")
+          .eq("id", state.current_training_plan_version_id)
+          .single()
+      : { data: null },
+    state?.current_nutrition_plan_version_id
+      ? db
+          .from(Tables.NUTRITION_PLAN_VERSIONS)
+          .select("*")
+          .eq("id", state.current_nutrition_plan_version_id)
+          .single()
+      : { data: null },
   ]);
 
-  const weights = await WeightEntry.find({ userId: user as any }).sort({ date: 1 }).select('date kg').lean();
-  const weightSeries = (weights || []).map((w: any) => ({ t: w.date, v: w.kg }));
+  const tp = tpResult?.data;
+  const np = npResult?.data;
 
-  const daysPerWeek = tp ? (tp.days || []).filter((d: any) => (d.exercises || []).length).length : 0;
+  const { data: weights } = await db
+    .from(Tables.WEIGHT_ENTRIES)
+    .select("date, kg")
+    .eq("user_id", userId)
+    .order("date", { ascending: true });
+
+  const weightSeries = (weights || []).map((w: any) => ({
+    t: w.date,
+    v: w.kg,
+  }));
+
+  const daysPerWeek = tp
+    ? (tp.days || []).filter((d: any) => (d.exercises || []).length).length
+    : 0;
 
   const snap: any = {
-    user,
-    weightSeries,
-    trainingPlanSummary: tp ? { daysPerWeek } : undefined,
-    nutritionSummary: np ? { kcal: np.kcal, protein: np.proteinGrams, carbs: np.carbsGrams, fat: np.fatGrams } : undefined,
-    kpis: { adherence7d: 0 }
+    user_id: userId,
+    weight_series: weightSeries,
+    training_plan_summary: tp ? { daysPerWeek } : undefined,
+    nutrition_summary: np
+      ? {
+          kcal: np.kcal,
+          protein: np.protein_grams,
+          carbs: np.carbs_grams,
+          fat: np.fat_grams,
+        }
+      : undefined,
+    kpis: { adherence7d: 0 },
   };
 
-  await StudentSnapshot.findOneAndUpdate({ user }, { $set: snap }, { upsert: true });
-  await StudentState.updateOne({ user }, { $set: { snapshotUpdatedAt: new Date() } }, { upsert: true });
+  await upsert(Tables.STUDENT_SNAPSHOTS, snap, "user_id");
+
+  await upsert(
+    Tables.STUDENT_STATES,
+    {
+      user_id: userId,
+      snapshot_updated_at: new Date().toISOString(),
+    },
+    "user_id"
+  );
 }
-
-

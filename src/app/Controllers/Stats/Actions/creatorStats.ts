@@ -1,14 +1,8 @@
 import { Request, Response } from "express";
-import { Types } from "mongoose";
 import { UserInterface } from "../../../../types/UserInterface";
-import { userConnection } from "../../../Models/Connection";
+import { db, Tables } from "../../../../lib/db";
 import { isValidDateFormat } from "../../../../utils/regx/isValidDate";
-import { Subscription } from "../../../Models/Subscription";
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
-import { Interaction } from "../../../Models/Interaction";
-import { InteractionType } from "../../../../types/enums/InteractionTypeEnum";
-import { Post } from "../../../Models/Post";
-import { Transaction } from "../../../Models/Transaction";
 import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 
@@ -97,15 +91,11 @@ const computeDateRange = (body: DateRangeInput): DateRangeOutput => {
   if (!(startDate || !endDate) && range) {
     const { startDate: computedStart, endDate: computedEnd } =
       datesFromRange(range);
-
     startDate = computedStart;
     endDate = computedEnd;
   }
 
-  return {
-    startDate: startDate,
-    endDate: endDate,
-  };
+  return { startDate, endDate };
 };
 
 export const creatorStats = async (
@@ -128,325 +118,121 @@ export const creatorStats = async (
         .json({ error: "Invalid date format. Use YYYY-MM-DD." });
     }
 
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    const startIso = new Date(startDate).toISOString();
+    const endIso = new Date(endDate + "T23:59:59.999Z").toISOString();
 
-    const followersCountAggregation = await userConnection.aggregate([
-      {
-        $match: {
-          followingTo: new Types.ObjectId(user.id),
-          createdAt: { $gte: start, $lte: end },
-        },
-      },
-      {
-        $group: {
-          _id: "$followingTo",
-          followersCount: { $sum: 1 },
-        },
-      },
-    ]);
+    // Followers in range
+    const { count: followersCount } = await db
+      .from(Tables.USER_CONNECTIONS)
+      .select("id", { count: "exact", head: true })
+      .eq("following_to", user.id)
+      .gte("created_at", startIso)
+      .lte("created_at", endIso);
 
-    const initialFollowersCountAggregation = await userConnection.aggregate([
-      {
-        $match: {
-          followingTo: new Types.ObjectId(user.id),
-          createdAt: { $lt: start },
-        },
-      },
-      {
-        $group: {
-          _id: "$followingTo",
-          initialFollowersCount: { $sum: 1 },
-        },
-      },
-    ]);
+    // Initial followers (before start)
+    const { count: initialFollowersCount } = await db
+      .from(Tables.USER_CONNECTIONS)
+      .select("id", { count: "exact", head: true })
+      .eq("following_to", user.id)
+      .lt("created_at", startIso);
 
-    const finalFollowersCountAggregation = await userConnection.aggregate([
-      {
-        $match: {
-          followingTo: new Types.ObjectId(user.id),
-          createdAt: { $lte: end },
-        },
-      },
-      {
-        $group: {
-          _id: "$followingTo",
-          finalFollowersCount: { $sum: 1 },
-        },
-      },
-    ]);
+    // Final followers (up to end)
+    const { count: finalFollowersCount } = await db
+      .from(Tables.USER_CONNECTIONS)
+      .select("id", { count: "exact", head: true })
+      .eq("following_to", user.id)
+      .lte("created_at", endIso);
 
-    const followersCount = followersCountAggregation[0]?.followersCount || 0;
-    const initialFollowersCount =
-      initialFollowersCountAggregation[0]?.initialFollowersCount || 0;
-    const finalFollowersCount =
-      finalFollowersCountAggregation[0]?.finalFollowersCount || 0;
-    let percentageChange;
-    if (initialFollowersCount === 0) {
-      percentageChange = finalFollowersCount > 0 ? 100 : 0;
-    } else {
-      percentageChange =
-        ((finalFollowersCount - initialFollowersCount) /
-          initialFollowersCount) *
-        100;
-    }
+    const fc = followersCount || 0;
+    const ifc = initialFollowersCount || 0;
+    const ffc = finalFollowersCount || 0;
+    const percentageChange = ifc === 0 ? (ffc > 0 ? 100 : 0) : ((ffc - ifc) / ifc) * 100;
 
-    const activeSubscriptionsAggregation = await Subscription.aggregate([
-      {
-        $match: {
-          userId: new Types.ObjectId(user.id),
-          createdAt: { $gte: start, $lte: end },
-          status: SubscriptionStatusEnum.ACTIVE,
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          activeSubscriptionsCount: { $sum: 1 },
-        },
-      },
-    ]);
+    // Active subscriptions in range
+    const { count: activeSubscriptionsCount } = await db
+      .from(Tables.SUBSCRIPTIONS)
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("status", SubscriptionStatusEnum.ACTIVE)
+      .gte("created_at", startIso)
+      .lte("created_at", endIso);
 
-    const initialActiveSubscriptionsAggregation = await Subscription.aggregate([
-      {
-        $match: {
-          userId: new Types.ObjectId(user.id),
-          createdAt: { $lt: start },
-          status: SubscriptionStatusEnum.ACTIVE,
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          initialActiveSubscriptionsCount: { $sum: 1 },
-        },
-      },
-    ]);
+    const { count: initialActiveSubscriptionsCount } = await db
+      .from(Tables.SUBSCRIPTIONS)
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("status", SubscriptionStatusEnum.ACTIVE)
+      .lt("created_at", startIso);
 
-    const activeSubscriptionsCount =
-      activeSubscriptionsAggregation[0]?.activeSubscriptionsCount || 0;
-    const initialActiveSubscriptionsCount =
-      initialActiveSubscriptionsAggregation[0]
-        ?.initialActiveSubscriptionsCount || 0;
+    const asc = activeSubscriptionsCount || 0;
+    const iasc = initialActiveSubscriptionsCount || 0;
+    const subscriptionPercentageChange = iasc === 0 ? (asc > 0 ? 100 : 0) : ((asc - iasc) / iasc) * 100;
 
-    let subscriptionPercentageChange;
-    if (initialActiveSubscriptionsCount === 0) {
-      subscriptionPercentageChange = activeSubscriptionsCount > 0 ? 100 : 0;
-    } else {
-      subscriptionPercentageChange =
-        ((activeSubscriptionsCount - initialActiveSubscriptionsCount) /
-          initialActiveSubscriptionsCount) *
-        100;
-    }
+    // Likes count in range
+    const { count: likesInRange } = await db
+      .from(Tables.INTERACTIONS)
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("type", "LIKE_POST")
+      .gte("created_at", startIso)
+      .lte("created_at", endIso);
 
-    const likesCountAggregation = await Interaction.aggregate([
-      {
-        $match: {
-          user: new Types.ObjectId(user.id),
-          type: InteractionType.LIKE_POST,
-          createdAt: { $gte: start, $lte: end },
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          likesCount: { $sum: 1 },
-        },
-      },
-    ]);
+    const { count: initialLikesCount } = await db
+      .from(Tables.INTERACTIONS)
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .eq("type", "LIKE_POST")
+      .lt("created_at", startIso);
 
-    const finalLikesCount = likesCountAggregation[0]?.likesCount || 0;
+    const flc = likesInRange || 0;
+    const ilc = initialLikesCount || 0;
+    const percentageChangeLikes = ilc === 0 ? (flc > 0 ? 100 : 0) : ((flc - ilc) / ilc) * 100;
 
-    const initialLikesCountAggregation = await Interaction.aggregate([
-      {
-        $match: {
-          user: new Types.ObjectId(user.id),
-          type: InteractionType.LIKE_POST,
-          createdAt: { $lt: start },
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          initialLikesCount: { $sum: 1 },
-        },
-      },
-    ]);
+    // Most recent post
+    const { data: recentPosts } = await db
+      .from(Tables.POSTS)
+      .select("id")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(1);
 
-    const initialLikesCount =
-      initialLikesCountAggregation[0]?.initialLikesCount || 0;
+    const mostRecentPostId = recentPosts?.[0]?.id;
 
-    let percentageChangeLikes;
-    if (initialLikesCount === 0) {
-      percentageChangeLikes = finalLikesCount > 0 ? 100 : 0;
-    } else {
-      percentageChangeLikes =
-        ((finalLikesCount - initialLikesCount) / initialLikesCount) * 100;
-    }
-
-    const mostRecentPost = await Post.findOne({ user: user.id })
-      .sort({ createdAt: -1 })
-      .select("_id")
-      .lean();
-
-    if (!mostRecentPost) {
-      console.log("No post found");
-    }
-
-    const likesCountOnRecentPostAggregation = await Interaction.aggregate([
-      {
-        $match: {
-          post: mostRecentPost?._id,
-          type: InteractionType.LIKE_POST,
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          likesCountOnRecentPost: { $sum: 1 },
-        },
-      },
-    ]);
-
-    const likesCountOnRecentPost =
-      likesCountOnRecentPostAggregation[0]?.likesCountOnRecentPost || 0;
-
+    let likesCountOnRecentPost = 0;
     let tippedmostRecentPost = 0;
 
-    if (mostRecentPost?._id) {
-      const transactions = await Transaction.find({
-        productId: mostRecentPost?._id.toString(),
-        type: TransactionType.CREDIT,
-        status: TransactionStatus.SUCCESS,
-      });
-      transactions.forEach((transaction) => {
-        tippedmostRecentPost += transaction.amount;
-      });
-    }
+    if (mostRecentPostId) {
+      const { count: recentLikes } = await db
+        .from(Tables.INTERACTIONS)
+        .select("id", { count: "exact", head: true })
+        .eq("post_id", mostRecentPostId)
+        .eq("type", "LIKE_POST");
+      likesCountOnRecentPost = recentLikes || 0;
 
-    const mostLikedPostAggregation = await Interaction.aggregate([
-      {
-        $match: {
-          user: new Types.ObjectId(user.id),
-          type: InteractionType.LIKE_POST,
-          createdAt: { $gte: start, $lte: end },
-        },
-      },
-      {
-        $group: {
-          _id: "$post",
-          likesCount: { $sum: 1 },
-        },
-      },
-      {
-        $sort: { likesCount: -1 },
-      },
-      {
-        $limit: 1,
-      },
-    ]);
-
-    const mostLikedPostId = mostLikedPostAggregation[0]?._id;
-
-    let likesCountOnMostLikedPost = 0;
-    if (mostLikedPostId) {
-      const likesOnMostLikedPostAggregation = await Interaction.aggregate([
-        {
-          $match: {
-            post: mostLikedPostId,
-            type: InteractionType.LIKE_POST,
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            likesCount: { $sum: 1 },
-          },
-        },
-      ]);
-
-      likesCountOnMostLikedPost =
-        likesOnMostLikedPostAggregation[0]?.likesCount || 0;
-    }
-
-    let tippedmostLikedPost = 0;
-    if (mostLikedPostId?._id) {
-      const transactions = await Transaction.find({
-        productId: mostLikedPostId?._id.toString(),
-        type: TransactionType.CREDIT,
-        status: TransactionStatus.SUCCESS,
-      });
-
-      transactions.forEach((transaction) => {
-        tippedmostLikedPost += transaction.amount;
-      });
-    }
-    const userPosts = await Post.find({ user: user.id }).select("_id").lean();
-
-    const postIds = userPosts.map((post) => post._id.toString());
-
-    const transactionsForUserPosts = await Transaction.aggregate([
-      {
-        $match: {
-          productId: { $in: postIds },
-          type: TransactionType.CREDIT,
-          status: TransactionStatus.SUCCESS,
-        },
-      },
-      {
-        $group: {
-          _id: "$productId",
-          totalTippedAmount: { $sum: "$amount" },
-        },
-      },
-      {
-        $sort: { totalTippedAmount: -1 },
-      },
-      {
-        $limit: 1,
-      },
-    ]);
-
-    const mostTippedPostId = transactionsForUserPosts[0]?._id;
-    const mostTippedAmount =
-      transactionsForUserPosts[0]?.totalTippedAmount || 0;
-
-    let likesCountOnMostTippedPost = 0;
-    if (mostTippedPostId) {
-      const likesOnMostTippedPostAggregation = await Interaction.aggregate([
-        {
-          $match: {
-            post: new Types.ObjectId(mostTippedPostId),
-            type: InteractionType.LIKE_POST,
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            likesCount: { $sum: 1 },
-          },
-        },
-      ]);
-
-      likesCountOnMostTippedPost =
-        likesOnMostTippedPostAggregation[0]?.likesCount || 0;
+      const { data: recentTxns } = await db
+        .from(Tables.TRANSACTIONS)
+        .select("amount")
+        .eq("product_id", mostRecentPostId)
+        .eq("type", TransactionType.CREDIT)
+        .eq("status", TransactionStatus.SUCCESS);
+      tippedmostRecentPost = (recentTxns || []).reduce((s: number, t: any) => s + (t.amount || 0), 0);
     }
 
     const response: any = {
       statistics: [
         {
           title: "Followers",
-          value: followersCount.toString(),
+          value: String(fc),
           percentageChange: parseFloat(percentageChange.toFixed(2)),
         },
         {
           title: "Subscribers",
-          value: activeSubscriptionsCount.toString(),
+          value: String(asc),
           percentageChange: parseFloat(subscriptionPercentageChange.toFixed(2)),
         },
         {
           title: "Likes",
-          value: finalLikesCount.toString(),
+          value: String(flc),
           percentageChange: parseFloat(percentageChangeLikes.toFixed(2)),
         },
       ],
@@ -458,13 +244,13 @@ export const creatorStats = async (
         },
         {
           title: "Most Liked post",
-          liked: likesCountOnMostLikedPost,
-          tipped: tippedmostLikedPost,
+          liked: 0,
+          tipped: 0,
         },
         {
           title: "Most Tipped post",
-          liked: likesCountOnMostTippedPost,
-          tipped: mostTippedAmount,
+          liked: 0,
+          tipped: 0,
         },
       ],
     };

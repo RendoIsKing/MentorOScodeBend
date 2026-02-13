@@ -1,6 +1,6 @@
 import { OpenAI } from "openai";
 import { retrieveContext } from "./ragService";
-import { User } from "../../app/Models/User";
+import { findById, Tables } from "../../lib/db";
 
 const OPENAI_KEY = (process.env.OPENAI_API_KEY || process.env.OPENAI_API_TOKEN || process.env.OPENAI_KEY || "").trim();
 
@@ -12,17 +12,17 @@ function getOpenAI(): OpenAI {
 }
 
 /**
- * Fetch the mentor's personality and core instruction fields from the User document.
+ * Fetch the mentor's personality and core instruction fields from the users table.
  * These are used to build a richer, mentor-specific system prompt.
  */
 async function getMentorProfile(mentorId: string) {
   try {
-    const mentor = await User.findById(mentorId)
-      .select(
-        "firstName lastName mentorAiVoiceTone mentorAiTrainingPhilosophy " +
-        "mentorAiNutritionPhilosophy mentorAiMacroApproach mentorAiDietaryNotes coreInstructions"
-      )
-      .lean();
+    const mentor = await findById<any>(
+      Tables.USERS,
+      mentorId,
+      "first_name, last_name, mentor_ai_voice_tone, mentor_ai_training_philosophy, " +
+      "mentor_ai_nutrition_philosophy, mentor_ai_macro_approach, mentor_ai_dietary_notes, core_instructions"
+    );
     return mentor;
   } catch {
     return null;
@@ -68,30 +68,30 @@ export async function generateResponse(
   // Add mentor personality / voice
   const profile = mentorProfile as any;
   if (profile) {
-    const name = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
+    const name = [profile.first_name, profile.last_name].filter(Boolean).join(" ");
     if (name) parts.push(`You represent the mentor "${name}".`);
-    if (profile.mentorAiVoiceTone) {
-      parts.push(`VOICE & TONE: ${profile.mentorAiVoiceTone}`);
+    if (profile.mentor_ai_voice_tone) {
+      parts.push(`VOICE & TONE: ${profile.mentor_ai_voice_tone}`);
     }
-    if (profile.mentorAiTrainingPhilosophy) {
-      parts.push(`TRAINING PHILOSOPHY: ${profile.mentorAiTrainingPhilosophy}`);
+    if (profile.mentor_ai_training_philosophy) {
+      parts.push(`TRAINING PHILOSOPHY: ${profile.mentor_ai_training_philosophy}`);
     }
-    if (profile.mentorAiNutritionPhilosophy) {
-      parts.push(`NUTRITION PHILOSOPHY: ${profile.mentorAiNutritionPhilosophy}`);
+    if (profile.mentor_ai_nutrition_philosophy) {
+      parts.push(`NUTRITION PHILOSOPHY: ${profile.mentor_ai_nutrition_philosophy}`);
     }
-    if (profile.mentorAiMacroApproach) {
-      parts.push(`MACRO APPROACH: ${profile.mentorAiMacroApproach}`);
+    if (profile.mentor_ai_macro_approach) {
+      parts.push(`MACRO APPROACH: ${profile.mentor_ai_macro_approach}`);
     }
-    if (profile.mentorAiDietaryNotes) {
-      parts.push(`DIETARY NOTES: ${profile.mentorAiDietaryNotes}`);
+    if (profile.mentor_ai_dietary_notes) {
+      parts.push(`DIETARY NOTES: ${profile.mentor_ai_dietary_notes}`);
     }
   }
 
   // Add core instructions (permanent system prompt from Smart Ingestion Pipeline)
-  if (profile?.coreInstructions && String(profile.coreInstructions).trim()) {
+  if (profile?.core_instructions && String(profile.core_instructions).trim()) {
     parts.push(
       "CORE INSTRUCTIONS (these are the mentor's fundamental rules — always follow them):\n" +
-      String(profile.coreInstructions).trim()
+      String(profile.core_instructions).trim()
     );
   }
 

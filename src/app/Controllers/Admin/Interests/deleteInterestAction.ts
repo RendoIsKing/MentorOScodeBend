@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
-import { Interest } from "../../../Models/Interest";
-import { User } from "../../../Models/User";
+import { db, updateById, Tables } from "../../../../lib/db";
 
 export const deleteInterest = async (
   req: Request,
@@ -9,31 +8,44 @@ export const deleteInterest = async (
   try {
     const { tagName } = req.body;
     if (!tagName) {
-      return res.status(400).json({ error: { message: "tagName is required." } });
+      return res
+        .status(400)
+        .json({ error: { message: "tagName is required." } });
     }
 
-    const regex = new RegExp(`^${String(tagName).replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, "i");
-    const interest = await Interest.findOne({
-      isDeleted: false,
-      $or: [{ title: regex }, { slug: regex }],
-    });
+    // Find interest by title or slug (case-insensitive)
+    const { data: interests } = await db
+      .from(Tables.INTERESTS)
+      .select("*")
+      .eq("is_deleted", false)
+      .or(`title.ilike.${tagName},slug.ilike.${tagName}`)
+      .limit(1);
+
+    const interest = interests?.[0];
 
     if (!interest) {
-      return res.status(404).json({ error: { message: "Interest not found." } });
+      return res
+        .status(404)
+        .json({ error: { message: "Interest not found." } });
     }
 
-    await User.updateMany(
-      { interests: interest._id },
-      { $pull: { interests: interest._id } }
-    );
+    // Remove interest from user_interests table
+    await db
+      .from(Tables.USER_INTERESTS)
+      .delete()
+      .eq("interest_id", interest.id);
 
-    interest.isDeleted = true;
-    interest.isAvailable = false;
-    interest.deletedAt = new Date();
-    await interest.save();
+    // Soft-delete the interest
+    await updateById(Tables.INTERESTS, interest.id, {
+      is_deleted: true,
+      is_available: false,
+      deleted_at: new Date().toISOString(),
+    });
 
     return res.json({ message: "Interest deleted successfully." });
   } catch (error) {
-    return res.status(500).json({ error: { message: "Something went wrong." } });
+    return res
+      .status(500)
+      .json({ error: { message: "Something went wrong." } });
   }
 };

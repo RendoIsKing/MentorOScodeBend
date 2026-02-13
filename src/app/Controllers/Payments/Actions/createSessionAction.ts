@@ -3,7 +3,7 @@ import { UserInterface } from "../../../../types/UserInterface";
 import createPaymentIntent from "./createPaymentIntent";
 import stripeInstance from "../../../../utils/stripe";
 import * as Sentry from '@sentry/node';
-import { User } from "../../../Models/User";
+import { updateById, Tables } from "../../../../lib/db";
 
 /**
  * Create Stripe session/setup intent for current user.
@@ -29,9 +29,9 @@ export const createSessionAction = async (
         name: user.fullName,
       });
       user.stripeClientId = customer.id;
-      await User.findByIdAndUpdate(user.id, {
-        stripeClientId: customer.id,
-        isStripeCustomer: true,
+      await updateById(Tables.USERS, user.id || '', {
+        stripe_client_id: customer.id,
+        is_stripe_customer: true,
       });
       data.clientStripeId = customer.id;
     }

@@ -1,10 +1,10 @@
 import { Request, Response } from "express";
-import { FAQ } from "../../Models/FAQ";
+import { findMany, insertOne, Tables } from "../../../lib/db";
 
 export class SupportController {
   static getFAQ = async (req: Request, res: Response) => {
     try {
-      const faqs = await FAQ.find().exec();
+      const faqs = await findMany(Tables.FAQS);
 
       return res.status(200).json(faqs);
     } catch (err) {
@@ -21,13 +21,11 @@ export class SupportController {
         return res.status(400).json({ error: "Topics array is required" });
       }
 
-      const newFAQ = new FAQ({
+      const savedFAQ = await insertOne(Tables.FAQS, {
         topics,
-        isDeleted: isDeleted || false,
-        deletedAt: deletedAt || null,
+        is_deleted: isDeleted || false,
+        deleted_at: deletedAt || null,
       });
-
-      const savedFAQ = await newFAQ.save();
 
       return res.status(201).json(savedFAQ);
     } catch (err) {

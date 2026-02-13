@@ -1,11 +1,10 @@
 import { Request, Response } from "express";
-import { Notification } from "../../../Models/Notification";
 import { UserInterface } from "../../../../types/UserInterface";
 import { plainToClass } from "class-transformer";
 import { validate } from "class-validator";
 import { ValidationErrorResponse } from "../../../../types/ValidationErrorResponse";
-import { commonPaginationPipeline } from "../../../../utils/pipeline/commonPagination";
 import { GetAllItemsInputs } from "../../Posts/Inputs/getPost.input";
+import { db, Tables } from "../../../../lib/db";
 
 export const getNotifications = async (
   req: Request,
@@ -27,75 +26,40 @@ export const getNotifications = async (
     }
 
     const { perPage, page } = notificationQuery;
+    const pageNum = (page as number) > 0 ? (page as number) : 1;
+    const limit = perPage as number;
+    const offset = (pageNum - 1) * limit;
 
-    let skip =
-      ((page as number) > 0 ? (page as number) - 1 : 0) * (perPage as number);
+    // Get total count
+    const { count: total } = await db
+      .from(Tables.NOTIFICATIONS)
+      .select("id", { count: "exact", head: true })
+      .contains("sent_to", [user.id]);
 
-    const notifications = await Notification.aggregate([
-      { $match: { sentTo: user._id } },
-      {
-        $sort: { createdAt: -1 },
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "sentTo",
-          foreignField: "_id",
-          as: "sentToUserDetails",
-        },
-      },
-      {
-        $lookup: {
-          from: "posts",
-          localField: "notificationOnPost",
-          foreignField: "_id",
-          as: "postDetails",
-        },
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "notificationFromUser",
-          foreignField: "_id",
-          as: "notificationFromUserDetails",
-        },
-      },
-      {
-        $project: {
-          title: 1,
-          description: 1,
-          sentTo: {
-            $map: {
-              input: "$sentToUserDetails",
-              as: "user",
-              in: {
-                _id: "$$user._id",
-                userName: "$$user.userName",
-              },
-            },
-          },
-          notificationOnPost: {
-            $arrayElemAt: ["$postDetails._id", 0],
-          },
-          notificationFromUserDetails: {
-            $arrayElemAt: ["$notificationFromUserDetails.userName", 0],
-          },
-          readAt: 1,
-          type: 1,
-          isDeleted: 1,
-          deletedAt: 1,
-          createdAt: 1,
-          updatedAt: 1,
-        },
-      },
+    // Get notifications with related data
+    const { data: notifications, error } = await db
+      .from(Tables.NOTIFICATIONS)
+      .select("*, from_user:users!notification_from_user(id, user_name)")
+      .contains("sent_to", [user.id])
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1);
 
-      ...commonPaginationPipeline(page as number, perPage as number, skip),
-    ]);
-    let data = {
-      data: notifications[0]?.data ?? [],
-      meta: notifications[0]?.metaData?.[0] ?? {},
-    };
-    return res.json(data);
+    if (error) {
+      console.error(error, "Error while retrieving notifications");
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong." } });
+    }
+
+    return res.json({
+      data: notifications || [],
+      meta: {
+        perPage: limit,
+        page: pageNum,
+        pages: Math.ceil((total || 0) / limit),
+        total: total || 0,
+      },
+    });
   } catch (err) {
     console.error(err, "Error while retrieving notifications");
     return res

@@ -1,11 +1,16 @@
 import { Request, Response } from "express";
-import { Interaction } from "../../../Models/Interaction"; // Update the import path as necessary
-import { UserInterface } from "../../../../types/UserInterface"; // Update the import path as necessary
+import { UserInterface } from "../../../../types/UserInterface";
 import { InteractionType } from "../../../../types/enums/InteractionTypeEnum";
-import { User } from "../../../Models/User";
 import { sendNotification } from "../../../../utils/Notifications/notificationService";
-import { Post } from "../../../Models/Post";
 import { FirebaseNotificationEnum } from "../../../../types/enums/FirebaseNotificationEnum";
+import {
+  db,
+  findById,
+  findOne,
+  findMany,
+  insertOne,
+  Tables,
+} from "../../../../lib/db";
 
 export const addNestedComment = async (req: Request, res: Response) => {
   try {
@@ -13,7 +18,7 @@ export const addNestedComment = async (req: Request, res: Response) => {
     const parentCommentId = req.params.id;
     const user = req.user as UserInterface;
 
-    const parentComment = await Interaction.findById(parentCommentId);
+    const parentComment = await findById(Tables.INTERACTIONS, parentCommentId);
 
     if (!parentComment) {
       return res
@@ -28,77 +33,84 @@ export const addNestedComment = async (req: Request, res: Response) => {
       });
     }
 
-    const newChildComment = new Interaction({
+    // Create child comment with parent_id (replaces pushing to replies[])
+    await insertOne(Tables.INTERACTIONS, {
       type: InteractionType.COMMENT,
-      post: parentComment.post,
-      // user: parentComment.user,
-      interactedBy: user._id,
+      post_id: parentComment.post_id,
+      interacted_by: user._id || user.id,
       comment: childComment,
-      isChildComment: true,
-      isDeleted: false,
-      parentComment: parentCommentId,
+      is_child_comment: true,
+      is_deleted: false,
+      parent_id: parentCommentId,
     });
 
-    await newChildComment.save();
+    // Fetch all replies for the parent comment
+    const replies = await findMany(
+      Tables.INTERACTIONS,
+      { parent_id: parentCommentId, is_deleted: false },
+      { orderBy: "created_at", ascending: true }
+    );
 
-    if (!parentComment.replies) {
-      parentComment.replies = [];
+    // Fetch user info for replies
+    const replyUserIds = [
+      ...new Set(replies.map((r: any) => r.interacted_by)),
+    ];
+    const { data: replyUsers } = replyUserIds.length
+      ? await db
+          .from(Tables.USERS)
+          .select("id, user_name")
+          .in("id", replyUserIds)
+      : { data: [] as any[] };
+
+    const userMap: Record<string, any> = {};
+    for (const u of replyUsers || []) {
+      userMap[u.id] = u;
     }
 
-    parentComment.replies.push(newChildComment._id);
+    const enrichedReplies = replies.map((r: any) => ({
+      ...r,
+      interactedBy: userMap[r.interacted_by] || null,
+    }));
 
-    await parentComment.save();
+    const updatedParent = {
+      ...parentComment,
+      replies: enrichedReplies,
+    };
 
-    const updatedParentComment = await Interaction.findById(parentCommentId)
-      .populate({
-        path: "replies",
-        populate: {
-          path: "interactedBy",
-          select: "username",
-        },
-      })
-      .exec();
-
+    // Send notifications
     try {
-      //notification to the user to whom the post belongs
-      const post = await Post.findOne({ id: parentComment.post });
-      const postUser = await User.findById(post?.user);
+      const post = await findOne(Tables.POSTS, { id: parentComment.post_id });
+      const postUser = post
+        ? await findById(Tables.USERS, post.user_id)
+        : null;
       if (postUser && postUser.fcm_token) {
-        const notificationToken = postUser.fcm_token;
-        if (notificationToken) {
-          await sendNotification(
-            notificationToken,
-            "New Comment on your post",
-            `${user.userName} commented on your post`,
-            FirebaseNotificationEnum.COMMENT,
-            postUser.userName
-          );
-        } else {
-          console.error("FCM token for the user not found");
-        }
+        await sendNotification(
+          postUser.fcm_token,
+          "New Comment on your post",
+          `${user.userName} commented on your post`,
+          FirebaseNotificationEnum.COMMENT,
+          postUser.user_name
+        );
       }
-      // Notification to the user who made the parent comment
-      const parentCommentUser = await User.findById(parentComment.interactedBy);
+      const parentCommentUser = await findById(
+        Tables.USERS,
+        parentComment.interacted_by
+      );
       if (parentCommentUser && parentCommentUser.fcm_token) {
-        const notificationToken = parentCommentUser.fcm_token;
-        if (notificationToken) {
-          await sendNotification(
-            notificationToken,
-            "New Reply to your comment",
-            `${user.userName} replied to your comment`,
-            FirebaseNotificationEnum.COMMENT,
-            parentCommentUser.userName
-          );
-        } else {
-          console.error("FCM token for the parent comment user not found");
-        }
+        await sendNotification(
+          parentCommentUser.fcm_token,
+          "New Reply to your comment",
+          `${user.userName} replied to your comment`,
+          FirebaseNotificationEnum.COMMENT,
+          parentCommentUser.user_name
+        );
       }
     } catch (error) {
-      console.log("Error sending like notification", error);
+      console.log("Error sending notification", error);
     }
 
     return res.json({
-      data: updatedParentComment,
+      data: updatedParent,
       message: "Child Comment added successfully",
     });
   } catch (error) {

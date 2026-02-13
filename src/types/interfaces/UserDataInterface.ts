@@ -1,9 +1,10 @@
-import { Document, Types } from "mongoose";
 import { UserInterface } from "../UserInterface";
 import { FileFormatEnum } from "../enums/fileFormatEnum";
 
-export interface IUserData extends Document {
-  user: Types.ObjectId | UserInterface;
+export interface IUserData {
+  _id?: string;
+  id?: string;
+  user: string | UserInterface;
   data: Record<string, any>;
   downloadBefore: Date;
   fileFormat: FileFormatEnum;

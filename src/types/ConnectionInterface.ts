@@ -1,6 +1,6 @@
-import {Document, Types} from "mongoose";
-
-export interface ConnectionInterface extends Document {
-    owner: Types.ObjectId;
-    followingTo: Types.ObjectId;
+export interface ConnectionInterface {
+  _id?: string;
+  id?: string;
+  owner: string;
+  followingTo: string;
 }

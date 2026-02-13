@@ -1,84 +1,612 @@
 import { Request, Response } from "express";
-import { validate } from "class-validator";
-import passport from "passport";
-import { genSaltSync, hashSync, compareSync } from "bcryptjs";
-import { compareAsc } from "date-fns";
-
-import { ValidationErrorResponse } from "../../types/ValidationErrorResponse";
-import { RegisterInput } from "../Inputs/Register.input";
-import { User } from "../Models/User";
-import { Subscription } from "../Models/Subscription";
-
-import { UserInterface } from "../../types/UserInterface";
-
-import { LoginInput } from "../Inputs/Login.input";
-import { generateAccessToken, generateRefreshToken, verifyToken, TokenExpiredError } from "../../utils/jwt";
-import { RolesEnum } from "../../types/RolesEnum";
-import { CheckUserInput } from "../Inputs/checkUser.input";
-import { plainToClass } from "class-transformer";
+import { supabaseAdmin } from "../../lib/supabase";
+import { OAuth2Client } from "google-auth-library";
 import { addMinutes } from "date-fns";
 import otpGenerator from "../../utils/otpGenerator";
-import { OTPInput } from "../Inputs/OTPInput";
-import { UpdateUserDTO } from "../Inputs/UpdateUser.input";
-
-import { UserForgotPasswordDto } from "../Inputs/UserForgotPassword.input";
-import mongoose from "mongoose";
-import { SubscriptionPlanType } from "../../types/enums/subscriptionPlanEnum";
-import { InteractionType } from "../../types/enums/InteractionTypeEnum";
-import { PostType } from "../../types/enums/postTypeEnum";
-import { SubscriptionStatusEnum } from "../../types/enums/SubscriptionStatusEnum";
 import { sendMessage } from "../../utils/Twillio/sendMessage";
-import { OAuth2Client } from "google-auth-library";
 
-/**
- * Build cookie options based on environment.
- */
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
 function getCookieOptions(maxAgeMs: number): any {
-  const isProd = process.env.NODE_ENV === 'production';
-  const sameSiteEnv = String(process.env.SESSION_SAMESITE || (isProd ? 'none' : 'lax')).toLowerCase();
-  const cookieSameSite = (sameSiteEnv === 'none' ? 'none' : 'lax') as any;
-  const secureEnv = String(process.env.SESSION_SECURE || (isProd ? 'true' : 'false')).toLowerCase();
-  const cookieSecure = secureEnv === 'true' || secureEnv === '1';
-  const cookieDomain = (process.env.SESSION_COOKIE_DOMAIN || '').trim();
-  const opts: any = { httpOnly: true, sameSite: cookieSameSite, secure: cookieSecure, maxAge: maxAgeMs, path: '/' };
+  const isProd = process.env.NODE_ENV === "production";
+  const sameSiteEnv = String(
+    process.env.SESSION_SAMESITE || (isProd ? "none" : "lax"),
+  ).toLowerCase();
+  const cookieSameSite = (sameSiteEnv === "none" ? "none" : "lax") as any;
+  const secureEnv = String(
+    process.env.SESSION_SECURE || (isProd ? "true" : "false"),
+  ).toLowerCase();
+  const cookieSecure = secureEnv === "true" || secureEnv === "1";
+  const cookieDomain = (process.env.SESSION_COOKIE_DOMAIN || "").trim();
+  const opts: any = {
+    httpOnly: true,
+    sameSite: cookieSameSite,
+    secure: cookieSecure,
+    maxAge: maxAgeMs,
+    path: "/",
+  };
   if (cookieDomain) opts.domain = cookieDomain;
   return opts;
 }
 
-/**
- * Set both access token and refresh token cookies on the response.
- */
-function setAuthCookies(res: Response, user: UserInterface): { accessToken: string; refreshToken: string } {
-  const accessToken = generateAccessToken(user);
-  const refreshToken = generateRefreshToken(user);
+function setAuthCookies(
+  res: Response,
+  accessToken: string,
+  refreshToken: string,
+) {
   try {
-    // Access token cookie: 15 minutes
-    res.cookie('auth_token', accessToken, getCookieOptions(1000 * 60 * 15));
+    // Access token cookie: 1 hour (Supabase default)
+    res.cookie("auth_token", accessToken, getCookieOptions(1000 * 60 * 60));
     // Refresh token cookie: 7 days
-    res.cookie('refresh_token', refreshToken, getCookieOptions(1000 * 60 * 60 * 24 * 7));
+    res.cookie(
+      "refresh_token",
+      refreshToken,
+      getCookieOptions(1000 * 60 * 60 * 24 * 7),
+    );
   } catch {}
-  return { accessToken, refreshToken };
 }
 
 const getAdminEmailSet = () => {
-  const raw = String(process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || "").toLowerCase();
-  const emails = raw
-    .split(",")
-    .map((email) => email.trim())
-    .filter(Boolean);
-  return new Set(emails);
+  const raw = String(
+    process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || "",
+  ).toLowerCase();
+  return new Set(
+    raw
+      .split(",")
+      .map((e) => e.trim())
+      .filter(Boolean),
+  );
 };
+
+/**
+ * Map a postgres users row to the legacy API shape.
+ */
+function toUserPayload(user: any) {
+  return {
+    _id: user.id,
+    id: user.id,
+    firstName: user.first_name,
+    lastName: user.last_name,
+    fullName: user.full_name,
+    userName: user.user_name,
+    email: user.email,
+    role: user.role,
+    phoneNumber: user.phone_number,
+    dialCode: user.dial_code,
+    photoId: user.photo_id,
+    coverPhotoId: user.cover_photo_id,
+    googleId: user.google_id,
+    isMentor: user.is_mentor,
+    isActive: user.is_active,
+    isVerified: user.is_verified,
+    isDeleted: user.is_deleted,
+    status: user.status,
+    hasPersonalInfo: user.has_personal_info,
+    hasPhotoInfo: user.has_photo_info,
+    hasSelectedInterest: user.has_selected_interest,
+    hasConfirmedAge: user.has_confirmed_age,
+    hasDocumentUploaded: user.has_document_uploaded,
+    hasDocumentVerified: user.has_document_verified,
+    isFreeSubscription: user.is_free_subscription,
+    createdAt: user.created_at,
+    updatedAt: user.updated_at,
+  };
+}
+
+// ── Controller ───────────────────────────────────────────────────────────────
 
 class AuthController {
   /**
-   * Handle Google OAuth login and issue auth token.
+   * Register a new user with email + password via Supabase Auth.
    */
-  static googleLogin = async (req: Request, res: Response): Promise<Response> => {
+  static regsiter = async (req: Request, res: Response): Promise<any> => {
+    try {
+      const {
+        firstName,
+        lastName,
+        fullName,
+        userName,
+        gender,
+        email,
+        password,
+        phoneNumber,
+        dialCode,
+      } = req.body;
+
+      // Check if user already exists
+      const { data: existing } = await supabaseAdmin
+        .from("users")
+        .select("id")
+        .or(`email.eq.${email},complete_phone_number.eq.${dialCode}--${phoneNumber}`)
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        return res.status(400).json({
+          data: {
+            message: "User already exists with same email or phone number.",
+          },
+        });
+      }
+
+      // Create Supabase auth user (or recover if auth user already exists)
+      let authUserId: string;
+      const { data: authData, error: authError } =
+        await supabaseAdmin.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: {
+            first_name: firstName,
+            last_name: lastName,
+            full_name: fullName || `${firstName} ${lastName}`.trim(),
+          },
+        });
+
+      if (authError) {
+        // If user already exists in Supabase Auth but not in public.users,
+        // recover by finding the existing auth user and updating their password
+        if (authError.message.includes("already been registered")) {
+          const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+          const existingAuth = listData?.users?.find(
+            (u: any) => u.email?.toLowerCase() === email.toLowerCase(),
+          );
+          if (existingAuth) {
+            // Update their password to the one provided
+            await supabaseAdmin.auth.admin.updateUserById(existingAuth.id, { password });
+            authUserId = existingAuth.id;
+          } else {
+            return res.status(400).json({ error: { message: authError.message } });
+          }
+        } else {
+          console.error("[register] Supabase auth error:", authError.message);
+          return res
+            .status(400)
+            .json({ error: { message: authError.message } });
+        }
+      } else {
+        authUserId = authData.user.id;
+      }
+
+      // Ensure a public.users row exists (trigger may have created one, or we need to upsert)
+      let { data: user } = await supabaseAdmin
+        .from("users")
+        .select("*")
+        .eq("auth_id", authUserId)
+        .maybeSingle();
+
+      const profileData = {
+        full_name: fullName || `${firstName} ${lastName}`.trim(),
+        first_name: firstName,
+        last_name: lastName,
+        user_name: userName || null,
+        gender: gender || null,
+        email,
+        phone_number: phoneNumber,
+        dial_code: dialCode,
+        complete_phone_number: dialCode && phoneNumber ? `${dialCode}--${phoneNumber}` : null,
+        is_active: true,
+        is_verified: true,
+      };
+
+      if (user) {
+        const { data: updated, error: userError } = await supabaseAdmin
+          .from("users")
+          .update(profileData)
+          .eq("auth_id", authUserId)
+          .select("*")
+          .single();
+        if (userError) console.error("[register] user update error:", userError.message);
+        user = updated || user;
+      } else {
+        // No trigger-created row — insert one manually
+        const { data: inserted, error: insertError } = await supabaseAdmin
+          .from("users")
+          .insert({ ...profileData, auth_id: authUserId })
+          .select("*")
+          .single();
+        if (insertError) console.error("[register] user insert error:", insertError.message);
+        user = inserted;
+      }
+
+      // Sign in to get tokens
+      const { data: session, error: signInError } =
+        await supabaseAdmin.auth.signInWithPassword({ email, password });
+
+      if (signInError || !session.session) {
+        // User created but can't sign in — return success with user data
+        return res.json({ data: toUserPayload(user || { id: authUserId }) });
+      }
+
+      setAuthCookies(
+        res,
+        session.session.access_token,
+        session.session.refresh_token,
+      );
+
+      return res.json({
+        data: {
+          ...toUserPayload(user || {}),
+          token: session.session.access_token,
+        },
+      });
+    } catch (error) {
+      console.error("[register] error:", error);
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong." } });
+    }
+  };
+
+  /**
+   * Email/password login via Supabase Auth.
+   */
+  static login = async (req: Request, res: Response): Promise<Response> => {
+    try {
+      const { email, password } = req.body;
+
+      // Try direct sign-in first
+      let { data: session, error } =
+        await supabaseAdmin.auth.signInWithPassword({ email, password });
+
+      // If direct sign-in fails, the user may have registered via phone OTP
+      // and the Supabase Auth email is a placeholder. Look up by email in
+      // public.users and migrate their Auth credentials.
+      if (error && email) {
+        console.log("[login] direct sign-in failed, checking public.users for:", email);
+        const { data: publicUser } = await supabaseAdmin
+          .from("users")
+          .select("auth_id, email, is_deleted, is_active")
+          .eq("email", email)
+          .eq("is_deleted", false)
+          .limit(1)
+          .maybeSingle();
+
+        if (publicUser?.auth_id) {
+          console.log("[login] found public.users entry with auth_id:", publicUser.auth_id);
+          // Update the Supabase Auth user's email and password to the real ones
+          const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
+            publicUser.auth_id,
+            { email, password, email_confirm: true },
+          );
+          if (updateErr) {
+            console.error("[login] failed to update auth user credentials:", updateErr.message);
+          } else {
+            // Retry sign-in with the updated credentials
+            const retry = await supabaseAdmin.auth.signInWithPassword({ email, password });
+            session = retry.data;
+            error = retry.error;
+            console.log("[login] retry sign-in result:", error ? error.message : "success");
+          }
+        }
+      }
+
+      if (error || !session?.session) {
+        return res
+          .status(401)
+          .json({ error: { message: "Invalid login credentials" } });
+      }
+
+      // Look up user
+      const { data: user } = await supabaseAdmin
+        .from("users")
+        .select("*")
+        .eq("auth_id", session.user.id)
+        .single();
+
+      if (!user) {
+        return res.status(401).json({ error: { message: "User not found" } });
+      }
+
+      if (user.is_deleted) {
+        return res
+          .status(401)
+          .json({ error: "User is deleted. Please contact admin" });
+      }
+      if (!user.is_active) {
+        return res
+          .status(401)
+          .json({ error: "User not active. Please contact admin." });
+      }
+
+      // Auto-promote admin if email matches
+      const adminEmails = getAdminEmailSet();
+      if (user.email && adminEmails.has(user.email.toLowerCase()) && user.role !== "admin") {
+        console.log("[login] promoting user to admin:", user.email);
+        await supabaseAdmin
+          .from("users")
+          .update({ role: "admin" })
+          .eq("id", user.id);
+        user.role = "admin";
+      }
+
+      setAuthCookies(
+        res,
+        session.session.access_token,
+        session.session.refresh_token,
+      );
+
+      return res.json({
+        data: {
+          ...toUserPayload(user),
+          token: session.session.access_token,
+        },
+      });
+    } catch (error) {
+      console.error("[login] error:", error);
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong." } });
+    }
+  };
+
+  /**
+   * Flexible login: phone OTP or password-based (email/phone/username).
+   */
+  static userLogin = async (req: Request, res: Response): Promise<Response> => {
+    try {
+      const { email, username, userName, phoneNumber, password, dialCode } =
+        req.body || {};
+      const effectiveUserName = userName || username;
+
+      // ── Branch A: Phone-only (no password) → OTP flow ──
+      if (!password && (phoneNumber || email || effectiveUserName)) {
+        let dial = "";
+        let num = "";
+        if (typeof phoneNumber === "string" && phoneNumber.includes("--")) {
+          const parts = phoneNumber.split("--");
+          if (parts.length === 2) {
+            dial = String(parts[0] || "").replace(/^\+/, "").replace(/\s+/g, "");
+            num = String(parts[1] || "").replace(/\s+/g, "");
+          } else if (parts.length === 3) {
+            dial = String(parts[1] || "").replace(/^\+/, "").replace(/\s+/g, "");
+            num = String(parts[2] || "").replace(/\s+/g, "");
+          }
+        } else if (phoneNumber && dialCode) {
+          dial = String(dialCode || "").replace(/^\+/, "").replace(/\s+/g, "");
+          num = String(phoneNumber || "").replace(/\s+/g, "");
+        }
+        if (!dial || !num) {
+          return res
+            .status(422)
+            .json({ message: "dialCode and phoneNumber are required" });
+        }
+
+        // Find or create user by phone
+        const completePhone = `${dial}--${num}`;
+        let { data: user } = await supabaseAdmin
+          .from("users")
+          .select("*")
+          .or(`complete_phone_number.eq.${completePhone},and(dial_code.eq.${dial},phone_number.eq.${num})`)
+          .eq("is_deleted", false)
+          .limit(1)
+          .maybeSingle();
+
+        if (!user) {
+          // Create auth user with phone-based email placeholder
+          const placeholderEmail = `phone_${dial}${num}@placeholder.local`;
+          const tempPassword = `temp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+          let newAuthUserId: string;
+
+          const { data: authData, error: authErr } =
+            await supabaseAdmin.auth.admin.createUser({
+              email: placeholderEmail,
+              password: tempPassword,
+              email_confirm: true,
+              user_metadata: { first_name: "", last_name: "" },
+            });
+
+          if (authErr) {
+            // If auth user already exists, recover
+            if (authErr.message.includes("already been registered")) {
+              const { data: listData } = await supabaseAdmin.auth.admin.listUsers();
+              const existing = listData?.users?.find(
+                (u: any) => u.email?.toLowerCase() === placeholderEmail.toLowerCase(),
+              );
+              if (existing) {
+                newAuthUserId = existing.id;
+              } else {
+                console.error("[userLogin] create user error:", authErr.message);
+                return res.status(500).json({ message: authErr.message });
+              }
+            } else {
+              console.error("[userLogin] create user error:", authErr.message);
+              return res.status(500).json({ message: authErr.message });
+            }
+          } else {
+            newAuthUserId = authData.user.id;
+          }
+
+          // Check if trigger created a row, otherwise insert
+          let { data: triggerRow } = await supabaseAdmin
+            .from("users")
+            .select("*")
+            .eq("auth_id", newAuthUserId)
+            .maybeSingle();
+
+          if (triggerRow) {
+            const { data: updated } = await supabaseAdmin
+              .from("users")
+              .update({
+                email: email || null,
+                dial_code: dial,
+                phone_number: num,
+                complete_phone_number: completePhone,
+                is_active: true,
+              })
+              .eq("auth_id", newAuthUserId)
+              .select("*")
+              .single();
+            user = updated || triggerRow;
+          } else {
+            const { data: inserted } = await supabaseAdmin
+              .from("users")
+              .insert({
+                auth_id: newAuthUserId,
+                email: email || null,
+                dial_code: dial,
+                phone_number: num,
+                complete_phone_number: completePhone,
+                is_active: true,
+              })
+              .select("*")
+              .single();
+            user = inserted;
+          }
+        }
+
+        const otp = otpGenerator();
+        const otpInvalidAt = addMinutes(new Date(), 10).toISOString();
+
+        await supabaseAdmin
+          .from("users")
+          .update({ otp: String(otp), otp_invalid_at: otpInvalidAt })
+          .eq("id", user!.id);
+
+        try {
+          await sendMessage(`${dial}--${num}`, `Your OTP is: ${otp}`);
+        } catch {}
+
+        return res.status(200).json({
+          data: { _id: user!.id, dialCode: dial, phoneNumber: num, otp },
+          message: "OTP sent successfully",
+        });
+      }
+
+      // ── Branch B: Password login ──
+      // Find user by email, username, or phone
+      let userQuery = supabaseAdmin
+        .from("users")
+        .select("*")
+        .eq("is_deleted", false);
+
+      const orClauses: string[] = [];
+      if (email) orClauses.push(`email.eq.${email}`);
+      if (effectiveUserName) orClauses.push(`user_name.eq.${effectiveUserName}`);
+      if (phoneNumber && dialCode) {
+        const dial = String(dialCode).replace(/^\+/, "").replace(/\s+/g, "");
+        const num = String(phoneNumber).replace(/\s+/g, "");
+        orClauses.push(`complete_phone_number.eq.${dial}--${num}`);
+      }
+
+      if (orClauses.length === 0) {
+        return res.status(400).json({ message: "Invalid login credentials" });
+      }
+
+      const { data: user } = await userQuery
+        .or(orClauses.join(","))
+        .limit(1)
+        .maybeSingle();
+
+      // Account lockout check
+      if (user?.lock_until && new Date(user.lock_until) > new Date()) {
+        const remainingMin = Math.ceil(
+          (new Date(user.lock_until).getTime() - Date.now()) / 60000,
+        );
+        return res.status(423).json({
+          message: `Account is temporarily locked. Try again in ${remainingMin} minute(s).`,
+          code: "ACCOUNT_LOCKED",
+        });
+      }
+
+      if (!user || !user.email) {
+        return res.status(400).json({ message: "Invalid login credentials" });
+      }
+
+      // Sign in with Supabase Auth
+      const { data: session, error: signInError } =
+        await supabaseAdmin.auth.signInWithPassword({
+          email: user.email,
+          password,
+        });
+
+      if (signInError || !session.session) {
+        // Increment failed attempts
+        const MAX_ATTEMPTS = 5;
+        const LOCK_DURATION_MIN = 15;
+        const attempts = (user.login_attempts || 0) + 1;
+        const updateData: any = { login_attempts: attempts };
+        if (attempts >= MAX_ATTEMPTS) {
+          updateData.lock_until = addMinutes(
+            new Date(),
+            LOCK_DURATION_MIN,
+          ).toISOString();
+        }
+        await supabaseAdmin
+          .from("users")
+          .update(updateData)
+          .eq("id", user.id);
+
+        if (attempts >= MAX_ATTEMPTS) {
+          return res.status(423).json({
+            message: `Too many failed attempts. Account locked for ${LOCK_DURATION_MIN} minutes.`,
+            code: "ACCOUNT_LOCKED",
+          });
+        }
+        return res.status(400).json({ message: "Invalid login credentials" });
+      }
+
+      // Reset failed attempts
+      if (user.login_attempts && user.login_attempts > 0) {
+        await supabaseAdmin
+          .from("users")
+          .update({ login_attempts: 0, lock_until: null })
+          .eq("id", user.id);
+      }
+
+      // Auto-promote admin
+      const adminEmails = getAdminEmailSet();
+      if (
+        adminEmails.size > 0 &&
+        adminEmails.has(String(user.email).toLowerCase()) &&
+        user.role !== "admin"
+      ) {
+        await supabaseAdmin
+          .from("users")
+          .update({ role: "admin" })
+          .eq("id", user.id);
+        user.role = "admin";
+      }
+
+      setAuthCookies(
+        res,
+        session.session.access_token,
+        session.session.refresh_token,
+      );
+
+      return res.json({
+        message: "User login successfully",
+        token: session.session.access_token,
+        user: {
+          id: user.id,
+          name: `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim(),
+          email: user.email,
+          role: user.role,
+          userName: user.user_name,
+        },
+      });
+    } catch (error) {
+      const msg = (error as any)?.message || String(error);
+      console.error("[auth:user-login] failed", msg);
+      return res.status(500).json({ message: msg });
+    }
+  };
+
+  /**
+   * Google OAuth login via Supabase.
+   */
+  static googleLogin = async (
+    req: Request,
+    res: Response,
+  ): Promise<Response> => {
     try {
       const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
-      if (!clientId) return res.status(500).json({ message: "GOOGLE_OAUTH_CLIENT_ID missing" });
+      if (!clientId)
+        return res.status(500).json({ message: "GOOGLE_OAUTH_CLIENT_ID missing" });
+
       const { idToken } = (req.body || {}) as { idToken?: string };
-      if (!idToken) return res.status(400).json({ message: "idToken required" });
+      if (!idToken)
+        return res.status(400).json({ message: "idToken required" });
 
       const client = new OAuth2Client(clientId);
       const ticket = await client.verifyIdToken({ idToken, audience: clientId });
@@ -88,570 +616,321 @@ class AuthController {
       }
 
       const googleId = payload.sub;
-      const email = String(payload.email).toLowerCase();
+      const googleEmail = String(payload.email).toLowerCase();
 
-      let user = await User.findOne({ $or: [{ googleId }, { email }] });
+      // Check if user exists by googleId or email
+      let { data: user } = await supabaseAdmin
+        .from("users")
+        .select("*")
+        .or(`google_id.eq.${googleId},email.eq.${googleEmail}`)
+        .limit(1)
+        .maybeSingle();
+
       let isNewUser = false;
-      
+
       if (!user) {
-        // Brand new Google user - needs onboarding
-        user = await User.create({
-          firstName: payload.given_name || "",
-          lastName: payload.family_name || "",
-          email,
-          googleId,
-          role: RolesEnum.USER,
-          isActive: true,
-          isVerified: true,
-        } as any);
+        // Create Supabase auth user for Google sign-in
+        const { data: authData, error: authError } =
+          await supabaseAdmin.auth.admin.createUser({
+            email: googleEmail,
+            email_confirm: true,
+            user_metadata: {
+              first_name: payload.given_name || "",
+              last_name: payload.family_name || "",
+              full_name: payload.name || "",
+              provider_id: googleId,
+            },
+            app_metadata: { provider: "google" },
+          });
+
+        if (authError) {
+          return res.status(500).json({ message: authError.message });
+        }
+
+        // Update trigger-created row
+        const { data: newUser } = await supabaseAdmin
+          .from("users")
+          .update({
+            first_name: payload.given_name || "",
+            last_name: payload.family_name || "",
+            full_name: payload.name || "",
+            google_id: googleId,
+            is_active: true,
+            is_verified: true,
+          })
+          .eq("auth_id", authData.user.id)
+          .select("*")
+          .single();
+
+        user = newUser;
         isNewUser = true;
-      } else if (!user.googleId) {
-        // Existing email user linking Google
-        (user as any).googleId = googleId;
-        await user.save();
+      } else if (!user.google_id) {
+        // Link Google to existing user
+        await supabaseAdmin
+          .from("users")
+          .update({ google_id: googleId })
+          .eq("id", user.id);
       }
-      
-      // Check if user needs to complete onboarding (no userName set)
-      if (!user.userName || user.userName.trim() === '') {
+
+      if (!user!.user_name || String(user!.user_name).trim() === "") {
         isNewUser = true;
       }
 
-      const { accessToken } = setAuthCookies(res, user as unknown as UserInterface);
+      // Generate real Supabase Auth tokens for Google users
+      let accessToken = "";
+      let refreshToken = "";
+
+      const authId = user?.auth_id;
+      if (authId) {
+        const { data: authUserData } = await supabaseAdmin.auth.admin.getUserById(authId);
+        const authEmail = authUserData?.user?.email;
+
+        if (authEmail) {
+          const tempPw = `google_verified_${authId}_${Date.now()}`;
+          await supabaseAdmin.auth.admin.updateUserById(authId, {
+            password: tempPw,
+          });
+          const { data: session } = await supabaseAdmin.auth.signInWithPassword({
+            email: authEmail,
+            password: tempPw,
+          });
+          if (session?.session) {
+            accessToken = session.session.access_token;
+            refreshToken = session.session.refresh_token;
+          }
+        }
+      }
+
+      if (accessToken) {
+        setAuthCookies(res, accessToken, refreshToken);
+      }
 
       return res.json({
         token: accessToken,
         isNewUser,
         user: {
-          id: user._id,
-          email: user.email,
-          name: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim(),
-          role: user.role,
+          id: user!.id,
+          email: user!.email,
+          name: `${user!.first_name ?? ""} ${user!.last_name ?? ""}`.trim(),
+          role: user!.role,
         },
       });
     } catch (e) {
       const msg = (e as any)?.message || String(e);
-      return res.status(401).json({ message: msg || 'Google login failed' });
+      return res.status(401).json({ message: msg || "Google login failed" });
     }
   };
-  // NOTE: legacy misspelling kept for backward compatibility with any callers
+
   /**
-   * Register a new user using email/phone credentials.
+   * Verify OTP and issue auth tokens.
    */
-  static regsiter = async (req: Request, res: Response): Promise<any> => {
-    const input = req.body;
-
-    const registerInput = new RegisterInput();
-
-    registerInput.firstName = input.firstName;
-    registerInput.lastName = input.lastName;
-    registerInput.email = input.email;
-    registerInput.phoneNumber = input.phoneNumber;
-    registerInput.password = input.password;
-    registerInput.dialCode = input.dialCode;
-    registerInput.country = input.country;
-    registerInput.fullName = input.fullName;
-    registerInput.userName = input.userName;
-    registerInput.gender = input.gender;
-    const errors = await validate(registerInput);
-
-    if (errors.length) {
-      const errorsInfo: ValidationErrorResponse[] = errors.map((error) => ({
-        property: error.property,
-        constraints: error.constraints,
-      }));
-
-      return res
-        .status(400)
-        .json({ error: { message: "VALIDATIONS_ERROR", info: errorsInfo } });
-    }
+  static verifyOtp = async (
+    req: Request,
+    res: Response,
+  ): Promise<Response> => {
     try {
-      const user = await User.findOne({
-        $or: [
-          { email: input.email },
-          {
-            completePhoneNumber: `${input.country}--${input.dialCode}--${input.phoneNumber}`,
-          },
-        ],
-      });
-      if (!user) {
-        const salt = genSaltSync(10);
-        const hashPassword = hashSync(input.password, salt);
+      const { id, otp } = req.body;
 
-        await User.create({
-          firstName: input.firstName,
-          lastName: input.lastName,
-          fullName: input.fullName,
-          userName: input.userName,
-          gender: input.gender,
-          email: input.email,
-          password: hashPassword,
-          role: RolesEnum.USER,
-          phoneNumber: input.phoneNumber,
-          country: input.country,
-          dialCode: input.dialCode,
-          completePhoneNumber: `${input.country}--${input.dialCode}--${input.phoneNumber}`,
-          isActive: true, //need to delete
-          isVerified: true, //need to delete
-        });
-
-        passport.authenticate(
-          "local",
-          { session: false },
-          (err: any, user: UserInterface, message: Object) => {
-            if (!user) {
-              if (err) {
-                return res.status(400).json({ error: err });
-              }
-              return res.status(401).json({ error: message });
-            } else if (!user.isActive) {
-              return res
-                .status(401)
-                .json({ error: "User not active.Please contact admin." });
-            } else if (!user.isVerified) {
-              return res.status(401).json({
-                error: "User not verified.Please verify your account",
-              });
-            } else if (user.isDeleted) {
-              return res
-                .status(401)
-                .json({ error: "User is deleted.Please contact admin" });
-            }
-            const { accessToken } = setAuthCookies(res, user);
-            return res.json({
-              data: {
-                _id: user._id,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                email: user.email,
-                role: user.role,
-                lastLogin: user.lastLogin,
-                image: user.photoId,
-                phoneNumber: user.phoneNumber,
-                country: user.country,
-                dialCode: user.dialCode,
-                token: accessToken,
-              },
-            });
-          }
-        )(req, res);
-      } else {
-        return res.status(400).json({
-          data: {
-            message: "User already exists with same email or phone number.",
-          },
-        });
+      if (!id || !otp) {
+        return res
+          .status(400)
+          .json({ error: { message: "id and otp are required" } });
       }
+
+      const { data: user, error } = await supabaseAdmin
+        .from("users")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (error || !user) {
+        return res
+          .status(400)
+          .json({ error: { message: "User not found" } });
+      }
+
+      if (
+        user.otp !== String(otp) ||
+        (user.otp_invalid_at && new Date() > new Date(user.otp_invalid_at))
+      ) {
+        return res.status(400).json({ data: { message: "otp is invalid" } });
+      }
+
+      // Mark verified
+      const { data: updatedUser } = await supabaseAdmin
+        .from("users")
+        .update({
+          is_verified: true,
+          verified_at: new Date().toISOString(),
+          otp: "",
+        })
+        .eq("id", id)
+        .select("*")
+        .single();
+
+      // Generate real Supabase Auth tokens
+      let accessToken = "";
+      let refreshToken = "";
+
+      if (updatedUser?.auth_id) {
+        // Get the auth user's actual email (may differ from public.users email
+        // if user was created via phone with a placeholder email)
+        const { data: authUserData, error: authLookupErr } = await supabaseAdmin.auth.admin.getUserById(updatedUser.auth_id);
+        const authEmail = authUserData?.user?.email;
+        console.log("[verifyOtp] auth_id:", updatedUser.auth_id, "authEmail:", authEmail, "publicEmail:", updatedUser.email, "authLookupErr:", authLookupErr?.message);
+
+        if (authEmail) {
+          const tempPw = `otp_verified_${updatedUser.auth_id}_${Date.now()}`;
+          const { error: pwErr } = await supabaseAdmin.auth.admin.updateUserById(updatedUser.auth_id, {
+            password: tempPw,
+          });
+          if (pwErr) console.error("[verifyOtp] password update error:", pwErr.message);
+
+          const { data: session, error: signInErr } = await supabaseAdmin.auth.signInWithPassword({
+            email: authEmail,
+            password: tempPw,
+          });
+          if (signInErr) console.error("[verifyOtp] signIn error:", signInErr.message);
+          if (session?.session) {
+            accessToken = session.session.access_token;
+            refreshToken = session.session.refresh_token;
+            console.log("[verifyOtp] tokens generated successfully, access_token length:", accessToken.length);
+          } else {
+            console.error("[verifyOtp] no session returned from signInWithPassword");
+          }
+        } else {
+          console.error("[verifyOtp] no authEmail found for auth_id:", updatedUser.auth_id);
+        }
+      } else {
+        console.error("[verifyOtp] no auth_id on updatedUser, id:", id);
+      }
+
+      if (accessToken) {
+        setAuthCookies(res, accessToken, refreshToken);
+        console.log("[verifyOtp] auth cookies set successfully");
+      } else {
+        console.error("[verifyOtp] WARNING: no accessToken generated, cookies NOT set");
+      }
+
+      return res.json({
+        data: {
+          ...toUserPayload(updatedUser || user),
+          token: accessToken,
+        },
+        message: "User verified successfully",
+      });
     } catch (error) {
+      console.error("[verifyOtp] error:", error);
       return res
         .status(500)
-        .json({ error: { message: "Something went wrong." } });
+        .json({ error: { message: "Something went wrong" } });
     }
   };
 
   /**
-   * Authenticate user credentials and return auth token.
+   * Update authenticated user's profile.
    */
-  static login = async (req: Request, res: Response): Promise<Response> => {
-    const input = req.body;
-    const loginInput = new LoginInput();
-    loginInput.email = input.email;
-    loginInput.password = input.password;
-    const errors = await validate(loginInput);
-
-    if (errors.length) {
-      const errorsInfo: ValidationErrorResponse[] = errors.map((error) => ({
-        property: error.property,
-        constraints: error.constraints,
-      }));
-
-      return res.status(400).json({
-        error: { message: "VALIDATIONS_ERROR", info: { errorsInfo } },
-      });
-    }
-    return passport.authenticate(
-      "local",
-      { session: false },
-      (err: any, user: UserInterface, message: Object) => {
-        if (!user) {
-          if (err) {
-            return res.status(400).json({ error: err });
-          }
-          return res.status(401).json({ error: message });
-        } else if (!user.isActive) {
-          return res
-            .status(401)
-            .json({ error: "User not active.Please contact admin." });
-        } else if (!user.isVerified) {
-          return res
-            .status(401)
-            .json({ error: "User not verified.Please verify your account" });
-        } else if (user.isDeleted) {
-          return res
-            .status(401)
-            .json({ error: "User is deleted.Please contact admin" });
-        }
-        const { accessToken } = setAuthCookies(res, user);
-        return res.json({
-          data: {
-            _id: user._id,
-            firstName: user?.firstName,
-            lastName: user?.lastName,
-            email: user?.email,
-            role: user?.role,
-            lastLogin: user?.lastLogin,
-            image: user?.photoId,
-            phoneNumber: user?.phoneNumber,
-            country: user?.country,
-            dialCode: user?.dialCode,
-            token: accessToken,
-          },
-        });
-      }
-    )(req, res);
-  };
-
-  /**
-   * Update authenticated user's profile, with optional password change.
-   */
-  static updateMe = async (req: Request, res: Response): Promise<Response> => {
+  static updateMe = async (
+    req: Request,
+    res: Response,
+  ): Promise<Response> => {
     try {
-      const user = req.user as UserInterface;
-      const updateData = plainToClass(UpdateUserDTO, req.body);
+      const user = req.user as any;
+      const body = req.body;
 
-      const errors = await validate(updateData);
-      if (errors.length > 0) {
-        return res.status(400).json({ errors });
-      }
+      // Build update object, mapping camelCase → snake_case
+      const updateData: any = {};
+      if (body.fullName !== undefined) updateData.full_name = body.fullName;
+      if (body.userName !== undefined) updateData.user_name = body.userName;
+      if (body.phoneNumber !== undefined) updateData.phone_number = body.phoneNumber;
+      if (body.dob !== undefined) updateData.dob = body.dob;
+      if (body.bio !== undefined) updateData.bio = body.bio;
+      if (body.gender !== undefined) updateData.gender = body.gender;
+      if (body.email !== undefined) updateData.email = body.email;
+      if (body.dialCode !== undefined) updateData.dial_code = body.dialCode;
+      if (body.photoId !== undefined) updateData.photo_id = body.photoId;
+      if (body.coverPhotoId !== undefined) updateData.cover_photo_id = body.coverPhotoId;
+      if (body.isMentor !== undefined) updateData.is_mentor = body.isMentor;
+      if (body.mentorExpertise !== undefined) updateData.mentor_expertise = body.mentorExpertise;
+      if (body.mentorCertifications !== undefined) updateData.mentor_certifications = body.mentorCertifications;
+      if (body.mentorYearsExperience !== undefined) updateData.mentor_years_experience = body.mentorYearsExperience;
+      if (body.mentorHasFreeTrial !== undefined) updateData.mentor_has_free_trial = body.mentorHasFreeTrial;
+      if (body.mentorRating !== undefined) updateData.mentor_rating = body.mentorRating;
+      if (body.mentorReviewCount !== undefined) updateData.mentor_review_count = body.mentorReviewCount;
+      if (body.mentorAiVoiceTone !== undefined) updateData.mentor_ai_voice_tone = body.mentorAiVoiceTone;
+      if (body.mentorAiKnowledgeBaseFileIds !== undefined) updateData.mentor_ai_kb_file_ids = body.mentorAiKnowledgeBaseFileIds;
+      if (body.mentorAiTrainingPhilosophy !== undefined) updateData.mentor_ai_training_philosophy = body.mentorAiTrainingPhilosophy;
+      if (body.mentorAiNutritionPhilosophy !== undefined) updateData.mentor_ai_nutrition_philosophy = body.mentorAiNutritionPhilosophy;
+      if (body.mentorAiMacroApproach !== undefined) updateData.mentor_ai_macro_approach = body.mentorAiMacroApproach;
+      if (body.mentorAiDietaryNotes !== undefined) updateData.mentor_ai_dietary_notes = body.mentorAiDietaryNotes;
+      if (body.youtubeLink !== undefined) updateData.youtube_link = body.youtubeLink;
+      if (body.instagramLink !== undefined) updateData.instagram_link = body.instagramLink;
+      if (body.tiktokLink !== undefined) updateData.tiktok_link = body.tiktokLink;
+      if (body.facebookLink !== undefined) updateData.facebook_link = body.facebookLink;
 
-      // If password change requested, require and verify currentPassword
-      if (updateData.password) {
-        const currentPassword = (req.body as any)?.currentPassword as string | undefined;
-        // Fetch fresh user to compare hash (and to detect first-time password set during onboarding)
-        const dbUser = await User.findById(user.id).select("password hasPersonalInfo userName");
-        const hasExistingPassword = Boolean(dbUser?.password);
-        const isOnboarding = !dbUser?.hasPersonalInfo || !dbUser?.userName;
-
-        // If the user already has a password, require currentPassword to change it,
-        // except during onboarding where we allow setting the initial password.
-        if (hasExistingPassword && !isOnboarding) {
-          if (!currentPassword) {
-            return res.status(400).json({ error: { message: "CURRENT_PASSWORD_REQUIRED" } });
-          }
-          if (!compareSync(currentPassword, dbUser!.password as any)) {
-            return res.status(400).json({ error: { message: "CURRENT_PASSWORD_INVALID" } });
-          }
+      // If password change, update via Supabase Auth
+      if (body.password && user.auth_id) {
+        const { error: pwError } =
+          await supabaseAdmin.auth.admin.updateUserById(user.auth_id, {
+            password: body.password,
+          });
+        if (pwError) {
+          return res
+            .status(400)
+            .json({ error: { message: "Failed to update password" } });
         }
-        const salt = genSaltSync(10);
-        updateData.password = hashSync(updateData.password, salt);
-        // Do not log sensitive data
-      }
-      const updatedUser = await User.findByIdAndUpdate(user.id, updateData, {
-        new: true,
-      });
-
-      if (updatedUser?.photoId) {
-        updatedUser.hasPhotoInfo = true;
-        await updatedUser.save();
       }
 
-      if (!updatedUser) {
+      // If photo set, mark hasPhotoInfo
+      if (body.photoId) {
+        updateData.has_photo_info = true;
+      }
+
+      const { data: updatedUser, error } = await supabaseAdmin
+        .from("users")
+        .update(updateData)
+        .eq("id", user.id)
+        .select("*")
+        .single();
+
+      if (error || !updatedUser) {
         return res.status(404).json({ error: "User not found" });
       }
 
       return res.json({
-        data: updatedUser,
+        data: toUserPayload(updatedUser),
         message: "User updated successfully",
       });
     } catch (error) {
-      console.error("Error in user Updation", error);
+      console.error("Error in user update:", error);
       return res.status(500).json({ error: "Something went wrong" });
     }
   };
 
   /**
-   * Handle mixed login flows: OTP-based phone auth or password login.
+   * Check if a user exists by email/phone.
    */
-  static userLogin = async (req: Request, res: Response): Promise<Response> => {
+  static checkUser = async (
+    req: Request,
+    res: Response,
+  ): Promise<Response> => {
     try {
-      const { email, username, phoneNumber, password, dialCode } = req.body || {};
+      const { email, phoneNumber, dialCode } = req.body;
+      const completePhone = `${dialCode}--${phoneNumber}`;
 
-      // Branch A: Phone-only initiation (no password) → generate OTP (signup/OTP login flow)
-      if (!password && (phoneNumber || email || username)) {
-        // Normalize phone from either "dial--num", "country--dial--num", or separate dialCode/phoneNumber
-        let dial = '';
-        let num = '';
-        if (typeof phoneNumber === 'string' && phoneNumber.includes('--')) {
-          const parts = phoneNumber.split('--');
-          if (parts.length === 2) {
-            dial = String(parts[0] || '').replace(/^\+/, '').replace(/\s+/g, '');
-            num = String(parts[1] || '').replace(/\s+/g, '');
-          } else if (parts.length === 3) {
-            dial = String(parts[1] || '').replace(/^\+/, '').replace(/\s+/g, '');
-            num = String(parts[2] || '').replace(/\s+/g, '');
-          }
-        } else if (phoneNumber && dialCode) {
-          dial = String(dialCode || '').replace(/^\+/, '').replace(/\s+/g, '');
-          num = String(phoneNumber || '').replace(/\s+/g, '');
-        }
-        if (!dial || !num) {
-          return res.status(422).json({ message: 'dialCode and phoneNumber are required' });
-        }
+      const { data: user } = await supabaseAdmin
+        .from("users")
+        .select("id")
+        .or(`email.eq.${email},complete_phone_number.eq.${completePhone}`)
+        .limit(1)
+        .maybeSingle();
 
-        // Find or create user by phone with atomic upsert
-        const orQuery: any[] = [
-          { completePhoneNumber: `${dial}--${num}` },
-          { $and: [{ dialCode: dial }, { phoneNumber: num }] },
-        ];
-        const user = await User.findOneAndUpdate(
-          { isDeleted: false, $or: orQuery },
-          {
-            $setOnInsert: {
-              firstName: '',
-              lastName: '',
-              email: email || undefined,
-              dialCode: dial,
-              phoneNumber: num,
-              role: RolesEnum.USER,
-              isActive: true,
-              isVerified: false,
-            },
-          },
-          { upsert: true, new: true }
-        );
-
-        const otp = otpGenerator();
-        const otpInvalidAt = addMinutes(new Date(), 10);
-        await User.findByIdAndUpdate(user._id, { otp: String(otp), otpInvalidAt });
-
-        // Send OTP (dev: also return it in response for easy verification)
-        try {
-          await sendMessage(`${dial}--${num}`, `Your OTP is: ${otp}`);
-        } catch (e) {
-          // ignore SMS errors in dev
-        }
-
-        return res.status(200).json({
-          data: { _id: user._id, dialCode: dial, phoneNumber: num, otp },
-          message: 'OTP sent successfully',
-        });
+      if (user) {
+        return res.json({ data: { message: "User exist." } });
       }
-
-      // Accept both formats: "<dialCode>--<number>" and "<country>--<dialCode>--<number>"
-      const orClauses: any[] = [];
-      if (email) orClauses.push({ email });
-      if (username) orClauses.push({ userName: username });
-
-      if (typeof phoneNumber === "string" && phoneNumber.includes("--")) {
-        const esc = (s: string) => s.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
-        const parts = phoneNumber.split("--");
-        if (parts.length === 2) {
-          const [rawDial, rawNum] = parts;
-          const dial = String(rawDial || "").replace(/^\+/, "").replace(/\s+/g, "");
-          const num = String(rawNum || "").replace(/\s+/g, "");
-          // Try exact two-part match and a regex that matches stored three-part format
-          orClauses.push({ completePhoneNumber: `${dial}--${num}` });
-          orClauses.push({
-            completePhoneNumber: {
-              // Some legacy data stored dialCode with a leading '+' (e.g. "NO--+47--48290380")
-              $regex: new RegExp(`^[A-Za-z]{2}--\\+?${esc(dial)}--${esc(num)}$`, "i"),
-            },
-          });
-          // Also allow direct match on separate fields
-          orClauses.push({ $and: [{ dialCode: dial }, { phoneNumber: num }] });
-          orClauses.push({ $and: [{ dialCode: `+${dial}` }, { phoneNumber: num }] });
-        } else {
-          // Already three-part; try exact match
-          const [, rawDial3, rawNum3] = parts as any;
-          const dial3 = String(rawDial3 || "").replace(/^\+/, "").replace(/\s+/g, "");
-          const num3 = String(rawNum3 || "").replace(/\s+/g, "");
-          orClauses.push({ completePhoneNumber: `${dial3}--${num3}` });
-          orClauses.push({ $and: [{ dialCode: dial3 }, { phoneNumber: num3 }] });
-          orClauses.push({ $and: [{ dialCode: `+${dial3}` }, { phoneNumber: num3 }] });
-        }
-      } else if (phoneNumber && dialCode) {
-        // Support legacy frontend payload: { dialCode: "47", phoneNumber: "48290380", password }
-        // (Earlier code accidentally only supported phoneNumber strings containing "--".)
-        const esc = (s: string) => s.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
-        const dial = String(dialCode || "").replace(/^\+/, "").replace(/\s+/g, "");
-        const num = String(phoneNumber || "").replace(/\s+/g, "");
-        if (dial && num) {
-          orClauses.push({ completePhoneNumber: `${dial}--${num}` });
-          orClauses.push({
-            completePhoneNumber: {
-              $regex: new RegExp(`^[A-Za-z]{2}--\\+?${esc(dial)}--${esc(num)}$`, "i"),
-            },
-          });
-          orClauses.push({ $and: [{ dialCode: dial }, { phoneNumber: num }] });
-          orClauses.push({ $and: [{ dialCode: `+${dial}` }, { phoneNumber: num }] });
-        }
-      }
-
-      const user = await User.findOne({
-        ...(orClauses.length ? { $or: orClauses } : {}),
-        isDeleted: false,
-      });
-
-      // SECURITY: Account lockout — check if the account is currently locked
-      if (user?.lockUntil && new Date(user.lockUntil) > new Date()) {
-        const remainingMin = Math.ceil((new Date(user.lockUntil).getTime() - Date.now()) / 60000);
-        return res.status(423).json({
-          message: `Account is temporarily locked. Try again in ${remainingMin} minute(s).`,
-          code: 'ACCOUNT_LOCKED',
-        });
-      }
-
-      if (!user || !user.password || !compareSync(password, user.password)) {
-        // SECURITY: Increment failed login attempts
-        if (user) {
-          const MAX_ATTEMPTS = 5;
-          const LOCK_DURATION_MIN = 15;
-          const attempts = (user.loginAttempts || 0) + 1;
-          const update: any = { loginAttempts: attempts };
-          if (attempts >= MAX_ATTEMPTS) {
-            update.lockUntil = addMinutes(new Date(), LOCK_DURATION_MIN);
-          }
-          await User.findByIdAndUpdate(user._id, update);
-          if (attempts >= MAX_ATTEMPTS) {
-            return res.status(423).json({
-              message: `Too many failed attempts. Account locked for ${LOCK_DURATION_MIN} minutes.`,
-              code: 'ACCOUNT_LOCKED',
-            });
-          }
-        }
-        return res.status(400).json({ message: "Invalid login credentials" });
-      }
-
-      // SECURITY: Reset failed login attempts on successful login
-      if (user.loginAttempts && user.loginAttempts > 0) {
-        await User.findByIdAndUpdate(user._id, { loginAttempts: 0, lockUntil: null });
-      }
-
-      const adminEmails = getAdminEmailSet();
-      const userEmail = String(user.email || "").toLowerCase();
-      if (adminEmails.size > 0 && adminEmails.has(userEmail) && user.role !== RolesEnum.ADMIN) {
-        user.role = RolesEnum.ADMIN;
-        await user.save();
-      }
-
-      // @ts-ignore
-      req.session.user = {
-        id: user._id,
-        email: user.email,
-        role: user.role,
-      };
-
-      const { accessToken } = setAuthCookies(res, user as unknown as UserInterface);
-
-      return res.json({
-        message: "User login successfully",
-        token: accessToken,
-        user: {
-          id: user._id,
-          name: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim(),
-          email: user.email,
-          role: user.role,
-          userName: user.userName,
-        },
-      });
-    } catch (error) {
-      const msg = (error as any)?.message || String(error);
-      console.error('[auth:user-login] failed', msg);
-      // Always return the error message during debugging so we can see the exact cause
-      return res.status(500).json({ message: msg });
-    }
-  };
-
-  /**
-   * Check whether a user exists by email/phone.
-   */
-  static checkUser = async (req: Request, res: Response): Promise<Response> => {
-    const input = req.body;
-    const userInput = new CheckUserInput();
-
-    userInput.email = input.email;
-    userInput.phoneNumber = input.phoneNumber;
-    userInput.dialCode = input.dialCode;
-    userInput.country = input.country;
-
-    const errors = await validate(userInput);
-
-    if (errors.length) {
-      const errorsInfo: ValidationErrorResponse[] = errors.map((error) => ({
-        property: error.property,
-        constraints: error.constraints,
-      }));
-
-      return res.status(400).json({
-        error: { message: "VALIDATIONS_ERROR", info: { errorsInfo } },
-      });
-    }
-    const user = await User.findOne({
-      $or: [
-        { email: input.email },
-        {
-          completePhoneNumber: `${input.country}--${input.dialCode}--${input.phoneNumber}`,
-        },
-      ],
-    });
-    if (user) {
-      return res.json({ data: { message: "User exist." } });
-    } else {
       return res
         .status(400)
         .json({ data: { message: "User does not exist." } });
-    }
-  };
-
-  /**
-   * Verify OTP and issue auth token for the user.
-   */
-  static verifyOtp = async (req: Request, res: Response): Promise<Response> => {
-    try {
-      const { id, otp } = req.body;
-      const otpInput = new OTPInput();
-
-      otpInput.id = id;
-      otpInput.otp = otp;
-
-      const errors = await validate(otpInput);
-
-      if (errors.length) {
-        const errorsInfo: ValidationErrorResponse[] = errors.map((error) => ({
-          property: error.property,
-          constraints: error.constraints,
-        }));
-
-        return res
-          .status(400)
-          .json({ error: { message: "VALIDATIONS_ERROR", info: errorsInfo } });
-      }
-
-      const objectId = otpInput.id;
-
-      const user = await User.findById(objectId);
-      if (!user) {
-        return res.status(400).json({ error: { message: "User not found" } });
-      }
-
-      if (user.otp != otp || compareAsc(new Date(), user.otpInvalidAt) === 1) {
-        return res.status(400).json({ data: { message: "otp is invalid" } });
-      }
-
-      const updatedUser = (await User.findByIdAndUpdate(
-        objectId,
-        { isVerified: true, verifiedAt: new Date(), otp: "" },
-        { new: true }
-      )) as UserInterface;
-
-      const { accessToken } = setAuthCookies(res, updatedUser);
-
-      return res.json({
-        data: {
-          ...updatedUser.toObject(),
-          token: accessToken,
-        },
-        message: "User verified succesfully",
-      });
     } catch (error) {
       return res
         .status(500)
@@ -660,354 +939,196 @@ class AuthController {
   };
 
   /**
-   * Fetch the authenticated user's profile with counts and subscription details.
+   * Fetch the authenticated user's profile with counts.
    */
   static me = async (req: Request, res: Response): Promise<Response> => {
-    const user = req.user as UserInterface | undefined;
     try {
+      const user = req.user as any;
       if (!user?.id) {
-        return res.status(401).json({ error: { message: "Unauthorized" } });
+        return res
+          .status(401)
+          .json({ error: { message: "Unauthorized" } });
       }
-      const userId = new mongoose.Types.ObjectId(user.id);
 
-      const [result] = await User.aggregate([
-        { $match: { _id: userId } },
-        {
-          $lookup: {
-            from: "files",
-            localField: "photoId",
-            foreignField: "_id",
-            as: "photo",
-          },
-        },
-        {
-          $addFields: {
-            photo: {
-              $cond: {
-                if: { $eq: [{ $size: "$photo" }, 0] },
-                then: null,
-                else: { $arrayElemAt: ["$photo", 0] },
-              },
-            },
-          },
-        },
-        {
-          $lookup: {
-            from: "files",
-            localField: "coverPhotoId",
-            foreignField: "_id",
-            as: "coverPhoto",
-          },
-        },
-        {
-          $addFields: {
-            coverPhoto: {
-              $cond: {
-                if: { $eq: [{ $size: "$coverPhoto" }, 0] },
-                then: null,
-                else: { $arrayElemAt: ["$coverPhoto", 0] },
-              },
-            },
-          },
-        },
-        {
-          $lookup: {
-            from: "subscriptionplans",
-            localField: "_id",
-            foreignField: "userId",
-            as: "subscriptionPlans",
-          },
-        },
-        {
-          $addFields: {
-            subscriptionPlans: {
-              $filter: {
-                input: "$subscriptionPlans",
-                as: "plan",
-                cond: {
-                  $and: [
-                    { $eq: ["$$plan.isDeleted", false] },
-                    {
-                      $or: [
-                        {
-                          $eq: ["$$plan.planType", SubscriptionPlanType.CUSTOM],
-                        },
-                        {
-                          $eq: ["$$plan.planType", SubscriptionPlanType.FIXED],
-                        },
-                      ],
-                    },
-                  ],
-                },
-              },
-            },
-          },
-        },
-        {
-          $facet: {
-            user: [{ $limit: 1 }],
-            followersCount: [
-              {
-                $lookup: {
-                  from: "userconnections",
-                  let: { userId: "$_id" },
-                  pipeline: [
-                    {
-                      $match: { $expr: { $eq: ["$followingTo", "$$userId"] } },
-                    },
-                    { $count: "count" },
-                  ],
-                  as: "followers",
-                },
-              },
-              {
-                $addFields: {
-                  count: { $arrayElemAt: ["$followers.count", 0] },
-                },
-              },
-            ],
-            followingCount: [
-              {
-                $lookup: {
-                  from: "userconnections",
-                  let: { userId: "$_id" },
-                  pipeline: [
-                    { $match: { $expr: { $eq: ["$owner", "$$userId"] } } },
-                    { $count: "count" },
-                  ],
-                  as: "following",
-                },
-              },
-              {
-                $addFields: {
-                  count: { $arrayElemAt: ["$following.count", 0] },
-                },
-              },
-            ],
-            postsCount: [
-              {
-                $lookup: {
-                  from: "posts",
-                  let: { userId: "$_id" },
-                  pipeline: [
-                    {
-                      $match: {
-                        $expr: {
-                          $and: [
-                            { $eq: ["$user", "$$userId"] },
-                            { $eq: ["$isDeleted", false] },
-                            { $eq: ["$type", PostType.POST] },
-                          ],
-                        },
-                      },
-                    },
-                    { $count: "count" },
-                  ],
-                  as: "posts",
-                },
-              },
-              {
-                $addFields: {
-                  count: { $arrayElemAt: ["$posts.count", 0] },
-                },
-              },
-            ],
-            likesCount: [
-              {
-                $lookup: {
-                  from: "posts",
-                  let: { userId: "$_id" },
-                  pipeline: [
-                    { $match: { $expr: { $eq: ["$user", "$$userId"] } } },
-                    { $project: { _id: 1 } },
-                  ],
-                  as: "userPosts",
-                },
-              },
-              { $unwind: "$userPosts" },
-              {
-                $lookup: {
-                  from: "interactions",
-                  let: { postId: "$userPosts._id" },
-                  pipeline: [
-                    {
-                      $match: {
-                        $expr: {
-                          $and: [
-                            { $eq: ["$post", "$$postId"] },
-                            { $eq: ["$type", InteractionType.LIKE_POST] },
-                          ],
-                        },
-                      },
-                    },
-                    { $count: "count" },
-                  ],
-                  as: "likes",
-                },
-              },
-              {
-                $group: {
-                  _id: null,
-                  totalLikes: { $sum: { $arrayElemAt: ["$likes.count", 0] } },
-                },
-              },
-              {
-                $addFields: {
-                  totalLikes: { $ifNull: ["$totalLikes", 0] },
-                },
-              },
-            ],
-            subscriberCount: [
-              {
-                $lookup: {
-                  from: "subscriptions",
-                  let: { planIds: "$subscriptionPlans._id" },
-                  pipeline: [
-                    {
-                      $match: {
-                        $expr: {
-                          $and: [
-                            { $in: ["$planId", "$$planIds"] },
-                            { $eq: ["$status", SubscriptionStatusEnum.ACTIVE] },
-                          ],
-                        },
-                      },
-                    },
-                    { $count: "count" },
-                  ],
-                  as: "subscribers",
-                },
-              },
-              {
-                $addFields: {
-                  count: { $arrayElemAt: ["$subscribers.count", 0] },
-                },
-              },
-            ],
-          },
-        },
-        {
-          $project: {
-            user: { $arrayElemAt: ["$user", 0] },
-            followersCount: {
-              $ifNull: [{ $arrayElemAt: ["$followersCount.count", 0] }, 0],
-            },
-            followingCount: {
-              $ifNull: [{ $arrayElemAt: ["$followingCount.count", 0] }, 0],
-            },
-            postsCount: {
-              $ifNull: [{ $arrayElemAt: ["$postsCount.count", 0] }, 0],
-            },
-            totalLikes: {
-              $ifNull: [{ $arrayElemAt: ["$likesCount.totalLikes", 0] }, 0],
-            },
-            subscriberCount: {
-              $ifNull: [{ $arrayElemAt: ["$subscriberCount.count", 0] }, 0],
-            },
-          },
-        },
+      // Get user with photo joins
+      const { data: userRow, error: userError } = await supabaseAdmin
+        .from("users")
+        .select("*")
+        .eq("id", user.id)
+        .single();
+
+      if (userError || !userRow) {
+        return res
+          .status(404)
+          .json({ error: { message: "User not found." } });
+      }
+
+      // Get photo
+      let photo = null;
+      if (userRow.photo_id) {
+        const { data } = await supabaseAdmin
+          .from("files")
+          .select("*")
+          .eq("id", userRow.photo_id)
+          .single();
+        photo = data;
+      }
+
+      // Get cover photo
+      let coverPhoto = null;
+      if (userRow.cover_photo_id) {
+        const { data } = await supabaseAdmin
+          .from("files")
+          .select("*")
+          .eq("id", userRow.cover_photo_id)
+          .single();
+        coverPhoto = data;
+      }
+
+      // Counts (using Supabase RPC or direct queries)
+      const [
+        followersResult,
+        followingResult,
+        postsResult,
+      ] = await Promise.all([
+        supabaseAdmin
+          .from("user_connections")
+          .select("id", { count: "exact", head: true })
+          .eq("following_to", user.id),
+        supabaseAdmin
+          .from("user_connections")
+          .select("id", { count: "exact", head: true })
+          .eq("owner", user.id),
+        supabaseAdmin
+          .from("posts")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("is_deleted", false)
+          .eq("type", "POST"),
       ]);
 
-      // get the user platform subscription
-      const paidPlanId = (process.env.PLATFORM_SUBSCRIPTION_PLAN_ID || '67648382f267d99e0dc8de11').trim();
-      const freePlanId = (process.env.PLATFORM_FREE_SUBSCRIPTION_PLAN_ID || '678a0764e01be7cfa52b9a9c').trim() || paidPlanId;
-      const planId = user?.isFreeSubscription ? freePlanId : paidPlanId;
-      const subscriptionDetails = await Subscription.findOne({
-        userId: user.id,
-        planId: planId, //same $20 plan used for all users.
-      }).select("-stripeSubscriptionObject");
+      const followersCount = followersResult.count || 0;
+      const followingCount = followingResult.count || 0;
+      const postsCount = postsResult.count || 0;
 
-      if (result && result.user) {
-        const userDoc: any = Array.isArray((result as any).user)
-          ? (result as any).user[0]
-          : (result as any).user;
-        const followersCount = Array.isArray((result as any).followersCount)
-          ? ((result as any).followersCount[0]?.count || 0)
-          : 0;
-        const followingCount = Array.isArray((result as any).followingCount)
-          ? ((result as any).followingCount[0]?.count || 0)
-          : 0;
-        const postsCount = Array.isArray((result as any).postsCount)
-          ? ((result as any).postsCount[0]?.count || 0)
-          : 0;
-        const totalLikes = Array.isArray((result as any).likesCount)
-          ? ((result as any).likesCount[0]?.totalLikes || 0)
-          : 0;
-        const subscriberCount = Array.isArray((result as any).subscriberCount)
-          ? ((result as any).subscriberCount[0]?.count || 0)
-          : 0;
+      // Get likes count
+      const { data: userPosts } = await supabaseAdmin
+        .from("posts")
+        .select("id")
+        .eq("user_id", user.id);
 
-        // Preserve legacy shape (data.user = {...}) to avoid breaking existing clients,
-        // but also expose useful fields at top-level for convenience
-        const payload: any = {
-          user: userDoc || {},
-          followersCount,
-          followingCount,
-          postsCount,
-          totalLikes,
-          subscriberCount,
-          platformSubscription: subscriptionDetails,
-        };
-        // duplicate some common fields at top level for clients that read data.fullName/userName/photo
-        if (userDoc) {
-          payload._id = userDoc._id;
-          payload.fullName = userDoc.fullName;
-          payload.userName = userDoc.userName;
-          payload.email = userDoc.email;
-          payload.photo = userDoc.photo;
-          payload.coverPhoto = userDoc.coverPhoto;
-          payload.googleId = userDoc.googleId;
-          payload.isMentor = Boolean(userDoc.isMentor);
-          payload.role = userDoc.role;
-        }
-        return res.json({ data: payload });
+      let totalLikes = 0;
+      if (userPosts && userPosts.length > 0) {
+        const postIds = userPosts.map((p: any) => p.id);
+        const { count } = await supabaseAdmin
+          .from("interactions")
+          .select("id", { count: "exact", head: true })
+          .in("post_id", postIds)
+          .eq("type", "LIKE_POST");
+        totalLikes = count || 0;
       }
 
-      return res.status(404).json({ error: { message: "User not found." } });
+      // Subscription plans
+      const { data: subPlans } = await supabaseAdmin
+        .from("subscription_plans")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("is_deleted", false)
+        .in("plan_type", ["CUSTOM", "FIXED"]);
+
+      // Subscriber count
+      let subscriberCount = 0;
+      if (subPlans && subPlans.length > 0) {
+        const planIds = subPlans.map((p: any) => p.id);
+        const { count } = await supabaseAdmin
+          .from("subscriptions")
+          .select("id", { count: "exact", head: true })
+          .in("plan_id", planIds)
+          .eq("status", "ACTIVE");
+        subscriberCount = count || 0;
+      }
+
+      // Platform subscription
+      const paidPlanId = (
+        process.env.PLATFORM_SUBSCRIPTION_PLAN_ID || ""
+      ).trim();
+      const freePlanId = (
+        process.env.PLATFORM_FREE_SUBSCRIPTION_PLAN_ID || ""
+      ).trim();
+      const planId = userRow.is_free_subscription
+        ? freePlanId || paidPlanId
+        : paidPlanId;
+
+      let platformSubscription = null;
+      if (planId) {
+        const { data } = await supabaseAdmin
+          .from("subscriptions")
+          .select("id, user_id, plan_id, stripe_subscription_id, stripe_price_id, status, start_date, end_date, created_at, updated_at")
+          .eq("user_id", user.id)
+          .eq("plan_id", planId)
+          .limit(1)
+          .maybeSingle();
+        platformSubscription = data;
+      }
+
+      // Build legacy-compatible payload
+      const userPayload = toUserPayload(userRow);
+      const payload: any = {
+        user: { ...userPayload, photo, coverPhoto },
+        followersCount,
+        followingCount,
+        postsCount,
+        totalLikes,
+        subscriberCount,
+        platformSubscription,
+        // Top-level convenience fields (must mirror what frontend middleware checks)
+        _id: userRow.id,
+        fullName: userRow.full_name,
+        userName: userRow.user_name,
+        email: userRow.email,
+        photo,
+        coverPhoto,
+        photoId: userRow.photo_id,
+        coverPhotoId: userRow.cover_photo_id,
+        googleId: userRow.google_id,
+        isMentor: Boolean(userRow.is_mentor),
+        role: userRow.role,
+        hasPersonalInfo: Boolean(userRow.has_personal_info),
+        hasPhotoInfo: Boolean(userRow.has_photo_info),
+        hasConfirmedAge: Boolean(userRow.has_confirmed_age),
+        hasSelectedInterest: Boolean(userRow.has_selected_interest),
+        hasDocumentUploaded: Boolean(userRow.has_document_uploaded),
+        hasDocumentVerified: Boolean(userRow.has_document_verified),
+      };
+
+      return res.json({ data: payload });
     } catch (err) {
-      console.error(err, "error in retrievng user");
+      console.error(err, "error in retrieving user");
       return res
         .status(500)
         .json({ error: { message: "Something went wrong." } });
     }
   };
 
-  //Below forget password apis
   /**
-   * Send OTP to user's phone for password reset.
+   * Send OTP for password reset.
    */
   static sendForgotPasswordOtp = async (
     req: Request,
-    res: Response
+    res: Response,
   ): Promise<Response> => {
     try {
-      // Validate input using DTO
-      const userInput = plainToClass(UserForgotPasswordDto, req.body);
-      const errors = await validate(userInput);
+      const { dialCode, phoneNumber } = req.body;
+      const completePhone = `${dialCode}--${phoneNumber}`;
 
-      if (errors.length) {
-        const errorsInfo: ValidationErrorResponse[] = errors.map((error) => ({
-          property: error.property,
-          constraints: error.constraints,
-        }));
+      const { data: user } = await supabaseAdmin
+        .from("users")
+        .select("*")
+        .eq("is_deleted", false)
+        .or(`complete_phone_number.eq.${completePhone},and(dial_code.eq.${dialCode},phone_number.eq.${phoneNumber})`)
+        .limit(1)
+        .maybeSingle();
 
-        return res
-          .status(400)
-          .json({ error: { message: "VALIDATIONS_ERROR", info: errorsInfo } });
-      }
-
-      // Check if the user exists
-      // Support both two-part and three-part stored formats
-      const dial = String(userInput.dialCode || '');
-      const num = String(userInput.phoneNumber || '');
-      const threePartRegex = new RegExp(`^[A-Za-z]{2}--${dial.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}--${num.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, 'i');
-      const user = await User.findOne({
-        isDeleted: false,
-        $or: [
-          { completePhoneNumber: `${dial}--${num}` },
-          { completePhoneNumber: { $regex: threePartRegex } },
-        ],
-      });
       if (!user) {
         return res.status(404).json({
           status: false,
@@ -1015,21 +1136,17 @@ class AuthController {
         });
       }
 
-      // Generate OTP and update user
       const otp = otpGenerator();
-      const otpInvalidAt = addMinutes(new Date(), 10);
+      const otpInvalidAt = addMinutes(new Date(), 10).toISOString();
 
-      const updatedData = {
-        otp,
-        otpInvalidAt,
-      };
+      await supabaseAdmin
+        .from("users")
+        .update({ otp: String(otp), otp_invalid_at: otpInvalidAt })
+        .eq("id", user.id);
 
-      await User.findByIdAndUpdate(user.id, updatedData, { new: true });
-
-      // Send OTP via SMS
       await sendMessage(
-        `${dial}--${num}`,
-        `Your OTP for password reset is: ${otp}`
+        `${dialCode}--${phoneNumber}`,
+        `Your OTP for password reset is: ${otp}`,
       );
 
       return res.status(200).json({
@@ -1039,23 +1156,19 @@ class AuthController {
       });
     } catch (error) {
       console.error("Error in sending OTP:", error);
-      return res.status(500).json({
-        status: false,
-        message: "Failed to send OTP.",
-      });
+      return res.status(500).json({ status: false, message: "Failed to send OTP." });
     }
   };
 
   /**
-   * Validate OTP for password reset flow.
+   * Validate OTP for password reset.
    */
   static validateForgotPasswordOtp = async (
     req: Request,
-    res: Response
+    res: Response,
   ): Promise<Response> => {
     try {
       const { dialCode, phoneNumber, otp } = req.body;
-
       if (!dialCode || !phoneNumber || !otp) {
         return res.status(400).json({
           status: false,
@@ -1063,14 +1176,14 @@ class AuthController {
         });
       }
 
-      const threePartRegex = new RegExp(`^[A-Za-z]{2}--${String(dialCode || '').replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}--${String(phoneNumber || '').replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, 'i');
-      const user = await User.findOne({
-        isDeleted: false,
-        $or: [
-          { completePhoneNumber: `${dialCode}--${phoneNumber}` },
-          { completePhoneNumber: { $regex: threePartRegex } },
-        ],
-      });
+      const completePhone = `${dialCode}--${phoneNumber}`;
+      const { data: user } = await supabaseAdmin
+        .from("users")
+        .select("*")
+        .eq("is_deleted", false)
+        .or(`complete_phone_number.eq.${completePhone},and(dial_code.eq.${dialCode},phone_number.eq.${phoneNumber})`)
+        .limit(1)
+        .maybeSingle();
 
       if (!user) {
         return res.status(404).json({
@@ -1079,88 +1192,74 @@ class AuthController {
         });
       }
 
-      if (!user.otp || user.otp !== otp.toString()) {
-        return res.status(400).json({
-          status: false,
-          message: "Invalid OTP.",
-        });
+      if (!user.otp || user.otp !== String(otp)) {
+        return res.status(400).json({ status: false, message: "Invalid OTP." });
       }
 
-      if (new Date() > user.otpInvalidAt) {
-        return res.status(400).json({
-          status: false,
-          message: "OTP has expired.",
-        });
+      if (user.otp_invalid_at && new Date() > new Date(user.otp_invalid_at)) {
+        return res
+          .status(400)
+          .json({ status: false, message: "OTP has expired." });
       }
 
       return res.status(200).json({
         status: true,
         message: "OTP validated successfully.",
-        user: user,
+        user: toUserPayload(user),
       });
     } catch (error) {
       console.error("Error in validating OTP:", error);
-      return res.status(500).json({
-        status: false,
-        message: "Failed to validate OTP.",
-        error: error.message,
-      });
+      return res.status(500).json({ status: false, message: "Failed to validate OTP." });
     }
   };
 
   /**
-   * Reset user password after OTP validation.
+   * Reset user password.
    */
   static resetPassword = async (
     req: Request,
-    res: Response
+    res: Response,
   ): Promise<Response> => {
     try {
       const { dialCode, phoneNumber, newPassword, confirmPassword } = req.body;
 
-      // Validate required fields
       if (!dialCode || !phoneNumber || !newPassword || !confirmPassword) {
         return res.status(400).json({
-          message:
-            "Dial code, phone number, new password, and confirm password are required.",
+          message: "All fields are required.",
         });
       }
 
-      // Check if passwords match
       if (newPassword !== confirmPassword) {
         return res
           .status(400)
-          .json({ message: "New password and confirm password do not match." });
+          .json({ message: "Passwords do not match." });
       }
 
-      const threePartRegex = new RegExp(`^[A-Za-z]{2}--${String(dialCode || '').replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}--${String(phoneNumber || '').replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}$`, 'i');
-      const user = await User.findOne({
-        isDeleted: false,
-        $or: [
-          { completePhoneNumber: `${dialCode}--${phoneNumber}` },
-          { completePhoneNumber: { $regex: threePartRegex } },
-        ],
-      });
+      const completePhone = `${dialCode}--${phoneNumber}`;
+      const { data: user } = await supabaseAdmin
+        .from("users")
+        .select("*")
+        .eq("is_deleted", false)
+        .or(`complete_phone_number.eq.${completePhone},and(dial_code.eq.${dialCode},phone_number.eq.${phoneNumber})`)
+        .limit(1)
+        .maybeSingle();
 
-      // Check if the user exists
       if (!user) {
-        return res
-          .status(404)
-          .json({ message: "User not found with this phone number." });
+        return res.status(404).json({ message: "User not found." });
       }
 
-      const salt = genSaltSync(10);
-      const password = newPassword;
-      const hashPassword = hashSync(password, salt);
-      await User.findOneAndUpdate(
-        { _id: user._id, isDeleted: false },
-        {
-          password: hashPassword,
-        },
-        {
-          new: true,
+      // Update password via Supabase Auth
+      if (user.auth_id) {
+        const { error } = await supabaseAdmin.auth.admin.updateUserById(
+          user.auth_id,
+          { password: newPassword },
+        );
+        if (error) {
+          return res
+            .status(500)
+            .json({ message: "Failed to reset password." });
         }
-      );
+      }
 
       return res.status(200).json({ message: "Password reset successfully." });
     } catch (error) {
@@ -1168,61 +1267,66 @@ class AuthController {
       return res.status(500).json({ message: "Failed to reset password." });
     }
   };
+
   /**
-   * Refresh the access token using a valid refresh token from cookies.
+   * Refresh access token using Supabase refresh token.
    */
-  static refreshToken = async (req: Request, res: Response): Promise<Response> => {
+  static refreshToken = async (
+    req: Request,
+    res: Response,
+  ): Promise<Response> => {
     try {
-      // Extract refresh token from cookie
       let refreshToken: string | undefined;
-      if (typeof req.headers.cookie === 'string') {
-        const match = req.headers.cookie.split(';').map(s => s.trim()).find(c => c.startsWith('refresh_token='));
+
+      // Extract from cookie
+      if (typeof req.headers.cookie === "string") {
+        const match = req.headers.cookie
+          .split(";")
+          .map((s) => s.trim())
+          .find((c) => c.startsWith("refresh_token="));
         if (match) {
-          const raw = match.split('=').slice(1).join('=');
-          try { refreshToken = decodeURIComponent(raw); } catch { refreshToken = raw; }
-          if (refreshToken && refreshToken.includes(' ')) refreshToken = refreshToken.replace(/\s/g, '+');
+          const raw = match.split("=").slice(1).join("=");
+          try {
+            refreshToken = decodeURIComponent(raw);
+          } catch {
+            refreshToken = raw;
+          }
         }
       }
 
       if (!refreshToken) {
-        return res.status(401).json({ error: { message: 'No refresh token', code: 'NO_REFRESH_TOKEN' } });
+        return res.status(401).json({
+          error: { message: "No refresh token", code: "NO_REFRESH_TOKEN" },
+        });
       }
 
-      let payload: any;
-      try {
-        payload = verifyToken(refreshToken);
-      } catch (e) {
-        if (e instanceof TokenExpiredError) {
-          // Clear expired cookies so user must re-login
-          res.cookie('auth_token', '', { maxAge: 0, path: '/' });
-          res.cookie('refresh_token', '', { maxAge: 0, path: '/' });
-          return res.status(401).json({ error: { message: 'Refresh token expired', code: 'REFRESH_EXPIRED' } });
-        }
-        return res.status(401).json({ error: { message: 'Invalid refresh token', code: 'INVALID_REFRESH' } });
+      // Refresh via Supabase
+      const { data: session, error } =
+        await supabaseAdmin.auth.refreshSession({ refresh_token: refreshToken });
+
+      if (error || !session.session) {
+        // Clear cookies
+        res.cookie("auth_token", "", { maxAge: 0, path: "/" });
+        res.cookie("refresh_token", "", { maxAge: 0, path: "/" });
+        return res.status(401).json({
+          error: { message: "Refresh token expired", code: "REFRESH_EXPIRED" },
+        });
       }
 
-      // Must be a refresh token, not an access token
-      if (payload?.type !== 'refresh') {
-        return res.status(401).json({ error: { message: 'Invalid token type', code: 'INVALID_TOKEN_TYPE' } });
-      }
-
-      const user = await User.findById(payload.id);
-      if (!user || user.isDeleted || !user.isActive) {
-        return res.status(401).json({ error: { message: 'User not found or inactive' } });
-      }
-
-      // Issue a new access token (keep the same refresh token until it expires)
-      const newAccessToken = generateAccessToken(user as unknown as UserInterface);
-      try {
-        res.cookie('auth_token', newAccessToken, getCookieOptions(1000 * 60 * 15));
-      } catch {}
+      setAuthCookies(
+        res,
+        session.session.access_token,
+        session.session.refresh_token,
+      );
 
       return res.json({
-        message: 'Token refreshed',
-        token: newAccessToken,
+        message: "Token refreshed",
+        token: session.session.access_token,
       });
     } catch (error) {
-      return res.status(500).json({ error: { message: 'Something went wrong' } });
+      return res
+        .status(500)
+        .json({ error: { message: "Something went wrong" } });
     }
   };
 }

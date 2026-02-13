@@ -1,9 +1,7 @@
 import { Request, Response } from "express";
-import { SubscriptionPlan } from "../../../Models/SubscriptionPlan";
 import { UserInterface } from "../../../../types/UserInterface";
-import mongoose from "mongoose";
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
-import { Subscription } from "../../../Models/Subscription";
+import { findById, count, softDelete, Tables } from "../../../../lib/db";
 
 export const softDeleteSubscriptionPlan = async (
   req: Request,
@@ -13,14 +11,14 @@ export const softDeleteSubscriptionPlan = async (
     const user = req.user as UserInterface;
     const planId = req.params.id;
 
-    const subscriptionPlan = await SubscriptionPlan.findById(planId);
+    const subscriptionPlan = await findById(Tables.SUBSCRIPTION_PLANS, planId);
     if (!subscriptionPlan) {
       return res
         .status(404)
         .json({ error: { message: "Subscription plan not found." } });
     }
 
-    if (subscriptionPlan.userId.toString() !== user.id) {
+    if (subscriptionPlan.user_id !== user.id) {
       return res.status(403).json({
         error: {
           message:
@@ -29,35 +27,21 @@ export const softDeleteSubscriptionPlan = async (
       });
     }
 
-    const activeSubscriptions = await Subscription.aggregate([
-      {
-        $match: {
-          planId: new mongoose.Types.ObjectId(planId),
-          status: SubscriptionStatusEnum.ACTIVE,
-          endDate: { $gt: new Date() },
-        },
-      },
-      {
-        $count: "activeSubscriptionsCount",
-      },
-    ]);
+    const activeCount = await count(Tables.SUBSCRIPTIONS, {
+      plan_id: planId,
+      status: SubscriptionStatusEnum.ACTIVE,
+    });
 
-    if (
-      activeSubscriptions.length > 0 &&
-      activeSubscriptions[0].activeSubscriptionsCount > 0
-    ) {
+    if (activeCount > 0) {
       return res.status(400).json({
         error: { message: "Cannot delete plan with active subscribers." },
       });
     }
 
-    subscriptionPlan.isDeleted = true;
-    subscriptionPlan.deletedAt = new Date();
-
-    await subscriptionPlan.save();
+    await softDelete(Tables.SUBSCRIPTION_PLANS, planId);
 
     return res.json({
-      data: subscriptionPlan,
+      data: { ...subscriptionPlan, is_deleted: true },
       message: "Plan deleted successfully.",
     });
   } catch (err) {

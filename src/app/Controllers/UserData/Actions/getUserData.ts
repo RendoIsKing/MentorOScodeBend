@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { UserData } from "../../../Models/UserData";
+import { findMany, Tables } from "../../../../lib/db";
 import { UserInterface } from "../../../../types/UserInterface";
 
 export const getUserData = async (
@@ -8,12 +8,12 @@ export const getUserData = async (
 ): Promise<any> => {
   try {
     const user = req.user as UserInterface;
-    const requestedUserId = user._id;
+    const requestedUserId = (user as any).id || user._id;
 
-    const userDatasets: any = await UserData.find({
-      user: requestedUserId,
-      isExpired: false,
-    }).lean();
+    const userDatasets: any[] = await findMany(Tables.USER_DATA, {
+      user_id: requestedUserId,
+      is_expired: false,
+    });
 
     if (!userDatasets || userDatasets.length === 0) {
       return res
@@ -22,36 +22,33 @@ export const getUserData = async (
     }
 
     const userDataJson =
-      userDatasets.find((dataset: any) => dataset.fileFormat === "json") ||
+      userDatasets.find((dataset: any) => dataset.file_format === "json") ||
       null;
     const userDataText =
-      userDatasets.find((dataset: any) => dataset.fileFormat === "text") ||
+      userDatasets.find((dataset: any) => dataset.file_format === "text") ||
       null;
 
     const response = {
       userDataJson: userDataJson
         ? {
-            _id: userDataJson._id,
-            user: userDataJson.user,
+            _id: userDataJson.id,
+            user: userDataJson.user_id,
             ...userDataJson.data,
-            fileFormat: userDataJson.fileFormat,
-            downloadBefore: userDataJson.downloadBefore,
-            isExpired: userDataText?.isExpired,
-            requested_date: userDataJson.createdAt,
-            __v: userDataJson.__v,
+            fileFormat: userDataJson.file_format,
+            downloadBefore: userDataJson.download_before,
+            isExpired: userDataJson.is_expired,
+            requested_date: userDataJson.created_at,
           }
         : null,
       userDataText: userDataText
         ? {
-            _id: userDataText._id,
-            user: userDataText.user,
+            _id: userDataText.id,
+            user: userDataText.user_id,
             ...userDataText.data,
-            fileFormat: userDataText.fileFormat,
-            downloadBefore: userDataText.downloadBefore,
-            isExpired: userDataText?.isExpired,
-            requested_date: userDataText.createdAt,
-
-            __v: userDataText.__v,
+            fileFormat: userDataText.file_format,
+            downloadBefore: userDataText.download_before,
+            isExpired: userDataText.is_expired,
+            requested_date: userDataText.created_at,
           }
         : null,
     };
@@ -62,29 +59,3 @@ export const getUserData = async (
     res.status(500).json({ error: { message: "Something went wrong" } });
   }
 };
-
-// import { Request, Response } from "express";
-// import { UserInterface } from "../../../../types/UserInterface";
-// import { UserData } from "../../../Models/UserData";
-
-// export const getUserData = async (
-//   req: Request,
-//   res: Response
-// ): Promise<Response> => {
-//   const user = req.user as UserInterface;
-//   const userId = user.id;
-
-//   try {
-//     const userData = await UserData.find({ user: userId, isExpired: false });
-
-//     if (userData) {
-//       return res.json({ data: userData });
-//     }
-
-//     return res.status(404).json({ error: { message: "userData not found." } });
-//   } catch (err) {
-//     return res
-//       .status(500)
-//       .json({ error: { message: "Something went wrong." } });
-//   }
-// };

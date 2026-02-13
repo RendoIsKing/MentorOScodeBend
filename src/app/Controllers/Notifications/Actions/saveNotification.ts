@@ -1,14 +1,13 @@
-import { Types } from "mongoose";
 import { FirebaseNotificationEnum } from "../../../../types/enums/FirebaseNotificationEnum";
-import { Notification } from "../../../Models/Notification"; // Adjust the path as needed
+import { insertOne, Tables } from "../../../../lib/db";
 
 interface SaveNotificationInput {
   title: string;
   description: string;
   sentTo: string[];
   type: FirebaseNotificationEnum;
-  notificationOnPost: Types.ObjectId | null;
-  notificationFromUser: Types.ObjectId | null;
+  notificationOnPost: string | null;
+  notificationFromUser: string | null;
 }
 
 export const saveNotification = async (input: SaveNotificationInput) => {
@@ -21,14 +20,12 @@ export const saveNotification = async (input: SaveNotificationInput) => {
     notificationFromUser,
   } = input;
 
-  const notification = new Notification({
+  await insertOne(Tables.NOTIFICATIONS, {
     title,
     description,
-    sentTo,
+    sent_to: sentTo,
     type,
-    notificationOnPost,
-    notificationFromUser,
+    notification_on_post: notificationOnPost,
+    notification_from_user: notificationFromUser,
   });
-
-  await notification.save();
 };

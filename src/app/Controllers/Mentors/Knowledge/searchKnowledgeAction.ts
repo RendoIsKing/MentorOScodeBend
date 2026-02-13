@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
-import { Types } from "mongoose";
-import { CoachKnowledge } from "../../../Models/CoachKnowledge";
+import { rpc } from "../../../../lib/db";
 import { generateEmbedding } from "../../../../services/ai/embeddingService";
 
 export const searchKnowledgeAction = async (req: Request, res: Response) => {
@@ -9,37 +8,22 @@ export const searchKnowledgeAction = async (req: Request, res: Response) => {
     if (!query || !mentorId) {
       return res.status(422).json({ message: "query and mentorId are required" });
     }
-    if (!Types.ObjectId.isValid(mentorId)) {
-      return res.status(422).json({ message: "mentorId is invalid" });
-    }
 
     const queryVector = await generateEmbedding(String(query));
-    const mentorObjectId = new Types.ObjectId(mentorId);
 
-    const pipeline: any[] = [
+    const results = await rpc<Array<{ id: string; title: string; content: string; similarity: number }>>(
+      "match_knowledge",
       {
-        $vectorSearch: {
-          index: "default",
-          path: "embedding",
-          queryVector,
-          numCandidates: 100,
-          limit: 5,
-          filter: { userId: { $eq: mentorObjectId } },
-        },
-      },
-      {
-        $project: {
-          title: 1,
-          content: 1,
-          score: { $meta: "vectorSearchScore" },
-        },
-      },
-    ];
+        query_embedding: JSON.stringify(queryVector),
+        match_user_id: mentorId,
+        match_threshold: 0.7,
+        match_count: 5,
+      }
+    );
 
-    const results = await CoachKnowledge.aggregate(pipeline);
-
-    return res.json({ success: true, results });
+    return res.json({ success: true, results: results || [] });
   } catch (error) {
+    console.error("[searchKnowledge] Error:", error);
     return res.status(500).json({ message: "knowledge_search_failed" });
   }
 };

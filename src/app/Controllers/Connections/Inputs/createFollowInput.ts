@@ -1,12 +1,9 @@
-import {  IsMongoId, IsNotEmpty } from "class-validator";
+import { IsNotEmpty, IsString } from "class-validator";
 
 export class FollowInput {
 
   @IsNotEmpty()
-  @IsMongoId({ message: "FollowingTo must be a valid MongoId." })
+  @IsString({ message: "FollowingTo must be a valid ID." })
   followingTo: string;
 
-
-
 }
-    
