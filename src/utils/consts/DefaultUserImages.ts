@@ -1,2 +1,5 @@
-export const default_user_cover = "66cd7d71dbab6ec1ca717231";
-export const default_user_pfp = "66cd7d1bdbab6ec1ca71722f";
+// Legacy MongoDB ObjectIds – not valid UUIDs.
+// Set to null so Supabase UUID FK columns don't reject them.
+// TODO: Upload default images to Supabase Storage and insert proper file rows.
+export const default_user_cover: string | null = null;
+export const default_user_pfp: string | null = null;

@@ -172,7 +172,7 @@ export class UsersControllers {
         console.log("Hashed password is", updateData.password);
       }
 
-      if (!userInput.coverPhotoId && !existingUser.cover_photo_id) {
+      if (!userInput.coverPhotoId && !existingUser.cover_photo_id && default_user_cover) {
         updateData.cover_photo_id = default_user_cover;
       }
 
@@ -186,7 +186,7 @@ export class UsersControllers {
       }
       if (userInput.photoId) {
         updateData.has_photo_info = true;
-      } else if (!userInput.photoId && !existingUser.photo_id) {
+      } else if (!userInput.photoId && !existingUser.photo_id && default_user_pfp) {
         updateData.photo_id = default_user_pfp;
       }
       if (userInput.dob) {
@@ -601,7 +601,7 @@ export class UsersControllers {
 
       const updateData: Record<string, any> = toSnakeCase({ ...userInput });
 
-      if (!req.body.coverPhotoId) {
+      if (!req.body.coverPhotoId && default_user_cover) {
         updateData.cover_photo_id = default_user_cover;
       }
 
@@ -615,7 +615,7 @@ export class UsersControllers {
       }
       if (userInput.photoId) {
         updateData.has_photo_info = true;
-      } else {
+      } else if (default_user_pfp) {
         updateData.photo_id = default_user_pfp;
       }
       if (userInput.dob) {
