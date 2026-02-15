@@ -1,6 +1,9 @@
 import { Router, Request, Response } from "express";
 import { Auth as ensureAuth } from "../app/Middlewares";
+import { createMulterInstance, uploadToSupabase } from "../app/Middlewares/fileUpload";
 import { db, Tables, findMany, insertOne, deleteById } from "../lib/db";
+
+const upload = createMulterInstance("uploads/avatars");
 
 const r = Router();
 
@@ -76,56 +79,36 @@ r.post("/images", ensureAuth as any, async (req: any, res: Response) => {
  * Upload an image file to Supabase Storage, then save the public URL.
  * Expects multipart/form-data with field "file".
  */
-r.post("/images/upload", ensureAuth as any, async (req: any, res: Response) => {
-  try {
-    const mentorId = req.user?.id || req.user?._id;
+r.post(
+  "/images/upload",
+  ensureAuth as any,
+  upload.single("file"),
+  uploadToSupabase("avatars"),
+  async (req: any, res: Response) => {
+    try {
+      const mentorId = req.user?.id || req.user?._id;
+      const file = req.file;
 
-    // Check if we have a file in the request (from multer or similar middleware)
-    const file = (req as any).file || (req.files && req.files.file);
-    if (!file) {
-      return res.status(400).json({ error: "no_file", message: "Upload a file with field name 'file'" });
-    }
+      if (!file || !file.path) {
+        return res.status(400).json({ error: "no_file", message: "Upload a file with field name 'file'" });
+      }
 
-    const buffer = file.buffer || file.data;
-    const originalName = file.originalname || file.name || "avatar.png";
-    const ext = originalName.split(".").pop() || "png";
-    const fileName = `agent-avatars/${mentorId}/${Date.now()}.${ext}`;
+      const publicUrl = (file as any).publicUrl || file.path;
 
-    // Upload to Supabase Storage
-    const { error: uploadError } = await db.storage
-      .from("avatars")
-      .upload(fileName, buffer, {
-        contentType: file.mimetype || "image/png",
-        upsert: false,
+      const row = await insertOne(Tables.AGENT_AVATARS, {
+        mentor_id: mentorId,
+        url: publicUrl,
+        label: (req.body?.label || "").trim(),
+        is_active: true,
       });
 
-    if (uploadError) {
-      console.error("[Avatar] Storage upload error:", uploadError.message);
-      return res.status(500).json({ error: "upload_failed", message: uploadError.message });
+      return res.json({ data: row });
+    } catch (err: any) {
+      console.error("[Avatar] Upload error:", err?.message);
+      return res.status(500).json({ error: "internal" });
     }
-
-    // Get public URL
-    const { data: urlData } = db.storage.from("avatars").getPublicUrl(fileName);
-    const publicUrl = urlData?.publicUrl;
-
-    if (!publicUrl) {
-      return res.status(500).json({ error: "url_failed" });
-    }
-
-    // Save to database
-    const row = await insertOne(Tables.AGENT_AVATARS, {
-      mentor_id: mentorId,
-      url: publicUrl,
-      label: (req.body?.label || "").trim(),
-      is_active: true,
-    });
-
-    return res.json({ data: row });
-  } catch (err: any) {
-    console.error("[Avatar] Upload error:", err?.message);
-    return res.status(500).json({ error: "internal" });
   }
-});
+);
 
 /**
  * PATCH /avatar/images/:id
