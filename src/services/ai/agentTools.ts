@@ -145,6 +145,26 @@ export const AGENT_TOOLS: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "award_points",
+      description:
+        "Award points to the user for achievements. Call this when the user logs a workout, hits a nutrition target, " +
+        "reaches a streak milestone, sets a personal record, or shows improvement. " +
+        "Valid reasons: logged_workout, logged_meal, logged_weight, hit_protein_target, hit_calorie_target, " +
+        "completed_session, 3_day_streak, 7_day_streak, 14_day_streak, 30_day_streak, " +
+        "weight_milestone, strength_pr, first_photo, weekly_checkin, improvement_1pct, improvement_5pct, improvement_10pct",
+      parameters: {
+        type: "object",
+        properties: {
+          reason: { type: "string", description: "The reason for awarding points" },
+          metadata: { type: "object", description: "Optional extra context (e.g., exercise name, weight value)" },
+        },
+        required: ["reason"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "update_user_context",
       description:
         "Store or update an important fact about the user that should be remembered across conversations. " +
@@ -202,6 +222,8 @@ export async function executeTool(
         return await executeGetMealHistory(args, userId);
       case "lookup_barcode":
         return await executeLookupBarcode(args);
+      case "award_points":
+        return await executeAwardPoints(args, userId);
       case "update_user_context":
         return await executeUpdateUserContext(args, userId);
       default:
@@ -368,6 +390,45 @@ async function executeGetMealHistory(args: Record<string, any>, userId: string):
   return {
     success: true,
     data: { days, dailySummaries },
+  };
+}
+
+const POINT_VALUES: Record<string, number> = {
+  logged_workout: 10, logged_meal: 5, logged_weight: 5,
+  hit_protein_target: 15, hit_calorie_target: 10, completed_session: 20,
+  "3_day_streak": 25, "7_day_streak": 75, "14_day_streak": 150, "30_day_streak": 500,
+  weight_milestone: 50, strength_pr: 30, first_photo: 10, weekly_checkin: 15,
+  improvement_1pct: 20, improvement_5pct: 100, improvement_10pct: 250,
+};
+
+const REASON_TO_CATEGORY: Record<string, string> = {
+  logged_workout: "discipline", logged_meal: "nutrition", logged_weight: "discipline",
+  hit_protein_target: "nutrition", hit_calorie_target: "nutrition", completed_session: "strength",
+  "3_day_streak": "consistency", "7_day_streak": "consistency", "14_day_streak": "consistency",
+  "30_day_streak": "consistency", weight_milestone: "improvement", strength_pr: "strength",
+  first_photo: "discipline", weekly_checkin: "discipline",
+  improvement_1pct: "improvement", improvement_5pct: "improvement", improvement_10pct: "improvement",
+};
+
+async function executeAwardPoints(args: Record<string, any>, userId: string): Promise<ToolResult> {
+  const { reason, metadata } = args;
+  if (!reason || !POINT_VALUES[reason]) {
+    return { success: false, error: `Invalid reason. Valid: ${Object.keys(POINT_VALUES).join(", ")}` };
+  }
+
+  const points = POINT_VALUES[reason];
+  const category = REASON_TO_CATEGORY[reason] || "discipline";
+
+  const { error } = await db
+    .from("user_points")
+    .insert({ user_id: userId, category, points, reason, metadata: metadata || {} });
+
+  if (error) return { success: false, error: error.message };
+
+  return {
+    success: true,
+    data: { points_awarded: points, category, reason },
+    message: `Tildelt ${points} poeng i kategorien "${category}" for "${reason}"`,
   };
 }
 

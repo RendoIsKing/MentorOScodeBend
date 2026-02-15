@@ -25,6 +25,7 @@ import CallRoutes from "./call.routes";
 import TTSRoutes from "./tts.routes";
 import MealRoutes from "./meals.routes";
 import AvatarRoutes from "./avatar.routes";
+import PointsRoutes from "./points.routes";
 
 export {
   AuthRoutes,
@@ -54,4 +55,5 @@ export {
   TTSRoutes,
   MealRoutes,
   AvatarRoutes,
+  PointsRoutes,
 };
