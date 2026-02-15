@@ -333,7 +333,7 @@ r.post(
 
           console.log(`[mentor-ai] Generating AI response for mentor ${receiverId}, message: "${String(m.text).slice(0, 60)}..."`);
           const startTime = Date.now();
-          const aiText = await generateMentorResponse(me, receiverId, m.text);
+          const aiText = await generateMentorResponse(me, receiverId, m.text, m.attachments);
           const elapsed = Date.now() - startTime;
           console.log(`[mentor-ai] AI response generated in ${elapsed}ms (${String(aiText || '').length} chars)`);
 

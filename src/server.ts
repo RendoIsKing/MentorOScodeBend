@@ -35,6 +35,9 @@ import {
   CoachNotesRoutes,
   CoachPlansRoutes,
   CallRoutes,
+  TTSRoutes,
+  MealRoutes,
+  AvatarRoutes,
 } from "./routes";
 
 import { local, jwt } from "./utils/strategies";
@@ -332,6 +335,9 @@ export class Server {
     this.app.use("/api/backend/v1/coach-notes", CoachNotesRoutes);
     this.app.use("/api/backend/v1/coach-plans", CoachPlansRoutes);
     this.app.use("/api/backend/v1/call", CallRoutes);
+    this.app.use("/api/backend/v1/tts", TTSRoutes);
+    this.app.use("/api/backend/v1/meals", MealRoutes);
+    this.app.use("/api/backend/v1/avatar", AvatarRoutes);
     this.app.use("/api/backend/v1/student", StudentRoutes);
     this.app.use("/api/backend/v1/student", studentSnapshotRouter);
     // Public features list to allow subscription UI to load without auth

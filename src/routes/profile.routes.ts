@@ -15,7 +15,7 @@ const profile: Router = Router();
 //   );
 const changePasswordSchema = z.object({
   currentPassword: nonEmptyString,
-  newPassword: nonEmptyString.min(6),
+  newPassword: nonEmptyString.min(8),
 }).strict();
 
 profile.post('/change-password', validateZod({ body: changePasswordSchema }), ProfileController.changePassword);

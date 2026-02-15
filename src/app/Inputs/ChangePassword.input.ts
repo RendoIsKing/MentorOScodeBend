@@ -6,7 +6,7 @@ export class ChangePasswordInput {
     currentPassword: string;
 
     @IsString({ message: 'New Password should not be empty' })
-    @Length(6)
+    @Length(8)
         // @ts-ignore
     newPassword: string;
 }

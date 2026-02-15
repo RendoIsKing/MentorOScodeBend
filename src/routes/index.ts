@@ -22,6 +22,9 @@ import MentorRoutes from "./mentor.routes";
 import CoachNotesRoutes from "./coachNotes.routes";
 import CoachPlansRoutes from "./coachPlans.routes";
 import CallRoutes from "./call.routes";
+import TTSRoutes from "./tts.routes";
+import MealRoutes from "./meals.routes";
+import AvatarRoutes from "./avatar.routes";
 
 export {
   AuthRoutes,
@@ -48,4 +51,7 @@ export {
   CoachNotesRoutes,
   CoachPlansRoutes,
   CallRoutes,
+  TTSRoutes,
+  MealRoutes,
+  AvatarRoutes,
 };
