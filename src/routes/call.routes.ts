@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import Auth from "../app/Middlewares/auth";
 import { UserInterface } from "../types/UserInterface";
 import { sseHub } from "../lib/sseHub";
-import { db, Tables, insertOne, findOne } from "../lib/db";
+import { db } from "../lib/db";
 
 const CallRoutes = Router();
 const ensureAuth = Auth;

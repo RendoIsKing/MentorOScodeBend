@@ -176,7 +176,7 @@ r.delete("/images/:id", ensureAuth as any, async (req: any, res: Response) => {
  * Body: { text: string, mentorId?: string }
  * Generates a lip-synced video using a random avatar image.
  */
-r.post("/generate", ensureAuth as any, async (req: Request, res: Response) => {
+r.post("/generate", ensureAuth as any, async (req: Request, res: Response): Promise<any> => {
   try {
     const { text, mentorId } = req.body || {};
     if (!text || typeof text !== "string" || !text.trim()) {
@@ -276,7 +276,7 @@ r.post("/generate", ensureAuth as any, async (req: Request, res: Response) => {
       });
     }
 
-    const didData = await didRes.json();
+    const didData: any = await didRes.json();
     console.log(`[Avatar] D-ID talk created: id=${didData.id}`);
 
     return res.json({ id: didData.id, status: didData.status || "created" });
@@ -301,7 +301,7 @@ r.get("/status/:id", ensureAuth as any, async (req: Request, res: Response) => {
 
     if (!didRes.ok) return res.status(didRes.status).json({ error: "did_poll_failed" });
 
-    const data = await didRes.json();
+    const data: any = await didRes.json();
     return res.json({
       status: data.status || "unknown",
       result_url: data.result_url || null,
