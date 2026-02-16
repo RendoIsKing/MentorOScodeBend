@@ -103,10 +103,10 @@ export class UsersControllers {
           .json({ error: { message: "User not found." } });
       }
 
-      const userInput = req.body as UserInput;
+      const userInput = plainToClass(UserInput, req.body);
       console.log(
         "[onboardUser] Received input:",
-        JSON.stringify(userInput, null, 2)
+        JSON.stringify(req.body, null, 2)
       );
 
       const validationErrors = await validate(userInput);
@@ -115,7 +115,10 @@ export class UsersControllers {
           "[onboardUser] Validation errors:",
           JSON.stringify(validationErrors, null, 2)
         );
-        return res.status(400).json({ errors: validationErrors });
+        return res.status(400).json({
+          error: { message: "Validation failed", details: validationErrors.map(e => ({ property: e.property, constraints: e.constraints })) },
+          errors: validationErrors,
+        });
       }
 
       // Check if email is being changed to one that already exists

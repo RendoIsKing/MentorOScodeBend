@@ -1,8 +1,8 @@
 -- Call logs table for voice/video call history
 CREATE TABLE IF NOT EXISTS call_logs (
   id TEXT PRIMARY KEY,
-  caller_id UUID NOT NULL REFERENCES auth.users(id),
-  receiver_id UUID NOT NULL REFERENCES auth.users(id),
+  caller_id UUID NOT NULL REFERENCES public.users(id),
+  receiver_id UUID NOT NULL REFERENCES public.users(id),
   conversation_id TEXT,
   status TEXT NOT NULL DEFAULT 'ringing' CHECK (status IN ('ringing', 'active', 'ended', 'rejected', 'missed', 'busy')),
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),

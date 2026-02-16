@@ -38,7 +38,7 @@ const userInputSchema = z.object({
   photoId: z.string().optional(),
   coverPhotoId: z.string().optional(),
   location: z.array(locationSchema).optional(),
-}).strict();
+}).passthrough();
 const updateUserStatusSchema = z.object({ status: nonEmptyString }).strict();
 
 user.post("/fcm-token", Auth, validateZod({ body: fcmTokenSchema }), UsersControllers.updateFcmToken);

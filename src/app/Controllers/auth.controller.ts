@@ -760,6 +760,18 @@ class AuthController {
 
           if (signInError) {
             console.error("[GoogleLogin] signInWithPassword failed:", signInError.message);
+            // Retry once — the password update may need a moment to propagate
+            const { data: retrySession, error: retryError } = await supabaseAdmin.auth.signInWithPassword({
+              email: authEmail,
+              password: stablePw,
+            });
+            if (retryError) {
+              console.error("[GoogleLogin] retry signInWithPassword also failed:", retryError.message);
+            }
+            if (retrySession?.session) {
+              accessToken = retrySession.session.access_token;
+              refreshToken = retrySession.session.refresh_token;
+            }
           }
 
           if (session?.session) {
@@ -767,6 +779,10 @@ class AuthController {
             refreshToken = session.session.refresh_token;
           }
         }
+      }
+
+      if (!accessToken) {
+        console.error("[GoogleLogin] Failed to generate auth tokens for user:", user?.id);
       }
 
       const rememberMe = req.body.rememberMe !== false; // Default to true
