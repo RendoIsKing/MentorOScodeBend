@@ -48,6 +48,7 @@ user.get("/file-download/:id", Auth, UsersControllers.downloadDocument);
 
 user.get("/files/:id", UsersControllers.getFile);
 user.get("/find", UsersControllers.findUserByUserName);
+user.get("/search", Auth, UsersControllers.searchUsers);
 
 user.post(
   "/file-upload",

@@ -1286,6 +1286,91 @@ export class UsersControllers {
     }
   };
 
+  /* ── Search Users (partial match on username / full name) ────────────── */
+  static searchUsers = async (
+    req: Request,
+    res: Response
+  ): Promise<Response> => {
+    try {
+      const q = String(req.query.q || "").trim();
+      if (!q || q.length < 2) {
+        return res.status(400).json({ error: "Query must be at least 2 characters." });
+      }
+
+      const requestingUser = req.user as any;
+      const myId: string | null = requestingUser?.id || null;
+      const limit = Math.min(Number(req.query.limit) || 20, 50);
+
+      const pattern = `%${q}%`;
+      const { data: users, error: searchErr } = await db
+        .from(Tables.USERS)
+        .select("id, user_name, full_name, first_name, last_name, email, photo_id, role, is_mentor")
+        .eq("is_deleted", false)
+        .eq("is_active", true)
+        .or(`user_name.ilike.${pattern},full_name.ilike.${pattern},first_name.ilike.${pattern},last_name.ilike.${pattern}`)
+        .limit(limit);
+
+      if (searchErr) {
+        console.error("[searchUsers] DB error:", searchErr);
+        return res.status(500).json({ error: "Search failed." });
+      }
+
+      // Exclude self
+      let results = (users || []).filter((u: any) => u.id !== myId);
+
+      // Resolve photos
+      const photoIds = results.map((u: any) => u.photo_id).filter(Boolean);
+      let photosMap: Record<string, any> = {};
+      if (photoIds.length > 0) {
+        const { data: photos } = await db
+          .from(Tables.FILES)
+          .select("*")
+          .in("id", [...new Set(photoIds)]);
+        if (photos) {
+          photosMap = Object.fromEntries(photos.map((f: any) => [f.id, f]));
+        }
+      }
+
+      // Check which users the requester is following
+      let followingSet = new Set<string>();
+      if (myId) {
+        const { data: connections } = await db
+          .from(Tables.USER_CONNECTIONS)
+          .select("following_to")
+          .eq("owner", myId);
+        if (connections) {
+          followingSet = new Set(connections.map((c: any) => c.following_to));
+        }
+      }
+
+      // Build response, sorting followed users first
+      const enriched = results.map((u: any) => ({
+        id: u.id,
+        _id: u.id,
+        userName: u.user_name,
+        fullName: u.full_name,
+        firstName: u.first_name,
+        lastName: u.last_name,
+        email: u.email,
+        isMentor: u.is_mentor,
+        photo: photosMap[u.photo_id] || null,
+        photoId: u.photo_id,
+        isFollowing: followingSet.has(u.id),
+      }));
+
+      enriched.sort((a: any, b: any) => {
+        if (a.isFollowing && !b.isFollowing) return -1;
+        if (!a.isFollowing && b.isFollowing) return 1;
+        return 0;
+      });
+
+      return res.json({ data: enriched });
+    } catch (error) {
+      console.error("[searchUsers] Error:", error);
+      return res.status(500).json({ error: "Something went wrong." });
+    }
+  };
+
   /* ── Make User Subscription Active ──────────────────────────────────── */
   static makeUserSubscriptionActive = async (
     req: Request,
