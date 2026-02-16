@@ -40,6 +40,7 @@ const userLoginSchema = z
     userName: optionalTrimmed(z.string()),
     username: optionalTrimmed(z.string()),
     password: optionalTrimmed(z.string()),
+    rememberMe: z.boolean().optional(),
   })
   .strict()
   .transform((data) => ({
@@ -52,6 +53,7 @@ const userLoginSchema = z
 
 const googleLoginSchema = z.object({
   idToken: nonEmptyString,
+  rememberMe: z.boolean().optional(),
 }).strict();
 
 const otpSchema = z.object({

@@ -485,10 +485,20 @@ class AuthController {
       const orClauses: string[] = [];
       if (email) orClauses.push(`email.eq.${email}`);
       if (effectiveUserName) orClauses.push(`user_name.eq.${effectiveUserName}`);
-      if (phoneNumber && dialCode) {
-        const dial = String(dialCode).replace(/^\+/, "").replace(/\s+/g, "");
-        const num = String(phoneNumber).replace(/\s+/g, "");
-        orClauses.push(`complete_phone_number.eq.${dial}--${num}`);
+      if (phoneNumber) {
+        // Support "prefix--number" format from frontend (e.g. "+47--96016106")
+        if (typeof phoneNumber === "string" && phoneNumber.includes("--")) {
+          const parts = phoneNumber.split("--");
+          const dial = String(parts[0] || "").replace(/^\+/, "").replace(/\s+/g, "");
+          const num = String(parts[1] || "").replace(/\s+/g, "");
+          if (dial && num) {
+            orClauses.push(`complete_phone_number.eq.${dial}--${num}`);
+          }
+        } else if (dialCode) {
+          const dial = String(dialCode).replace(/^\+/, "").replace(/\s+/g, "");
+          const num = String(phoneNumber).replace(/\s+/g, "");
+          orClauses.push(`complete_phone_number.eq.${dial}--${num}`);
+        }
       }
 
       if (orClauses.length === 0) {
