@@ -26,7 +26,7 @@ function stripAudioTags(text: string): string {
  * Converts text to speech using ElevenLabs Eleven v3 with the mentor's cloned voice.
  * The text may contain audio tags like [laughs], [happily], etc. for expressiveness.
  */
-r.post("/speak", ensureAuth as any, async (req: Request, res: Response) => {
+r.post("/speak", ensureAuth as any, async (req: Request, res: Response): Promise<any> => {
   try {
     const { text } = req.body || {};
     if (!text || typeof text !== "string" || !text.trim()) {

@@ -5,7 +5,7 @@
  * write to the database, fetch user stats, log meals, etc.
  */
 
-import { findById, findMany, findOne, insertOne, upsert, Tables, db } from "../../lib/db";
+import { findMany, findOne, insertOne, upsert, Tables, db } from "../../lib/db";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 
 // ── Tool schema definitions (OpenAI format) ──────────────────────────────────
@@ -196,6 +196,7 @@ export interface ToolResult {
   success: boolean;
   data?: any;
   error?: string;
+  message?: string;
 }
 
 /**
@@ -447,7 +448,7 @@ async function executeLookupBarcode(args: Record<string, any>): Promise<ToolResu
       return { success: false, error: "Product not found in database" };
     }
 
-    const data = await res.json();
+    const data: any = await res.json();
     if (!data.product) {
       return { success: false, error: "Product not found" };
     }

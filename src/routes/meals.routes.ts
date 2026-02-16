@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Auth as ensureAuth, validateZod } from "../app/Middlewares";
-import { db, findById, findMany, insertOne, updateById, deleteById, upsert, Tables } from "../lib/db";
+import { db, findById, insertOne, updateById, deleteById, upsert, Tables } from "../lib/db";
 import { z } from "zod";
 
 const r = Router();
@@ -213,7 +213,7 @@ r.get("/barcode/:code", ensureAuth as any, async (req: any, res) => {
       return res.status(404).json({ error: "product_not_found" });
     }
 
-    const data = await offRes.json();
+    const data: any = await offRes.json();
     if (!data.product) {
       return res.status(404).json({ error: "product_not_found" });
     }

@@ -29,7 +29,7 @@ CallRoutes.post(
 
       const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-      const callerName = caller.full_name || caller.user_name || "Ukjent";
+      const callerName = caller.fullName || caller.userName || "Ukjent";
 
       // Log call in database
       try {
