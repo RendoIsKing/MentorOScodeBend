@@ -389,9 +389,32 @@ r.post(
             return;
           }
 
-          console.log(`[mentor-ai] Generating AI response for mentor ${receiverId}, message: "${String(m.text).slice(0, 60)}..."`);
+          // Load recent conversation history so the AI has context
+          let conversationHistory: { role: 'user' | 'assistant'; content: string }[] = [];
+          try {
+            const { data: recentMsgs } = await db
+              .from(Tables.CHAT_MESSAGES)
+              .select('sender, text')
+              .eq('thread_id', t.id)
+              .order('created_at', { ascending: false })
+              .limit(20);
+            if (recentMsgs && recentMsgs.length > 1) {
+              conversationHistory = (recentMsgs as any[])
+                .reverse()
+                .slice(0, -1) // exclude the current message (already passed separately)
+                .map((msg: any) => ({
+                  role: (String(msg.sender) === me ? 'user' : 'assistant') as 'user' | 'assistant',
+                  content: String(msg.text || ''),
+                }))
+                .filter(m => m.content.trim());
+            }
+          } catch (histErr: any) {
+            console.warn(`[mentor-ai] Failed to load conversation history:`, histErr?.message);
+          }
+
+          console.log(`[mentor-ai] Generating AI response for mentor ${receiverId}, message: "${String(m.text).slice(0, 60)}...", history: ${conversationHistory.length} msgs`);
           const startTime = Date.now();
-          const aiText = await generateMentorResponse(me, receiverId, m.text, m.attachments);
+          const aiText = await generateMentorResponse(me, receiverId, m.text, m.attachments, conversationHistory);
           const elapsed = Date.now() - startTime;
           console.log(`[mentor-ai] AI response generated in ${elapsed}ms (${String(aiText || '').length} chars)`);
 

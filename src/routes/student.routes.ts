@@ -575,6 +575,55 @@ StudentRoutes.delete('/:userId/weights', ensureAuth as any, perUserIpLimiter({ w
   }
 });
 
+// ── /me convenience endpoints (resolve userId from auth token) ──
+
+// Log weight via /me/weight (used by frontend chat widgets)
+StudentRoutes.post('/me/weight', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
+  try {
+    const userId = resolveUserId(req);
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+    const { date: rawDate, kg: rawKg } = req.body || {};
+    const date = rawDate || new Date().toISOString().slice(0, 10);
+    const kg = Number(rawKg);
+    if (!kg || kg < 20 || kg > 500) return res.status(400).json({ message: 'kg must be 20-500' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
+    const todayIso = new Date().toISOString().slice(0, 10);
+    if (date > todayIso) return res.status(400).json({ message: 'date cannot be in the future' });
+    await upsert(Tables.WEIGHT_ENTRIES, { user_id: userId, date, kg }, 'user_id,date');
+    try {
+      await insertOne(Tables.CHANGE_EVENTS, { user_id: userId, type: "WEIGHT_LOG", summary: `Weight ${kg}kg on ${date}`, actor: userId, after: { date, kg } });
+      await publish({ type: "WEIGHT_LOGGED", user: userId, date, kg });
+    } catch {}
+    return res.status(200).json({ ok: true, date, kg });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to record weight' });
+  }
+});
+
+// Log meal via /me/meals (used by frontend chat widgets)
+StudentRoutes.post('/me/meals', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
+  try {
+    const userId = resolveUserId(req);
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+    const { date: rawDate, meal_type, description, total_calories, total_protein_g, total_carbs_g, total_fat_g, items } = req.body || {};
+    const date = rawDate || new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
+    const row = await insertOne(Tables.MEAL_LOGS, {
+      user_id: userId, date,
+      meal_type: meal_type || 'other',
+      description: description || '',
+      total_calories: Number(total_calories) || 0,
+      total_protein_g: Number(total_protein_g) || 0,
+      total_carbs_g: Number(total_carbs_g) || 0,
+      total_fat_g: Number(total_fat_g) || 0,
+      items: items || [],
+    });
+    return res.status(200).json({ ok: true, id: row?.id });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to log meal' });
+  }
+});
+
 // Exercise progress with userId param
 StudentRoutes.post('/:userId/exercise-progress', ensureAuth as any,
   validateZod({ body: ExerciseProgressSchema }), async (req: Request, res: Response) => {

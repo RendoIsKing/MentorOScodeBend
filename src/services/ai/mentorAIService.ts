@@ -40,7 +40,8 @@ export async function generateResponse(
   userId: string,
   mentorId: string,
   userMessage: string,
-  attachments?: ChatAttachment[]
+  attachments?: ChatAttachment[],
+  conversationHistory?: { role: 'user' | 'assistant'; content: string }[]
 ): Promise<string> {
   console.log(`[mentorAI] generateResponse called for user=${userId}, mentor=${mentorId}, msg="${userMessage.slice(0, 80)}...", attachments=${attachments?.length || 0}`);
 
@@ -114,8 +115,15 @@ export async function generateResponse(
     "1. Bruk eksisterende data til å lage planen (IKKE spør om info du har)\n" +
     "2. Presenter planen i chatten\n" +
     "3. Spør: 'Skal jeg lagre denne planen i Student senteret ditt?'\n" +
-    "4. Når godkjent: Bruk save_training_plan / save_nutrition_plan / save_goal\n" +
-    "5. Bekreft at planen er lagret og fortell hvor de finner den\n\n" +
+    "4. Når godkjent: KALL save_training_plan / save_nutrition_plan / save_goal MED HELE PLANEN\n" +
+    "   For save_training_plan MÅ du sende days-array med: [{day: 'Mandag', focus: 'Bryst og Triceps', exercises: [{name: 'Benkpress', sets: 4, reps: '6-8'}, ...]}, ...]\n" +
+    "   For save_nutrition_plan MÅ du sende daily_targets: {kcal, protein_g, carbs_g, fat_g} og meals-array\n" +
+    "5. Bekreft at planen er lagret og fortell brukeren: 'Du finner den i Aktivitet-fanen / Ernæring-fanen'\n\n" +
+
+    "KRITISK REGEL FOR PLANLAGRING:\n" +
+    "Når brukeren sier 'lagre', 'ja', 'ok', 'gjør det', 'legg til i student senteret', 'logg den' — " +
+    "KALL VERKTØYET DIREKTE. Ikke spør 'hvilken plan?' eller 'kan du bekrefte?' — du NETTOPP presenterte planen, " +
+    "du VET hvilken plan det er. Kall verktøyet med den planen du presenterte.\n\n" +
 
     "Vær varm, tydelig og handlingsorientert. Led brukeren steg for steg."
   );
@@ -136,20 +144,32 @@ export async function generateResponse(
     "Most responses should have zero tags — only use them when it truly adds warmth."
   );
 
-  // Tool usage instructions
+  // Tool usage instructions - CRITICAL
   parts.push(
-    "TOOL USAGE INSTRUCTIONS:\n" +
-    "You have access to tools that let you perform real actions for the user.\n" +
-    "IMPORTANT RULES:\n" +
-    "1. When the user sends a FOOD PHOTO or describes food: analyze it, then call log_meal with your best estimate of macros. " +
-    "Present the analysis to the user and ask them to confirm or correct before you say it's saved.\n" +
-    "2. When the user mentions their weight: call log_weight.\n" +
-    "3. When the user describes a workout they did: call log_workout.\n" +
-    "4. When you learn something important about the user (allergies, injuries, preferences): call update_user_context.\n" +
-    "5. Call get_user_stats when you need the user's current data to give personalized advice.\n" +
-    "6. Call get_meal_history when discussing nutrition patterns or reviewing what they've eaten.\n" +
-    "7. After calling a tool, report the result naturally in your response. Don't show raw JSON.\n" +
-    "8. You can call multiple tools in one response if needed."
+    "TOOL USAGE INSTRUCTIONS — DU MÅ FØLGE DISSE:\n" +
+    "Du har tilgang til verktøy som gjør EKTE handlinger i brukerens Student Senter.\n" +
+    "ALDRI si at du har gjort noe uten å faktisk kalle verktøyet. Hvis du sier 'Jeg har logget vekten din' MÅ du ha kalt log_weight.\n\n" +
+
+    "OBLIGATORISKE VERKTØYKALL:\n" +
+    "- Bruker nevner vekt (f.eks. 'Jeg veier 80 kg', 'veide meg: 80'): KALL log_weight UMIDDELBART\n" +
+    "- Bruker beskriver mat/måltid: KALL log_meal med beste estimat av makroer\n" +
+    "- Bruker beskriver trening de har gjort: KALL log_workout\n" +
+    "- Bruker godkjenner en treningsplan: KALL save_training_plan med ALLE dagene og øvelsene\n" +
+    "- Bruker godkjenner en kostholdsplan: KALL save_nutrition_plan med daglige mål og måltider\n" +
+    "- Bruker godkjenner mål: KALL save_goal\n" +
+    "- Du lærer noe nytt om brukeren: KALL update_user_context\n\n" +
+
+    "NÅR BRUKEREN GODKJENNER EN PLAN:\n" +
+    "Når brukeren sier noe som 'lagre', 'ja', 'godkjent', 'legg til', 'lagre i student senteret' — " +
+    "da MÅ du UMIDDELBART kalle save_training_plan eller save_nutrition_plan med den KOMPLETTE planen.\n" +
+    "Du MÅ inkludere ALLE dagene med ALLE øvelsene i verktøykallet. Ikke spør om mer info.\n" +
+    "Eksempel for save_training_plan: days-arrayet skal inneholde hvert dag-objekt med day, focus, og exercises (name, sets, reps).\n\n" +
+
+    "VIKTIG:\n" +
+    "- Si ALDRI 'Jeg har logget/lagret X' uten å faktisk ha kalt det relevante verktøyet\n" +
+    "- Kall verktøy FØRST, og rapporter resultatet etterpå\n" +
+    "- Du kan kalle flere verktøy i én respons\n" +
+    "- Etter et verktøykall, bekreft hva som skjedde og fortell brukeren hvor de finner det i Student Senteret"
   );
 
   // Mentor personality
@@ -255,8 +275,19 @@ export async function generateResponse(
   const client = getOpenAI();
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: parts.join("\n\n") },
-    { role: "user", content: userContent as any },
   ];
+
+  // Include conversation history so the AI has context of previous messages
+  if (conversationHistory && conversationHistory.length > 0) {
+    // Limit to last 15 messages to stay within token budget
+    const recent = conversationHistory.slice(-15);
+    for (const msg of recent) {
+      messages.push({ role: msg.role, content: msg.content });
+    }
+    console.log(`[mentorAI] Including ${recent.length} messages of conversation history`);
+  }
+
+  messages.push({ role: "user", content: userContent as any });
 
   let round = 0;
   while (round < MAX_TOOL_ROUNDS) {
