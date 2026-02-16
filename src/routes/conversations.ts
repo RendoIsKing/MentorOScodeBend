@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Auth as ensureAuth, validateZod } from '../app/Middlewares';
 import { db, findById, findMany, insertOne, updateById, count, Tables } from '../lib/db';
 import { sseHub, ssePush, getOnlineUserIds } from '../lib/sseHub';
-import { createMulterInstance } from '../app/Middlewares/fileUpload';
+import { createMulterInstance, uploadToSupabase } from '../app/Middlewares/fileUpload';
 import { z } from 'zod';
 import { nonEmptyString } from '../app/Validation/requestSchemas';
 import { generateResponse as generateMentorResponse } from '../services/ai/mentorAIService';
@@ -466,19 +466,20 @@ r.post(
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
-// ── Chat image upload ──
+// ── Chat image upload (Supabase Storage for persistence) ──
 const chatUpload = createMulterInstance('public/uploads/chat');
 r.post(
   '/chat-upload',
   ensureAuth as any,
   chatUpload.single('image'),
+  uploadToSupabase('chat-attachments') as any,
   (req: any, res) => {
     try {
       const file = req.file;
       if (!file) return res.status(400).json({ error: 'no_file' });
-      const url = file.location || `uploads/chat/${file.filename}`;
+      const url = (file as any).publicUrl || file.path || file.location || '';
       return res.json({
-        url: url.startsWith('http') ? url : `/api/backend/${url}`,
+        url,
         type: file.mimetype,
         filename: file.originalname,
       });
