@@ -275,6 +275,89 @@ StudentRoutes.get('/me/snapshot', ensureAuth as any, perUserIpLimiter({ windowMs
   }
 });
 
+// Save onboarding profile data to database (called from frontend after coach onboarding flow)
+StudentRoutes.post('/me/onboarding-profile', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 10 }), async (req: Request, res: Response) => {
+  try {
+    const userId = resolveUserId(req);
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+    const data = req.body || {};
+    console.log(`[student] Saving onboarding profile for user=${userId}`);
+
+    // Map onboarding form fields to user_profiles columns
+    const profileRow: Record<string, any> = {
+      user_id: userId,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Direct column mappings
+    if (data.currentWeight) profileRow.current_weight_kg = data.currentWeight;
+    if (data.trainingDaysPerWeek) profileRow.training_days_per_week = data.trainingDaysPerWeek;
+    if (data.injuries?.length) profileRow.injury_history = data.injuries.join(', ');
+    if (data.dietaryPreferences?.length) profileRow.nutrition_preferences = data.dietaryPreferences.join(', ');
+
+    // Build goals string from primaryGoal array
+    const goalLabels: Record<string, string> = {
+      weight_loss: 'Vektnedgang', muscle_gain: 'Muskeloppbygging', strength: 'Styrke',
+      general_fitness: 'Generell fitness', body_recomp: 'Kroppsrekomposisjon',
+    };
+    if (Array.isArray(data.primaryGoal) && data.primaryGoal.length) {
+      profileRow.goals = data.primaryGoal.map((g: string) => goalLabels[g] || g).join(', ');
+    }
+
+    // Upsert into user_profiles
+    await upsert(Tables.USER_PROFILES, profileRow, 'user_id');
+
+    // Save additional fields to user_context (key-value store) for the AI to access
+    const contextEntries: [string, string][] = [];
+    if (data.name) contextEntries.push(['navn', data.name]);
+    if (data.age) contextEntries.push(['alder', String(data.age)]);
+    if (data.gender) contextEntries.push(['kjønn', data.gender === 'male' ? 'Mann' : data.gender === 'female' ? 'Kvinne' : 'Annet']);
+    if (data.currentWeight) contextEntries.push(['nåværende_vekt_kg', String(data.currentWeight)]);
+    if (data.goalWeight) contextEntries.push(['målvekt_kg', String(data.goalWeight)]);
+    if (data.height) contextEntries.push(['høyde_cm', String(data.height)]);
+    if (data.trainingDaysPerWeek) contextEntries.push(['treningsdager_per_uke', String(data.trainingDaysPerWeek)]);
+    if (data.experienceLevel) {
+      const expLabels: Record<string, string> = { beginner: 'Nybegynner', intermediate: 'Middels erfaren', advanced: 'Avansert' };
+      contextEntries.push(['erfaringsnivå', expLabels[data.experienceLevel] || data.experienceLevel]);
+    }
+    if (data.sleepHoursPerNight) contextEntries.push(['søvn_timer_per_natt', String(data.sleepHoursPerNight)]);
+    if (data.stressLevel) {
+      const stressLabels: Record<string, string> = { low: 'Lavt', moderate: 'Moderat', high: 'Høyt' };
+      contextEntries.push(['stressnivå', stressLabels[data.stressLevel] || data.stressLevel]);
+    }
+    if (data.availableEquipment) {
+      const equipLabels: Record<string, string> = { full_gym: 'Fullt treningssenter', home_basic: 'Hjemme med basisk utstyr', bodyweight_only: 'Kun kroppsvekt' };
+      contextEntries.push(['tilgjengelig_utstyr', equipLabels[data.availableEquipment] || data.availableEquipment]);
+    }
+    if (data.allergies?.length) contextEntries.push(['allergier', data.allergies.join(', ')]);
+    if (data.dietaryPreferences?.length) contextEntries.push(['kostpreferanser', data.dietaryPreferences.join(', ')]);
+    if (data.injuries?.length) contextEntries.push(['skader', data.injuries.join(', ')]);
+    if (Array.isArray(data.primaryGoal) && data.primaryGoal.length) {
+      contextEntries.push(['treningsmål', data.primaryGoal.map((g: string) => goalLabels[g] || g).join(', ')]);
+    }
+
+    // Upsert all context entries in parallel
+    await Promise.all(
+      contextEntries.map(([key, value]) =>
+        upsert(Tables.USER_CONTEXT, {
+          user_id: userId,
+          key,
+          value,
+          source: 'onboarding',
+          updated_at: new Date().toISOString(),
+        }, 'user_id,key').catch(() => {})
+      )
+    );
+
+    console.log(`[student] Onboarding profile saved: ${Object.keys(profileRow).length} profile fields, ${contextEntries.length} context entries`);
+    return res.json({ ok: true, profileFields: Object.keys(profileRow).length, contextEntries: contextEntries.length });
+  } catch (err: any) {
+    console.error('[student] Failed to save onboarding profile:', err?.message || err);
+    return res.status(500).json({ message: 'Failed to save onboarding profile' });
+  }
+});
+
 // Exercise Progress
 StudentRoutes.get('/:userId/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
   try {
