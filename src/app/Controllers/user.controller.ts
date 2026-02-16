@@ -122,11 +122,11 @@ export class UsersControllers {
       }
 
       // Check if email is being changed to one that already exists
-      if (userInput.email && userInput.email !== existingUser.email) {
+      if (userInput.email && userInput.email.toLowerCase() !== (existingUser.email || "").toLowerCase()) {
         const { data: existingWithEmail } = await db
           .from(Tables.USERS)
           .select("id")
-          .eq("email", userInput.email)
+          .ilike("email", userInput.email)
           .neq("id", userId)
           .maybeSingle();
 
@@ -137,6 +137,20 @@ export class UsersControllers {
               message: "Email is already in use by another account.",
             },
           });
+        }
+
+        // Sync the new email to Supabase Auth so signInWithPassword works
+        if (existingUser.auth_id) {
+          const { supabaseAdmin } = await import("../../lib/supabase");
+          const { error: emailSyncErr } = await supabaseAdmin.auth.admin.updateUserById(
+            existingUser.auth_id,
+            { email: userInput.email, email_confirm: true },
+          );
+          if (emailSyncErr) {
+            console.warn("[onboardUser] Failed to sync email to Supabase Auth:", emailSyncErr.message);
+          } else {
+            console.log("[onboardUser] Email synced to Supabase Auth:", userInput.email);
+          }
         }
       }
 
@@ -169,7 +183,21 @@ export class UsersControllers {
       if (userInput.password) {
         const salt = genSaltSync(10);
         updateData.password = hashSync(userInput.password, salt);
-        console.log("Hashed password is", updateData.password);
+
+        // Also sync the plaintext password to Supabase Auth so that
+        // signInWithPassword works on the first login attempt.
+        if (existingUser.auth_id) {
+          const { supabaseAdmin } = await import("../../lib/supabase");
+          const { error: pwSyncErr } = await supabaseAdmin.auth.admin.updateUserById(
+            existingUser.auth_id,
+            { password: userInput.password },
+          );
+          if (pwSyncErr) {
+            console.warn("[onboardUser] Failed to sync password to Supabase Auth:", pwSyncErr.message);
+          } else {
+            console.log("[onboardUser] Password synced to Supabase Auth");
+          }
+        }
       }
 
       if (!userInput.coverPhotoId && !existingUser.cover_photo_id && default_user_cover) {

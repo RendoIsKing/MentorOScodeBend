@@ -258,7 +258,7 @@ class AuthController {
         const { data: publicUser } = await supabaseAdmin
           .from("users")
           .select("auth_id, email, is_deleted, is_active")
-          .eq("email", email)
+          .ilike("email", email)
           .eq("is_deleted", false)
           .limit(1)
           .maybeSingle();
@@ -484,8 +484,8 @@ class AuthController {
         .eq("is_deleted", false);
 
       const orClauses: string[] = [];
-      if (email) orClauses.push(`email.eq.${email}`);
-      if (effectiveUserName) orClauses.push(`user_name.eq.${effectiveUserName}`);
+      if (email) orClauses.push(`email.ilike.${email}`);
+      if (effectiveUserName) orClauses.push(`user_name.ilike.${effectiveUserName}`);
       if (phoneNumber) {
         // Support "prefix--number" format from frontend (e.g. "+47--96016106")
         if (typeof phoneNumber === "string" && phoneNumber.includes("--")) {
@@ -555,13 +555,18 @@ class AuthController {
       // If sign-in fails and user was created via phone OTP, the Supabase Auth
       // credentials may not match. Sync them and retry.
       if (signInError && user.auth_id) {
-        console.log("[userLogin] direct sign-in failed for", user.user_name, "- syncing auth credentials");
+        console.log("[userLogin] direct sign-in failed:", signInError.message, "for", user.user_name, "- syncing auth credentials");
+
+        // Determine which email to use for Supabase Auth
         const syncEmail = user.email || authEmail;
+
+        // Strategy 1: sync credentials and retry signInWithPassword
         const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
           user.auth_id,
           { email: syncEmail!, password, email_confirm: true },
         );
         if (!updateErr) {
+          await new Promise((r) => setTimeout(r, 300));
           const retry = await supabasePublic.auth.signInWithPassword({
             email: syncEmail!,
             password,
@@ -571,6 +576,34 @@ class AuthController {
           console.log("[userLogin] retry sign-in:", signInError ? signInError.message : "success");
         } else {
           console.error("[userLogin] failed to sync auth credentials:", updateErr.message);
+        }
+
+        // Strategy 2: generateLink fallback (if signInWithPassword still fails)
+        if (signInError || !session?.session) {
+          console.log("[userLogin] Falling back to generateLink for:", syncEmail);
+          try {
+            const { data: linkData, error: linkError } =
+              await supabaseAdmin.auth.admin.generateLink({
+                type: "magiclink",
+                email: syncEmail!,
+              });
+            if (!linkError && linkData?.properties?.hashed_token) {
+              const { data: otpSession, error: otpError } =
+                await supabasePublic.auth.verifyOtp({
+                  type: "magiclink",
+                  token_hash: linkData.properties.hashed_token,
+                });
+              if (otpSession?.session) {
+                session = otpSession;
+                signInError = null;
+                console.log("[userLogin] generateLink fallback succeeded");
+              }
+              if (otpError) console.error("[userLogin] verifyOtp failed:", otpError.message);
+            }
+            if (linkError) console.error("[userLogin] generateLink failed:", linkError.message);
+          } catch (fallbackErr) {
+            console.error("[userLogin] generateLink fallback threw:", fallbackErr);
+          }
         }
       }
 
