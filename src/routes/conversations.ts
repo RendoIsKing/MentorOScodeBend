@@ -101,6 +101,64 @@ r.post(
     };
     sseHub.publishMany(payload.participants, { type: 'chat:thread', payload });
     try { Sentry.addBreadcrumb({ category: 'chat', message: 'conversation-created', level: 'info', data: { threadId: payload.id, isNew } }); } catch {}
+
+    // Send an automatic welcome message from the mentor for NEW conversations
+    if (isNew) {
+      void (async () => {
+        try {
+          const receiver = await findById(Tables.USERS, String(partnerId), 'id, is_mentor, user_name, first_name');
+          if (!receiver?.is_mentor) return;
+
+          console.log(`[chat:welcome] Generating welcome message from mentor ${partnerId} for new user ${me}`);
+          const welcomePrompt = `Den nye brukeren har nettopp startet en samtale med deg. ` +
+            `Send en varm velkomstmelding. Presenter deg selv, oppsummer hva du vet om brukeren ` +
+            `fra onboarding-dataen deres, fortell dem hva som kommer til å skje videre ` +
+            `(du vil bli kjent med dem, stille noen spørsmål, og så lage en personlig plan), ` +
+            `og spør om det er noe viktig de vil at du skal vite før dere begynner.`;
+
+          const aiText = await generateMentorResponse(me, String(partnerId), welcomePrompt);
+          if (!aiText || !String(aiText).trim()) return;
+
+          const welcomeMsg = await insertOne(Tables.CHAT_MESSAGES, {
+            thread_id: t.id,
+            sender: String(partnerId),
+            text: String(aiText).trim(),
+            read_by: [String(partnerId)],
+            flag: 'green',
+          });
+          if (!welcomeMsg) return;
+
+          const now = new Date().toISOString();
+          const unreadUpdate = { ...(t.unread || {}), [me]: ((t.unread || {})[me] ?? 0) + 1 };
+          await updateById(Tables.CHAT_THREADS, t.id, {
+            last_message_text: String(aiText).trim().slice(0, 200),
+            last_message_at: now,
+            unread: unreadUpdate,
+          });
+
+          const welcomePayload = {
+            type: 'chat:message',
+            payload: {
+              threadId: t.id,
+              message: {
+                id: welcomeMsg.id,
+                sender: String(partnerId),
+                text: String(aiText).trim(),
+                clientId: null,
+                createdAt: welcomeMsg.created_at,
+                status: 'delivered',
+                flag: 'green',
+              },
+            },
+          };
+          sseHub.publishMany(t.participants, welcomePayload);
+          console.log(`[chat:welcome] Welcome message sent successfully`);
+        } catch (err: any) {
+          console.error('[chat:welcome] Failed to send welcome message:', err?.message || err);
+        }
+      })();
+    }
+
     return res.json({ conversationId: payload.id });
   } catch (e: any) {
     console.error('[chat:create] Unhandled 500 error:', e?.message || e, e?.stack);

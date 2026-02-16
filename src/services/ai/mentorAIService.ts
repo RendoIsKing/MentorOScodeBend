@@ -1,7 +1,7 @@
 import { OpenAI } from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { retrieveContext } from "./ragService";
-import { findById, Tables } from "../../lib/db";
+import { findById, findOne, Tables } from "../../lib/db";
 import { AGENT_TOOLS, executeTool, loadUserContext } from "./agentTools";
 
 const OPENAI_KEY = (process.env.OPENAI_API_KEY || process.env.OPENAI_API_TOKEN || process.env.OPENAI_KEY || "").trim();
@@ -44,28 +44,31 @@ export async function generateResponse(
 ): Promise<string> {
   console.log(`[mentorAI] generateResponse called for user=${userId}, mentor=${mentorId}, msg="${userMessage.slice(0, 80)}...", attachments=${attachments?.length || 0}`);
 
-  // Fetch mentor profile, RAG context, and user context in parallel
+  // Fetch mentor profile, RAG context, user context, and onboarding profile in parallel
   let docs: Awaited<ReturnType<typeof retrieveContext>> = [];
   let mentorProfile: any = null;
   let userContext: Record<string, string> = {};
+  let onboardingProfile: any = null;
 
   try {
-    const [d, p, ctx] = await Promise.all([
+    const [d, p, ctx, obProfile] = await Promise.all([
       retrieveContext(userMessage, mentorId).catch((err) => {
         console.error("[mentorAI] retrieveContext failed:", err?.message || err);
         return [] as Awaited<ReturnType<typeof retrieveContext>>;
       }),
       getMentorProfile(mentorId),
       loadUserContext(userId),
+      findOne(Tables.USER_PROFILES, { user_id: userId }).catch(() => null),
     ]);
     docs = d;
     mentorProfile = p;
     userContext = ctx;
+    onboardingProfile = obProfile;
   } catch (err: any) {
     console.error("[mentorAI] Failed to fetch context/profile:", err?.message || err);
   }
 
-  console.log(`[mentorAI] RAG docs: ${docs.length}, profile: ${mentorProfile ? "found" : "null"}, userContext keys: ${Object.keys(userContext).length}`);
+  console.log(`[mentorAI] RAG docs: ${docs.length}, profile: ${mentorProfile ? "found" : "null"}, userContext keys: ${Object.keys(userContext).length}, onboarding: ${onboardingProfile ? "found" : "null"}`);
 
   const contextData = docs
     .map((item) => `Title: ${item.title}\n${item.content}`)
@@ -77,7 +80,20 @@ export async function generateResponse(
 
   parts.push(
     "You are a Mentor AI assistant. You MUST always respond in Norwegian (Bokmål). " +
-    "Never respond in English, Danish, or Swedish unless the user explicitly asks for it."
+    "Never respond in English, Danish, or Swedish unless the user explicitly asks for it.\n\n" +
+    "SAMTALEOPPSTART:\n" +
+    "Når en bruker sender sin FØRSTE melding, skal du:\n" +
+    "1. Ønske dem velkommen varmt og personlig (bruk navnet deres hvis du har det)\n" +
+    "2. Oppsummere hva du allerede vet om dem fra onboarding-dataen (mål, vekt, treningsdager, etc.)\n" +
+    "3. Fortelle dem hva som skjer videre: 'Basert på det jeg vet om deg, vil jeg lage en " +
+    "personlig trenings- og kostholdsplan. Men først vil jeg forsikre meg om at jeg har riktig informasjon.'\n" +
+    "4. Spør om det er noe du mangler eller om noe bør endres: f.eks. skader, matallergier, " +
+    "tilgjengelig utstyr, tidspreferanser\n" +
+    "5. Ikke generer en plan med en gang — ta en 'oppstartsamtale' først der du blir kjent med brukeren\n" +
+    "6. Når brukeren bekrefter at du har nok info, spør om du skal gå videre med å lage planen\n\n" +
+    "VIKTIG: Behandle brukeren som om de er helt nye. Led dem steg for steg. " +
+    "Forklar alt som skal skje. Vær varm, tydelig og konkret. " +
+    "Anta at brukeren trenger veiledning og ikke vet hvordan ting fungerer."
   );
 
   // TTS expression tags
@@ -140,6 +156,27 @@ export async function generateResponse(
       "CORE INSTRUCTIONS (these are the mentor's fundamental rules — always follow them):\n" +
       String(profile.core_instructions).trim()
     );
+  }
+
+  // Onboarding profile data (from the coach onboarding form)
+  if (onboardingProfile) {
+    const ob = onboardingProfile;
+    const profileLines: string[] = [];
+    if (ob.goals) profileLines.push(`Mål: ${ob.goals}`);
+    if (ob.current_weight_kg) profileLines.push(`Nåværende vekt: ${ob.current_weight_kg} kg`);
+    if (ob.training_days_per_week) profileLines.push(`Treningsdager per uke: ${ob.training_days_per_week}`);
+    if (ob.nutrition_preferences) profileLines.push(`Matpreferanser: ${ob.nutrition_preferences}`);
+    if (ob.strengths) profileLines.push(`Styrker: ${ob.strengths}`);
+    if (ob.weaknesses) profileLines.push(`Svakheter: ${ob.weaknesses}`);
+    if (ob.injury_history) profileLines.push(`Skadehistorikk: ${ob.injury_history}`);
+    if (profileLines.length > 0) {
+      parts.push(
+        "BRUKERENS ONBOARDING-PROFIL (data brukeren fylte inn ved registrering):\n" +
+        profileLines.join("\n") + "\n\n" +
+        "VIKTIG: Bruk denne informasjonen aktivt i samtalen. Referer til brukerens mål, " +
+        "vekt, treningsdager, etc. når det er relevant. Vis at du kjenner dem."
+      );
+    }
   }
 
   // User context (remembered facts)
