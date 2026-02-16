@@ -594,7 +594,7 @@ class AuthController {
                   token_hash: linkData.properties.hashed_token,
                 });
               if (otpSession?.session) {
-                session = otpSession;
+                session = { user: otpSession.user!, session: otpSession.session } as typeof session;
                 signInError = null;
                 console.log("[userLogin] generateLink fallback succeeded");
               }
