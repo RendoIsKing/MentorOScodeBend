@@ -919,20 +919,37 @@ export class UsersControllers {
     }
   };
 
-  /* ── Destroy (Soft-delete User) ──────────────────────────────────────── */
+  /* ── Destroy (Soft-delete User + remove from Supabase Auth) ────────── */
   static destroy = async (req: Request, res: Response): Promise<Response> => {
     const { id } = req.params;
 
     try {
-      const user = await updateById(Tables.USERS, id, {
+      const existingUser = await findById(Tables.USERS, id);
+      if (!existingUser) {
+        return res
+          .status(400)
+          .json({ error: { message: "User to delete does not exists." } });
+      }
+
+      // Soft-delete in public.users
+      await updateById(Tables.USERS, id, {
         is_deleted: true,
         deleted_at: new Date().toISOString(),
       });
 
-      if (!user) {
-        return res
-          .status(400)
-          .json({ error: { message: "User to delete does not exists." } });
+      // Also remove from Supabase Auth so the email/phone can be re-used
+      if (existingUser.auth_id) {
+        try {
+          const { supabaseAdmin } = await import("../../lib/supabase");
+          const { error: authDeleteErr } = await supabaseAdmin.auth.admin.deleteUser(
+            existingUser.auth_id
+          );
+          if (authDeleteErr) {
+            console.error("[destroy] Failed to delete Supabase Auth user:", authDeleteErr.message);
+          }
+        } catch (authErr) {
+          console.error("[destroy] Error deleting Supabase Auth user:", authErr);
+        }
       }
 
       return res.json({ message: "User deleted successfully." });
