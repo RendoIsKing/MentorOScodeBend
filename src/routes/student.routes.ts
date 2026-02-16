@@ -206,10 +206,70 @@ async function buildSnapshot(userId: string, period: Period) {
     }];
   }
 
+  // Today's meal logs
+  const todayStr = today.toISOString().slice(0, 10);
+  const { data: todayMealRows } = await db
+    .from(Tables.MEAL_LOGS)
+    .select('id, date, meal_type, description, total_calories, total_protein_g, total_carbs_g, total_fat_g, items, created_at')
+    .eq('user_id', userId)
+    .eq('date', todayStr)
+    .order('created_at', { ascending: true });
+
+  const todayMeals = (todayMealRows || []) as any[];
+  const todayTotals = todayMeals.reduce(
+    (acc, m) => ({
+      calories: acc.calories + (Number(m.total_calories) || 0),
+      protein: acc.protein + (Number(m.total_protein_g) || 0),
+      carbs: acc.carbs + (Number(m.total_carbs_g) || 0),
+      fat: acc.fat + (Number(m.total_fat_g) || 0),
+      meal_count: acc.meal_count + 1,
+    }),
+    { calories: 0, protein: 0, carbs: 0, fat: 0, meal_count: 0 },
+  );
+
+  // Recent workout logs (last 14 days)
+  const twoWeeksAgo = new Date(today);
+  twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+  const { data: workoutRows } = await db
+    .from(Tables.WORKOUT_LOGS)
+    .select('id, date, entries, created_at')
+    .eq('user_id', userId)
+    .gte('date', twoWeeksAgo.toISOString().slice(0, 10))
+    .order('date', { ascending: false })
+    .limit(20);
+
+  const recentWorkouts = (workoutRows || []) as any[];
+
+  // User points summary
+  let totalPoints = 0;
+  let pointsByCategory: Record<string, number> = {};
+  try {
+    const { data: pointRows } = await db
+      .from('user_points')
+      .select('category, points')
+      .eq('user_id', userId);
+    if (pointRows) {
+      for (const r of pointRows as any[]) {
+        totalPoints += Number(r.points) || 0;
+        pointsByCategory[r.category] = (pointsByCategory[r.category] || 0) + (Number(r.points) || 0);
+      }
+    }
+  } catch {}
+
+  // Calculate real adherence from workout logs
+  const last7 = new Date(today); last7.setDate(last7.getDate() - 7);
+  const last28 = new Date(today); last28.setDate(last28.getDate() - 28);
+  const workoutsLast7 = recentWorkouts.filter(w => w.date >= last7.toISOString().slice(0, 10)).length;
+  const workoutsLast28 = recentWorkouts.filter(w => w.date >= last28.toISOString().slice(0, 10)).length;
+
   const payload: any = {
     weightTrend: merged,
     currentTrainingPlan: trainingSessions,
     currentNutritionPlan: nutritionPlanPayload,
+    todayMeals,
+    todayTotals,
+    recentWorkouts,
+    points: { total: totalPoints, byCategory: pointsByCategory },
     planChanges: changes.map((c: any) => ({
       id: c.id, date: c.created_at,
       author: c.actor || 'coach-engh',
@@ -217,12 +277,13 @@ async function buildSnapshot(userId: string, period: Period) {
       summary: c.summary,
     })),
     glance: {
-      nextSession: { date: today.toISOString(), focus: 'Pull — rygg/biceps' },
-      adherence7d: 0.86, adherence28d: 0.78,
+      workoutsLast7d: workoutsLast7,
+      workoutsLast28d: workoutsLast28,
+      mealsLoggedToday: todayTotals.meal_count,
+      caloriesLoggedToday: todayTotals.calories,
       lastCheckIn: today.toISOString(),
       activeGoals: [],
     },
-    topExercises: ['Markløft', 'Knebøy', 'Benkpress', 'Roing', 'Pull‑ups'],
   };
 
   // Goals
