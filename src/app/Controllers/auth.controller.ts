@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { supabaseAdmin } from "../../lib/supabase";
+import { supabaseAdmin, supabasePublic } from "../../lib/supabase";
 import { OAuth2Client } from "google-auth-library";
 import { addMinutes } from "date-fns";
 import otpGenerator from "../../utils/otpGenerator";
@@ -211,7 +211,7 @@ class AuthController {
 
       // Sign in to get tokens
       const { data: session, error: signInError } =
-        await supabaseAdmin.auth.signInWithPassword({ email, password });
+        await supabasePublic.auth.signInWithPassword({ email, password });
 
       if (signInError || !session.session) {
         // User created but can't sign in — return success with user data
@@ -248,7 +248,7 @@ class AuthController {
 
       // Try direct sign-in first
       let { data: session, error } =
-        await supabaseAdmin.auth.signInWithPassword({ email, password });
+        await supabasePublic.auth.signInWithPassword({ email, password });
 
       // If direct sign-in fails, the user may have registered via phone OTP
       // and the Supabase Auth email is a placeholder. Look up by email in
@@ -274,7 +274,7 @@ class AuthController {
             console.error("[login] failed to update auth user credentials:", updateErr.message);
           } else {
             // Retry sign-in with the updated credentials
-            const retry = await supabaseAdmin.auth.signInWithPassword({ email, password });
+            const retry = await supabasePublic.auth.signInWithPassword({ email, password });
             session = retry.data;
             error = retry.error;
             console.log("[login] retry sign-in result:", error ? error.message : "success");
@@ -545,9 +545,9 @@ class AuthController {
         return res.status(400).json({ message: "Invalid login credentials" });
       }
 
-      // Sign in with Supabase Auth
+      // Sign in with Supabase Auth (use public/anon client for proper JWT)
       let { data: session, error: signInError } =
-        await supabaseAdmin.auth.signInWithPassword({
+        await supabasePublic.auth.signInWithPassword({
           email: authEmail,
           password,
         });
@@ -562,7 +562,7 @@ class AuthController {
           { email: syncEmail!, password, email_confirm: true },
         );
         if (!updateErr) {
-          const retry = await supabaseAdmin.auth.signInWithPassword({
+          const retry = await supabasePublic.auth.signInWithPassword({
             email: syncEmail!,
             password,
           });
@@ -736,15 +736,16 @@ class AuthController {
       }
 
       // Generate real Supabase Auth tokens for Google users
+      // IMPORTANT: Use supabasePublic (anon key) for signInWithPassword —
+      // the service-role client may not issue proper user JWTs.
       let accessToken = "";
       let refreshToken = "";
 
       const authId = user?.auth_id;
       if (authId) {
-        // Use a stable derived password for Google users so signInWithPassword works reliably
         const stablePw = `goo_${authId}_${process.env.SESSION_SECRET || "mentorio"}`;
 
-        // Ensure password is set (idempotent)
+        // Ensure password is set (idempotent) via admin API
         await supabaseAdmin.auth.admin.updateUserById(authId, {
           password: stablePw,
         });
@@ -753,20 +754,22 @@ class AuthController {
         const authEmail = authUserData?.user?.email;
 
         if (authEmail) {
-          const { data: session, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
+          // Use the public/anon client for signInWithPassword
+          const { data: session, error: signInError } = await supabasePublic.auth.signInWithPassword({
             email: authEmail,
             password: stablePw,
           });
 
           if (signInError) {
             console.error("[GoogleLogin] signInWithPassword failed:", signInError.message);
-            // Retry once — the password update may need a moment to propagate
-            const { data: retrySession, error: retryError } = await supabaseAdmin.auth.signInWithPassword({
+            // Retry once with a small delay for password propagation
+            await new Promise((r) => setTimeout(r, 500));
+            const { data: retrySession, error: retryError } = await supabasePublic.auth.signInWithPassword({
               email: authEmail,
               password: stablePw,
             });
             if (retryError) {
-              console.error("[GoogleLogin] retry signInWithPassword also failed:", retryError.message);
+              console.error("[GoogleLogin] retry also failed:", retryError.message);
             }
             if (retrySession?.session) {
               accessToken = retrySession.session.access_token;
@@ -782,7 +785,8 @@ class AuthController {
       }
 
       if (!accessToken) {
-        console.error("[GoogleLogin] Failed to generate auth tokens for user:", user?.id);
+        console.error("[GoogleLogin] Failed to generate auth tokens for user:", user?.id, "— returning error");
+        return res.status(500).json({ message: "Could not generate auth session. Please try again." });
       }
 
       const rememberMe = req.body.rememberMe !== false; // Default to true
@@ -872,7 +876,7 @@ class AuthController {
           });
           if (pwErr) console.error("[verifyOtp] password update error:", pwErr.message);
 
-          const { data: session, error: signInErr } = await supabaseAdmin.auth.signInWithPassword({
+          const { data: session, error: signInErr } = await supabasePublic.auth.signInWithPassword({
             email: authEmail,
             password: tempPw,
           });

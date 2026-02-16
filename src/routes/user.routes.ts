@@ -61,7 +61,6 @@ user.get;
 user.post("/account", Auth, validateZod({ body: userInputSchema }), UsersControllers.onboardUser);
 user.get(
   "/user-name-availability",
-  Auth,
   UsersControllers.checkUsernameAvailability
 );
 
