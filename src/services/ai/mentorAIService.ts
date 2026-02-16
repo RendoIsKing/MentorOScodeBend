@@ -45,6 +45,37 @@ export async function generateResponse(
 ): Promise<string> {
   console.log(`[mentorAI] generateResponse called for user=${userId}, mentor=${mentorId}, msg="${userMessage.slice(0, 80)}...", attachments=${attachments?.length || 0}`);
 
+  // Try the Python Agent Service first (multi-agent system with OpenAI Agents SDK)
+  const agentServiceUrl = process.env.AGENT_SERVICE_URL;
+  if (agentServiceUrl) {
+    try {
+      console.log(`[mentorAI] Routing to Python Agent Service at ${agentServiceUrl}...`);
+      const resp = await fetch(`${agentServiceUrl}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: userId,
+          mentor_id: mentorId,
+          message: userMessage,
+          conversation_history: conversationHistory || [],
+        }),
+        signal: AbortSignal.timeout(60_000), // 60s timeout
+      });
+      if (resp.ok) {
+        const data = await resp.json() as { response?: string; agent_name?: string; tools_called?: string[] };
+        console.log(`[mentorAI] Agent Service response from ${data.agent_name}: ${String(data.response || '').length} chars, tools: ${JSON.stringify(data.tools_called || [])}`);
+        if (data.response && String(data.response).trim()) {
+          return String(data.response);
+        }
+        console.warn("[mentorAI] Agent Service returned empty response, falling back to direct OpenAI");
+      } else {
+        console.warn(`[mentorAI] Agent Service returned ${resp.status}, falling back to direct OpenAI`);
+      }
+    } catch (err: any) {
+      console.warn(`[mentorAI] Agent Service unavailable (${err?.message || err}), falling back to direct OpenAI`);
+    }
+  }
+
   // Fetch mentor profile, RAG context, user context, and onboarding profile in parallel
   let docs: Awaited<ReturnType<typeof retrieveContext>> = [];
   let mentorProfile: any = null;
