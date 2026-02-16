@@ -315,13 +315,11 @@ CallRoutes.get(
         .limit(50);
 
       if (error) {
-        // If the table doesn't exist yet, return empty list instead of crashing
-        if (error.code === "42P01" || error.message?.includes("does not exist")) {
-          console.warn("[call] call_logs table does not exist yet — returning empty list");
-          return res.json({ missedCalls: [], count: 0 });
-        }
-        console.error("[call] Failed to fetch missed calls:", error);
-        return res.status(500).json({ message: "Kunne ikke hente tapte anrop." });
+        // Gracefully return empty list for ANY query error (missing table,
+        // RLS denial, network hiccup, etc.) — prevents 500 retry-storms
+        // from the frontend polling this endpoint.
+        console.warn("[call] call_logs query error (returning empty):", error.code, error.message);
+        return res.json({ missedCalls: [], count: 0 });
       }
 
       return res.json({

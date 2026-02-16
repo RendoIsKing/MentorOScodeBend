@@ -25,10 +25,21 @@ export const supabaseAdmin: SupabaseClient = createClient(supabaseUrl, supabaseS
 /**
  * Public client – uses the anon key, respects RLS.
  * Use this when you want row-level security to apply (e.g., user-scoped queries).
+ *
+ * IMPORTANT: persistSession must be false on the server / serverless
+ * (Vercel, Railway). Without this, the singleton client stores the session
+ * of the LAST signInWithPassword call in memory, which bleeds across
+ * requests on the same function instance and causes Google-login failures.
  */
 export const supabasePublic: SupabaseClient = createClient(
   supabaseUrl,
   supabaseAnonKey || supabaseServiceKey,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  },
 );
 
 /**

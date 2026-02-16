@@ -703,23 +703,34 @@ class AuthController {
           });
 
         if (authError) {
+          console.error("[GoogleLogin] createUser failed:", authError.message);
           return res.status(500).json({ message: authError.message });
         }
 
-        // Update trigger-created row
-        const { data: newUser } = await supabaseAdmin
-          .from("users")
-          .update({
-            first_name: payload.given_name || "",
-            last_name: payload.family_name || "",
-            full_name: payload.name || "",
-            google_id: googleId,
-            is_active: true,
-            is_verified: true,
-          })
-          .eq("auth_id", authData.user.id)
-          .select("*")
-          .single();
+        // Update the trigger-created row in public.users.
+        // The DB trigger may take a moment to fire, so retry if needed.
+        let newUser: any = null;
+        for (let attempt = 0; attempt < 3 && !newUser; attempt++) {
+          if (attempt > 0) await new Promise((r) => setTimeout(r, 300 * attempt));
+          const { data } = await supabaseAdmin
+            .from("users")
+            .update({
+              first_name: payload.given_name || "",
+              last_name: payload.family_name || "",
+              full_name: payload.name || "",
+              google_id: googleId,
+              is_active: true,
+              is_verified: true,
+            })
+            .eq("auth_id", authData.user.id)
+            .select("*")
+            .single();
+          newUser = data;
+        }
+
+        if (!newUser) {
+          console.error("[GoogleLogin] trigger row not found after createUser. auth_id:", authData.user.id);
+        }
 
         user = newUser;
         isNewUser = true;
@@ -731,61 +742,96 @@ class AuthController {
           .eq("id", user.id);
       }
 
-      if (!user!.user_name || String(user!.user_name).trim() === "") {
+      if (!user?.user_name || String(user.user_name).trim() === "") {
         isNewUser = true;
       }
 
-      // Generate real Supabase Auth tokens for Google users
-      // IMPORTANT: Use supabasePublic (anon key) for signInWithPassword —
-      // the service-role client may not issue proper user JWTs.
+      // Generate real Supabase Auth tokens for Google users.
       let accessToken = "";
       let refreshToken = "";
 
       const authId = user?.auth_id;
-      if (authId) {
-        const stablePw = `goo_${authId}_${process.env.SESSION_SECRET || "mentorio"}`;
+      if (!authId) {
+        console.error("[GoogleLogin] user has no auth_id – cannot generate session. user.id:", user?.id);
+        return res.status(500).json({ message: "User account incomplete. Please try again." });
+      }
 
-        // Ensure password is set (idempotent) via admin API
-        await supabaseAdmin.auth.admin.updateUserById(authId, {
+      const { data: authUserData } = await supabaseAdmin.auth.admin.getUserById(authId);
+      const authEmail = authUserData?.user?.email;
+
+      if (!authEmail) {
+        console.error("[GoogleLogin] auth user has no email. authId:", authId);
+        return res.status(500).json({ message: "Auth account missing email. Please try again." });
+      }
+
+      // Strategy 1: signInWithPassword (fast path)
+      const stablePw = `goo_${authId}_${process.env.SESSION_SECRET || "mentorio"}`;
+      await supabaseAdmin.auth.admin.updateUserById(authId, { password: stablePw });
+
+      const { data: session, error: signInError } = await supabasePublic.auth.signInWithPassword({
+        email: authEmail,
+        password: stablePw,
+      });
+
+      if (session?.session) {
+        accessToken = session.session.access_token;
+        refreshToken = session.session.refresh_token;
+      }
+
+      // Retry once if first attempt failed (password propagation delay)
+      if (!accessToken && signInError) {
+        console.warn("[GoogleLogin] signInWithPassword attempt 1 failed:", signInError.message);
+        await new Promise((r) => setTimeout(r, 800));
+        const { data: retrySession, error: retryError } = await supabasePublic.auth.signInWithPassword({
+          email: authEmail,
           password: stablePw,
         });
+        if (retrySession?.session) {
+          accessToken = retrySession.session.access_token;
+          refreshToken = retrySession.session.refresh_token;
+        }
+        if (retryError) {
+          console.warn("[GoogleLogin] signInWithPassword attempt 2 failed:", retryError.message);
+        }
+      }
 
-        const { data: authUserData } = await supabaseAdmin.auth.admin.getUserById(authId);
-        const authEmail = authUserData?.user?.email;
-
-        if (authEmail) {
-          // Use the public/anon client for signInWithPassword
-          const { data: session, error: signInError } = await supabasePublic.auth.signInWithPassword({
-            email: authEmail,
-            password: stablePw,
-          });
-
-          if (signInError) {
-            console.error("[GoogleLogin] signInWithPassword failed:", signInError.message);
-            // Retry once with a small delay for password propagation
-            await new Promise((r) => setTimeout(r, 500));
-            const { data: retrySession, error: retryError } = await supabasePublic.auth.signInWithPassword({
+      // Strategy 2: generateLink + verifyOtp fallback
+      // Works even when email+password auth is restricted or password
+      // hasn't propagated yet — doesn't require a password at all.
+      if (!accessToken) {
+        console.log("[GoogleLogin] Falling back to generateLink for:", authEmail);
+        try {
+          const { data: linkData, error: linkError } =
+            await supabaseAdmin.auth.admin.generateLink({
+              type: "magiclink",
               email: authEmail,
-              password: stablePw,
             });
-            if (retryError) {
-              console.error("[GoogleLogin] retry also failed:", retryError.message);
-            }
-            if (retrySession?.session) {
-              accessToken = retrySession.session.access_token;
-              refreshToken = retrySession.session.refresh_token;
-            }
-          }
 
-          if (session?.session) {
-            accessToken = session.session.access_token;
-            refreshToken = session.session.refresh_token;
+          if (linkError) {
+            console.error("[GoogleLogin] generateLink failed:", linkError.message);
+          } else if (linkData?.properties?.hashed_token) {
+            const { data: otpSession, error: otpError } =
+              await supabasePublic.auth.verifyOtp({
+                type: "magiclink",
+                token_hash: linkData.properties.hashed_token,
+              });
+
+            if (otpSession?.session) {
+              accessToken = otpSession.session.access_token;
+              refreshToken = otpSession.session.refresh_token;
+              console.log("[GoogleLogin] generateLink fallback succeeded");
+            }
+            if (otpError) {
+              console.error("[GoogleLogin] verifyOtp failed:", otpError.message);
+            }
           }
+        } catch (fallbackErr) {
+          console.error("[GoogleLogin] generateLink fallback threw:", fallbackErr);
         }
       }
 
       if (!accessToken) {
-        console.error("[GoogleLogin] Failed to generate auth tokens for user:", user?.id, "— returning error");
+        console.error("[GoogleLogin] All token strategies failed for user:", user?.id, "authId:", authId, "email:", authEmail);
         return res.status(500).json({ message: "Could not generate auth session. Please try again." });
       }
 
