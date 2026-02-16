@@ -866,7 +866,26 @@ export class UsersControllers {
       if (user) {
         // Exclude password from response
         const { password, ...userWithoutPassword } = user;
-        return res.json({ data: userWithoutPassword });
+
+        // Resolve photo and cover photo from files table
+        let photo: any = null;
+        let coverPhoto: any = null;
+        if (user.photo_id) {
+          try { photo = await findById(Tables.FILES, user.photo_id); } catch {}
+        }
+        if (user.cover_photo_id) {
+          try { coverPhoto = await findById(Tables.FILES, user.cover_photo_id); } catch {}
+        }
+
+        return res.json({
+          data: {
+            ...userWithoutPassword,
+            photo,
+            coverPhoto,
+            photoId: user.photo_id,
+            coverPhotoId: user.cover_photo_id,
+          },
+        });
       }
 
       return res
