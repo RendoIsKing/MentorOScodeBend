@@ -332,6 +332,7 @@ class AuthController {
         data: {
           ...toUserPayload(user),
           token: session.session.access_token,
+          refreshToken: session.session.refresh_token,
         },
       });
     } catch (error) {
@@ -502,13 +503,23 @@ class AuthController {
       }
 
       if (orClauses.length === 0) {
-        return res.status(400).json({ message: "Invalid login credentials" });
+        return res.status(400).json({
+          message: "Vennligst oppgi e-post, brukernavn eller telefonnummer.",
+          code: "MISSING_IDENTIFIER",
+        });
       }
 
       const { data: user } = await userQuery
         .or(orClauses.join(","))
         .limit(1)
         .maybeSingle();
+
+      if (!user) {
+        return res.status(404).json({
+          message: "Finner ingen bruker med denne informasjonen. Sjekk at du har skrevet riktig, eller opprett en ny konto.",
+          code: "USER_NOT_FOUND",
+        });
+      }
 
       // Account lockout check
       if (user?.lock_until && new Date(user.lock_until) > new Date()) {
@@ -519,10 +530,6 @@ class AuthController {
           message: `Account is temporarily locked. Try again in ${remainingMin} minute(s).`,
           code: "ACCOUNT_LOCKED",
         });
-      }
-
-      if (!user) {
-        return res.status(400).json({ message: "Invalid login credentials" });
       }
 
       // Determine the email to use for Supabase Auth sign-in
@@ -586,11 +593,14 @@ class AuthController {
 
         if (attempts >= MAX_ATTEMPTS) {
           return res.status(423).json({
-            message: `Too many failed attempts. Account locked for ${LOCK_DURATION_MIN} minutes.`,
+            message: `For mange mislykkede forsøk. Kontoen er låst i ${LOCK_DURATION_MIN} minutter.`,
             code: "ACCOUNT_LOCKED",
           });
         }
-        return res.status(400).json({ message: "Invalid login credentials" });
+        return res.status(401).json({
+          message: "Feil passord. Sjekk at du har skrevet riktig passord og prøv igjen.",
+          code: "WRONG_PASSWORD",
+        });
       }
 
       // Reset failed attempts
@@ -625,6 +635,7 @@ class AuthController {
       return res.json({
         message: "User login successfully",
         token: session.session.access_token,
+        refreshToken: session.session.refresh_token,
         user: {
           id: user.id,
           name: `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim(),
@@ -765,6 +776,7 @@ class AuthController {
 
       return res.json({
         token: accessToken,
+        refreshToken,
         isNewUser,
         user: {
           id: user!.id,
@@ -874,6 +886,7 @@ class AuthController {
         data: {
           ...toUserPayload(updatedUser || user),
           token: accessToken,
+          refreshToken,
         },
         message: "User verified successfully",
       });
@@ -1382,6 +1395,7 @@ class AuthController {
       return res.json({
         message: "Token refreshed",
         token: session.session.access_token,
+        refreshToken: session.session.refresh_token,
       });
     } catch (error) {
       return res
