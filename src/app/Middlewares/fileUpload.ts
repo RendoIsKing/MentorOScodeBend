@@ -94,6 +94,20 @@ export function uploadToSupabase(bucketNameOrPath?: string) {
         ? resolveBucket(bucketNameOrPath)
         : "posts";
 
+      // Ensure the bucket exists (auto-create if missing)
+      const { data: buckets } = await supabaseAdmin.storage.listBuckets();
+      const bucketExists = (buckets || []).some((b: any) => b.name === bucket);
+      if (!bucketExists) {
+        console.log(`[uploadToSupabase] Bucket "${bucket}" not found – creating it as public…`);
+        const { error: createErr } = await supabaseAdmin.storage.createBucket(bucket, {
+          public: true,
+          fileSizeLimit: 1024 * 1024 * 50,
+        });
+        if (createErr) {
+          console.error(`[uploadToSupabase] Failed to create bucket "${bucket}":`, createErr.message);
+        }
+      }
+
       for (const file of files) {
         const ext = file.originalname.split(".").pop() || "bin";
         const storagePath = `${uuidv4()}.${ext}`;
