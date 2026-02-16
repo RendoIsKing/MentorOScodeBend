@@ -20,6 +20,11 @@ const ALLOWED_FILE_TYPES = [
   "video/mpeg",
   "video/x-msvideo",
   "video/quicktime",
+  "audio/webm",
+  "audio/ogg",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/wav",
 ];
 
 // ── Multer: memory storage (file buffer in RAM) ──────────────────────────────
