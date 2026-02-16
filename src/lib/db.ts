@@ -58,6 +58,13 @@ export const Tables = {
   MODERATION_REPORTS: "moderation_reports",
   COLLECTIONS: "collections",
   FEATURES: "features",
+  MEAL_LOGS: "meal_logs",
+  USER_CONTEXT: "user_context",
+  AGENT_AVATARS: "agent_avatars",
+  USER_POINTS: "user_points",
+  USER_POINTS_SUMMARY: "user_points_summary",
+  COMPETITIONS: "competitions",
+  COMPETITION_PARTICIPANTS: "competition_participants",
 } as const;
 
 // ── Common query helpers ─────────────────────────────────────────────────────

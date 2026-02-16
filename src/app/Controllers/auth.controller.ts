@@ -33,16 +33,16 @@ function setAuthCookies(
   res: Response,
   accessToken: string,
   refreshToken: string,
+  rememberMe = true,
 ) {
   try {
-    // Access token cookie: 1 hour (Supabase default)
+    // Access token cookie: 1 hour (Supabase default lifetime)
     res.cookie("auth_token", accessToken, getCookieOptions(1000 * 60 * 60));
-    // Refresh token cookie: 7 days
-    res.cookie(
-      "refresh_token",
-      refreshToken,
-      getCookieOptions(1000 * 60 * 60 * 24 * 7),
-    );
+    // Refresh token cookie: 30 days if "remember me", 7 days otherwise
+    const refreshMaxAge = rememberMe
+      ? 1000 * 60 * 60 * 24 * 30 // 30 days
+      : 1000 * 60 * 60 * 24 * 7; // 7 days
+    res.cookie("refresh_token", refreshToken, getCookieOptions(refreshMaxAge));
   } catch {}
 }
 
@@ -222,6 +222,7 @@ class AuthController {
         res,
         session.session.access_token,
         session.session.refresh_token,
+        true, // new users default to remember
       );
 
       return res.json({
@@ -324,6 +325,7 @@ class AuthController {
         res,
         session.session.access_token,
         session.session.refresh_token,
+        req.body.rememberMe !== false,
       );
 
       return res.json({
@@ -607,6 +609,7 @@ class AuthController {
         res,
         session.session.access_token,
         session.session.refresh_token,
+        req.body.rememberMe !== false,
       );
 
       return res.json({
@@ -717,18 +720,27 @@ class AuthController {
 
       const authId = user?.auth_id;
       if (authId) {
+        // Use a stable derived password for Google users so signInWithPassword works reliably
+        const stablePw = `goo_${authId}_${process.env.SESSION_SECRET || "mentorio"}`;
+
+        // Ensure password is set (idempotent)
+        await supabaseAdmin.auth.admin.updateUserById(authId, {
+          password: stablePw,
+        });
+
         const { data: authUserData } = await supabaseAdmin.auth.admin.getUserById(authId);
         const authEmail = authUserData?.user?.email;
 
         if (authEmail) {
-          const tempPw = `google_verified_${authId}_${Date.now()}`;
-          await supabaseAdmin.auth.admin.updateUserById(authId, {
-            password: tempPw,
-          });
-          const { data: session } = await supabaseAdmin.auth.signInWithPassword({
+          const { data: session, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
             email: authEmail,
-            password: tempPw,
+            password: stablePw,
           });
+
+          if (signInError) {
+            console.error("[GoogleLogin] signInWithPassword failed:", signInError.message);
+          }
+
           if (session?.session) {
             accessToken = session.session.access_token;
             refreshToken = session.session.refresh_token;
@@ -736,8 +748,9 @@ class AuthController {
         }
       }
 
+      const rememberMe = req.body.rememberMe !== false; // Default to true
       if (accessToken) {
-        setAuthCookies(res, accessToken, refreshToken);
+        setAuthCookies(res, accessToken, refreshToken, rememberMe);
       }
 
       return res.json({
@@ -1348,10 +1361,12 @@ class AuthController {
         });
       }
 
+      // On refresh, always use long-lived cookies (user was already "remembered")
       setAuthCookies(
         res,
         session.session.access_token,
         session.session.refresh_token,
+        true,
       );
 
       return res.json({

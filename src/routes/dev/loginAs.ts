@@ -11,7 +11,7 @@ const r = Router();
 const emailSchema = z.object({ email: z.string().email() }).strict();
 const setUsernameSchema = z.object({ userName: nonEmptyString }).strict();
 const migratePostsSchema = z.object({ sourceUserId: objectId }).strict();
-const setPasswordSchema = z.object({ password: nonEmptyString.min(6) }).strict();
+const setPasswordSchema = z.object({ password: nonEmptyString.min(8) }).strict();
 
 function isValidId(id: string): boolean {
   return !!id && /^[0-9a-fA-F-]{24,36}$/.test(id);
@@ -172,7 +172,7 @@ r.post("/dev/set-password", validateZod({ body: setPasswordSchema }), async (req
     const devOn = enabled === "true" || process.env.NODE_ENV !== "production";
     if (!devOn) return res.status(404).json({ error: "DEV_LOGIN_DISABLED", value: process.env.DEV_LOGIN_ENABLED });
     const pwd = req.body?.password as string;
-    if (!pwd || pwd.length < 6) return res.status(400).json({ error: "password (>=6 chars) required" });
+    if (!pwd || pwd.length < 8) return res.status(400).json({ error: "password (>=8 chars) required" });
     const userId = req.session?.user?.id;
     if (!userId || !isValidId(userId)) return res.status(401).json({ error: "no session" });
     const user = await findById(Tables.USERS, userId);
@@ -192,7 +192,7 @@ r.get("/dev/set-password", async (req: any, res) => {
     const enabled = String(process.env.DEV_LOGIN_ENABLED || "").trim().toLowerCase();
     if (enabled !== "true") return res.status(404).json({ error: "DEV_LOGIN_DISABLED", value: process.env.DEV_LOGIN_ENABLED });
     const pwd = req.query?.password as string | undefined;
-    if (!pwd || pwd.length < 6) return res.status(400).json({ error: "password (>=6 chars) required" });
+    if (!pwd || pwd.length < 8) return res.status(400).json({ error: "password (>=8 chars) required" });
     const userId = req.session?.user?.id;
     if (!userId || !isValidId(userId)) return res.status(401).json({ error: "no session" });
     const user = await findById(Tables.USERS, userId);
