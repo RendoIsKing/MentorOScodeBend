@@ -132,44 +132,70 @@ async function buildSnapshot(userId: string, period: Period) {
   const dbWeights = (weightRows || []) as { date: string; kg: number }[];
   const merged = days.map(d => dbWeights.find(w => w.date === d)).filter(Boolean);
 
-  // Plans & goals
-  const { data: currentTraining } = await db
-    .from(Tables.TRAINING_PLANS)
-    .select('*')
-    .eq('user_id', userId)
-    .eq('is_current', true)
-    .order('version', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  // Plans & goals — check both legacy tables and versioned tables
+  const [legacyTrainingResult, legacyNutritionResult, versionedTrainingResult, versionedNutritionResult] = await Promise.all([
+    db.from(Tables.TRAINING_PLANS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle(),
+    db.from(Tables.NUTRITION_PLANS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle(),
+    db.from(Tables.TRAINING_PLAN_VERSIONS).select('*').eq('user_id', userId).order('version', { ascending: false }).limit(1).maybeSingle(),
+    db.from(Tables.NUTRITION_PLAN_VERSIONS).select('*').eq('user_id', userId).order('version', { ascending: false }).limit(1).maybeSingle(),
+  ]);
 
-  const { data: currentNutrition } = await db
-    .from(Tables.NUTRITION_PLANS)
-    .select('*')
-    .eq('user_id', userId)
-    .eq('is_current', true)
-    .order('version', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const currentTraining = legacyTrainingResult.data;
+  const currentNutrition = legacyNutritionResult.data;
+  const versionedTraining = versionedTrainingResult.data;
+  const versionedNutrition = versionedNutritionResult.data;
 
   const changes = await findMany(Tables.CHANGE_EVENTS, { user_id: userId }, {
     orderBy: 'created_at', ascending: false, limit: 10,
   });
 
-  const trainingSessions = (currentTraining?.sessions || []).map((s: any, idx: number) => ({
-    id: currentTraining?.id,
-    index: idx,
-    date: today.toISOString(),
-    day: s.day,
-    focus: s.focus || `Økt ${idx + 1}`,
-    sets: (s.exercises || []).map((e: any) => ({ exercise: e.name, sets: e.sets, reps: e.reps, weight: e.load })),
-    guidelines: currentTraining?.guidelines || [],
-    sourceText: currentTraining?.source_text || undefined,
-  }));
+  // Build training sessions from legacy OR versioned data
+  let trainingSessions: any[] = [];
+  if (versionedTraining?.days?.length) {
+    // Prefer versioned training plan (newer system, used by agent)
+    trainingSessions = (versionedTraining.days as any[]).map((d: any, idx: number) => ({
+      id: versionedTraining.id,
+      index: idx,
+      date: versionedTraining.created_at || today.toISOString(),
+      day: d.day,
+      focus: d.focus || `Økt ${idx + 1}`,
+      sets: (d.exercises || []).map((e: any) => ({ exercise: e.name, sets: e.sets, reps: e.reps, weight: e.load || e.rpe })),
+      notes: d.notes,
+      guidelines: [],
+      version: versionedTraining.version,
+    }));
+  } else if (currentTraining?.sessions?.length) {
+    trainingSessions = (currentTraining.sessions as any[]).map((s: any, idx: number) => ({
+      id: currentTraining.id,
+      index: idx,
+      date: today.toISOString(),
+      day: s.day,
+      focus: s.focus || `Økt ${idx + 1}`,
+      sets: (s.exercises || []).map((e: any) => ({ exercise: e.name, sets: e.sets, reps: e.reps, weight: e.load })),
+      guidelines: currentTraining.guidelines || [],
+      sourceText: currentTraining.source_text || undefined,
+    }));
+  }
 
-  const payload: any = {
-    weightTrend: merged,
-    currentTrainingPlan: trainingSessions,
-    currentNutritionPlan: currentNutrition ? [{
+  // Build nutrition plan from legacy OR versioned data
+  let nutritionPlanPayload: any[] = [];
+  if (versionedNutrition) {
+    nutritionPlanPayload = [{
+      id: versionedNutrition.id,
+      date: (versionedNutrition.created_at || today.toISOString()).slice(0, 10),
+      dailyTargets: {
+        kcal: versionedNutrition.kcal,
+        protein: versionedNutrition.protein_grams,
+        carbs: versionedNutrition.carbs_grams,
+        fat: versionedNutrition.fat_grams,
+      },
+      meals: currentNutrition?.meals || [],
+      days: currentNutrition?.days || [],
+      guidelines: currentNutrition?.guidelines || [],
+      version: versionedNutrition.version,
+    }];
+  } else if (currentNutrition) {
+    nutritionPlanPayload = [{
       id: currentNutrition.id,
       date: today.toISOString().slice(0, 10),
       dailyTargets: currentNutrition.daily_targets,
@@ -177,7 +203,13 @@ async function buildSnapshot(userId: string, period: Period) {
       days: currentNutrition.days || [],
       guidelines: currentNutrition.guidelines || [],
       sourceText: currentNutrition.source_text || undefined,
-    }] : [],
+    }];
+  }
+
+  const payload: any = {
+    weightTrend: merged,
+    currentTrainingPlan: trainingSessions,
+    currentNutritionPlan: nutritionPlanPayload,
     planChanges: changes.map((c: any) => ({
       id: c.id, date: c.created_at,
       author: c.actor || 'coach-engh',
