@@ -2,7 +2,7 @@ import stripeInstance from "../../../../utils/stripe";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { insertOne, Tables } from "../../../../lib/db";
 
-// Enum values now match Supabase directly (PENDING, COMPLETED, FAILED, REFUNDED)
+// Enum values match Supabase directly (pending, success, failed, refunded)
 const toDbStatus = (s: TransactionStatus) => s;
 
 /**

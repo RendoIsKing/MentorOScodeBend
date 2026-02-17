@@ -24,7 +24,7 @@ export const getSubscribers = async (
       .from(Tables.SUBSCRIPTIONS)
       .select("user_id")
       .in("plan_id", planIds)
-      .or("status.eq.ACTIVE,status.eq.active");
+      .eq("status", "active");
 
     if (error || !subscriptions?.length) {
       return res.status(200).json({ data: [] });

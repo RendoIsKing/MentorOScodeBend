@@ -50,7 +50,7 @@ export const getCoachClients = async (
       .from(Tables.SUBSCRIPTIONS)
       .select("id, user_id, plan_id, status, created_at")
       .in("plan_id", planIds)
-      .or("status.eq.ACTIVE,status.eq.active")
+      .eq("status", "active")
       .order("created_at", { ascending: false });
 
     if (subsErr) {
