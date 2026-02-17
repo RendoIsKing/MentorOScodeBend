@@ -47,9 +47,10 @@ export async function generateResponse(
 
   // Try the Python Agent Service first (multi-agent system with OpenAI Agents SDK)
   const agentServiceUrl = process.env.AGENT_SERVICE_URL;
+  console.log(`[mentorAI] AGENT_SERVICE_URL=${agentServiceUrl ? agentServiceUrl.slice(0, 50) + '...' : 'NOT SET'}`);
   if (agentServiceUrl) {
     try {
-      console.log(`[mentorAI] Routing to Python Agent Service at ${agentServiceUrl}...`);
+      console.log(`[mentorAI] Routing to Python Agent Service at ${agentServiceUrl}/chat user_id=${userId} mentor_id=${mentorId}`);
       const resp = await fetch(`${agentServiceUrl}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -63,17 +64,20 @@ export async function generateResponse(
       });
       if (resp.ok) {
         const data = await resp.json() as { response?: string; agent_name?: string; tools_called?: string[] };
-        console.log(`[mentorAI] Agent Service response from ${data.agent_name}: ${String(data.response || '').length} chars, tools: ${JSON.stringify(data.tools_called || [])}`);
+        console.log(`[mentorAI] ✅ Agent Service SUCCESS from ${data.agent_name}: ${String(data.response || '').length} chars, tools: ${JSON.stringify(data.tools_called || [])}`);
         if (data.response && String(data.response).trim()) {
           return String(data.response);
         }
         console.warn("[mentorAI] Agent Service returned empty response, falling back to direct OpenAI");
       } else {
-        console.warn(`[mentorAI] Agent Service returned ${resp.status}, falling back to direct OpenAI`);
+        const errBody = await resp.text().catch(() => '');
+        console.warn(`[mentorAI] ⚠️ Agent Service returned ${resp.status}: ${errBody.slice(0, 200)}, falling back to direct OpenAI`);
       }
     } catch (err: any) {
-      console.warn(`[mentorAI] Agent Service unavailable (${err?.message || err}), falling back to direct OpenAI`);
+      console.warn(`[mentorAI] ⚠️ Agent Service unavailable (${err?.message || err}), falling back to direct OpenAI`);
     }
+  } else {
+    console.log(`[mentorAI] ⚠️ AGENT_SERVICE_URL not set, using direct OpenAI fallback`);
   }
 
   // Fetch mentor profile, RAG context, user context, and onboarding profile in parallel
