@@ -229,6 +229,57 @@ r.get('/conversations/:id/messages', ensureAuth as any, async (req: any, res) =>
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
 
+// ── GET /conversations/:id/messages/mentor-view — mentor reads a subscriber's chat ──
+r.get('/conversations/:id/messages/mentor-view', ensureAuth as any, async (req: any, res) => {
+  try {
+    const me = String(req.user?._id || req.user?.id || '');
+    if (!req.user?.isMentor) return res.status(403).json({ error: 'forbidden: not a mentor' });
+
+    const { id } = req.params;
+    const t = await findById(Tables.CHAT_THREADS, id);
+    if (!t) return res.status(404).json({ error: 'thread not found' });
+
+    // Verify the mentor owns a subscription plan that one of the thread participants is subscribed to
+    const participants = (t.participants || []).map(String);
+    const { data: plans } = await db.from(Tables.SUBSCRIPTION_PLANS).select('id').eq('user_id', me);
+    const planIds = (plans || []).map((p: any) => p.id);
+    let authorized = false;
+    if (planIds.length > 0) {
+      const { data: subs } = await db.from(Tables.SUBSCRIPTIONS).select('user_id').in('plan_id', planIds).eq('status', 'active');
+      const subscriberIds = new Set((subs || []).map((s: any) => String(s.user_id)));
+      authorized = participants.some((p) => subscriberIds.has(p));
+    }
+    if (!authorized) return res.status(403).json({ error: 'forbidden: student is not your subscriber' });
+
+    const { cursor } = req.query as any;
+    let query = db.from(Tables.CHAT_MESSAGES).select('*').eq('thread_id', id);
+    if (cursor) {
+      const cursorMsg = await findById(Tables.CHAT_MESSAGES, cursor, 'created_at');
+      if (cursorMsg) {
+        query = query.lt('created_at', cursorMsg.created_at);
+      }
+    }
+
+    const { data: msgs } = await query.order('created_at', { ascending: false }).limit(50);
+    const sorted = (msgs || []).reverse();
+    return res.json({
+      messages: sorted.map((m: any) => ({
+        id: m.id,
+        sender: m.sender,
+        text: m.text,
+        clientId: m.client_id || null,
+        createdAt: m.created_at,
+        flag: m.flag || 'green',
+        flaggedCategories: m.flagged_categories || [],
+        attachments: m.attachments || [],
+      }))
+    });
+  } catch (err) {
+    console.error('[mentor-view] Error:', err);
+    return res.status(500).json({ error: 'internal' });
+  }
+});
+
 // ── POST /conversations/:id/messages — send a message ───────────────────────
 r.post(
   '/conversations/:id/messages',
