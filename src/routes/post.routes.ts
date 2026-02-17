@@ -16,9 +16,13 @@ PostRoutes.get("/test", PostsController.getFirstPost)
 PostRoutes.get("/admin/all", OnlyAdmins, PostsController.getAdminPosts);
 PostRoutes.delete("/admin/:id", OnlyAdmins, validateZod({ params: objectIdParam("id"), body: z.object({}).strict() }), PostsController.deletePostByAdmin);
 
+// Helper: accept lowercase enum values from frontend, normalise to UPPERCASE for PostgreSQL
+const upperEnum = <T extends Record<string, string>>(e: T) =>
+  z.preprocess((v) => (typeof v === "string" ? v.toUpperCase() : v), z.nativeEnum(e));
+
 const mediaSchema = z.object({
   mediaId: nonEmptyString,
-  mediaType: z.nativeEnum(MediaType),
+  mediaType: upperEnum(MediaType),
 }).strict();
 
 const locationSchema = z.object({
@@ -40,9 +44,9 @@ const createPostSchema = z.object({
   userTags: z.array(userTagSchema).optional(),
   media: z.array(mediaSchema),
   tags: z.array(z.string()),
-  privacy: z.nativeEnum(Privacy),
-  status: z.nativeEnum(PostStatusEnum),
-  type: z.nativeEnum(PostType),
+  privacy: upperEnum(Privacy),
+  status: upperEnum(PostStatusEnum),
+  type: upperEnum(PostType),
 }).strict();
 
 const updatePostSchema = z.object({
@@ -51,11 +55,11 @@ const updatePostSchema = z.object({
   isPinned: z.boolean().optional(),
   media: z.array(mediaSchema).optional(),
   tags: z.array(z.string()).optional(),
-  privacy: z.nativeEnum(Privacy).optional(),
+  privacy: upperEnum(Privacy).optional(),
   userTags: z.array(userTagSchema).optional(),
   price: z.number().optional(),
-  status: z.nativeEnum(PostStatusEnum).optional(),
-  type: z.nativeEnum(PostType).optional(),
+  status: upperEnum(PostStatusEnum).optional(),
+  type: upperEnum(PostType).optional(),
 }).strict();
 
 // Read endpoints require auth to compute personalized fields

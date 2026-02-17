@@ -21,7 +21,14 @@ export const updatePostAction = async (
 ): Promise<Response> => {
   try {
     const user = req.user as UserInterface;
-    const postInput = plainToClass(UpdatePostDto, req.body);
+
+    // Normalise enum fields to UPPERCASE so they match PostgreSQL enums
+    const body = { ...req.body };
+    if (typeof body.privacy === "string") body.privacy = body.privacy.toUpperCase();
+    if (typeof body.status === "string") body.status = body.status.toUpperCase();
+    if (typeof body.type === "string") body.type = body.type.toUpperCase();
+
+    const postInput = plainToClass(UpdatePostDto, body);
     const postId = req.params.id;
     const errors = await validate(postInput);
 

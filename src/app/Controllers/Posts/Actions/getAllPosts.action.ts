@@ -35,7 +35,9 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
       includeSelfParam
     );
     const includeSelf =
-      filter === PostFilterEnum.FOR_YOU ? true : includeSelfRequested;
+      filter === PostFilterEnum.FOR_YOU || filter === PostFilterEnum.ALL
+        ? true
+        : includeSelfRequested;
 
     const skip =
       ((page as number) > 0 ? (page as number) - 1 : 0) * (perPage as number);
@@ -57,7 +59,7 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
     }
 
     if (filter === PostFilterEnum.ALL) {
-      query = query.eq("privacy", "public");
+      query = query.eq("privacy", "PUBLIC");
     }
 
     if (filter === PostFilterEnum.FOLLOWING) {
@@ -75,7 +77,7 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
       }
       query = query
         .in("user_id", followedIds)
-        .in("privacy", ["public", "followers"]);
+        .in("privacy", ["PUBLIC", "FOLLOWERS"]);
     }
 
     if (filter === PostFilterEnum.SUBSCRIBED) {
@@ -105,7 +107,7 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
       }
       query = query
         .in("user_id", subscribedUserIds)
-        .in("privacy", ["public", "subscriber"]);
+        .in("privacy", ["PUBLIC", "SUBSCRIBER"]);
     }
 
     if (search) {
@@ -199,12 +201,30 @@ export const getAllPostsActions = async (req: Request, res: Response) => {
       photoMap[photo.id] = photo;
     }
 
+    // Resolve media file paths from the files table
+    const mediaFileIds = (mediaResult.data || [])
+      .map((m: any) => m.media_id)
+      .filter(Boolean);
+    let fileMap: Record<string, any> = {};
+    if (mediaFileIds.length > 0) {
+      const { data: fileRows } = await db
+        .from(Tables.FILES)
+        .select("*")
+        .in("id", mediaFileIds);
+      for (const f of fileRows || []) {
+        fileMap[f.id] = f;
+      }
+    }
+
     // Enrich posts
     const enrichedPosts = posts.map((post: any) => ({
       ...post,
-      mediaFiles: (mediaResult.data || []).filter(
-        (m: any) => m.post_id === post.id
-      ),
+      mediaFiles: (mediaResult.data || [])
+        .filter((m: any) => m.post_id === post.id)
+        .map((m: any) => ({
+          ...m,
+          ...(fileMap[m.media_id] || {}),
+        })),
       userInfo: post.userInfo ? [post.userInfo] : [],
       userPhoto: post.userInfo?.photo_id
         ? [photoMap[post.userInfo.photo_id]].filter(Boolean)

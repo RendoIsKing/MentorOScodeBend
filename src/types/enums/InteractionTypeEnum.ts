@@ -1,9 +1,9 @@
 export enum InteractionType {
-  LIKE_POST = "like_post",
-  LIKE_STORY = "like_story",
-  COMMENT = "comment",
-  LIKE_COMMENT ="like_comment",
-  COLLECTION_SAVED = "collection_saved", 
-  IMPRESSION = "impression",
-  VIEW = "view"
+  LIKE_POST = "LIKE_POST",
+  LIKE_STORY = "LIKE_STORY",
+  COMMENT = "COMMENT",
+  LIKE_COMMENT = "LIKE_COMMENT",
+  COLLECTION_SAVED = "COLLECTION_SAVED",
+  IMPRESSION = "IMPRESSION",
+  VIEW = "VIEW",
 }

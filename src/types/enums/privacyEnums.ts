@@ -1,8 +1,8 @@
 export enum Privacy {
-  PUBLIC = "public",
-  PRIVATE = "private",
-  FRIENDS = "friends",
-  FOLLOWERS = "followers",
-  SUBSCRIBER = 'subscriber',
-  PAY_PER_VIEW = 'pay-per-view'
+  PUBLIC = "PUBLIC",
+  PRIVATE = "PRIVATE",
+  FRIENDS = "FRIENDS",
+  FOLLOWERS = "FOLLOWERS",
+  SUBSCRIBER = "SUBSCRIBER",
+  PAY_PER_VIEW = "PAY_PER_VIEW",
 }
