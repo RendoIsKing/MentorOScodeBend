@@ -19,12 +19,12 @@ export const getSubscribers = async (
       return res.status(200).json({ data: [] });
     }
 
-    // Get active subscriptions for those plans
+    // Get active subscriptions for those plans (handle both 'ACTIVE' enum and legacy 'active')
     const { data: subscriptions, error } = await db
       .from(Tables.SUBSCRIPTIONS)
       .select("user_id")
       .in("plan_id", planIds)
-      .eq("status", "active");
+      .or("status.eq.ACTIVE,status.eq.active");
 
     if (error || !subscriptions?.length) {
       return res.status(200).json({ data: [] });

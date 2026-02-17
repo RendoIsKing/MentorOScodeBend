@@ -1,8 +1,5 @@
 import { Request, Response } from "express";
-import { SubscriptionPlan } from "../../../Models/SubscriptionPlan";
-import { Subscription } from "../../../Models/Subscription";
-import { Types } from "mongoose";
-import { ChatThread } from "../../../../models/chat";
+import { db, Tables } from "../../../../lib/db";
 import { UserInterface } from "../../../../types/UserInterface";
 
 /**
@@ -11,6 +8,8 @@ import { UserInterface } from "../../../../types/UserInterface";
  * Returns enriched client list for the authenticated coach/mentor.
  * Each client includes: basic info, subscription tier, last message,
  * unread count, and safety status from the chat thread.
+ *
+ * Fully Supabase-based (no Mongoose).
  */
 export const getCoachClients = async (
   req: Request,
@@ -25,114 +24,138 @@ export const getCoachClients = async (
     }
 
     // 1. Find all subscription plans owned by this coach
-    const plans = await SubscriptionPlan.find({
-      userId: coachId,
-      isDeleted: false,
-    }).select("_id title price planType").lean();
+    const { data: plans, error: plansErr } = await db
+      .from(Tables.SUBSCRIPTION_PLANS)
+      .select("id, title, price, plan_type")
+      .eq("user_id", coachId)
+      .eq("is_deleted", false);
 
-    if (plans.length === 0) {
-      return res.status(200).json({ clients: [] });
+    if (plansErr) {
+      console.error("[coach-clients] plans query error:", plansErr);
+      return res.status(500).json({ error: "Kunne ikke hente planer." });
     }
 
-    const planIds = plans.map((p) => p._id);
-    const planMap = new Map(plans.map((p) => [String(p._id), p]));
+    if (!plans || plans.length === 0) {
+      return res.status(200).json({
+        clients: [],
+        summary: { total: 0, withUnread: 0, paused: 0 },
+      });
+    }
 
-    // 2. Aggregate subscribers with user info and subscription details
-    const subscribers = await Subscription.aggregate([
-      {
-        $match: {
-          planId: { $in: planIds.map((id) => new Types.ObjectId(id)) },
-          status: "active",
-        },
-      },
-      // Get the most recent subscription per user
-      { $sort: { createdAt: -1 } },
-      {
-        $group: {
-          _id: "$userId",
-          subscriptionDoc: { $first: "$$ROOT" },
-        },
-      },
-      { $replaceRoot: { newRoot: "$subscriptionDoc" } },
-      // Join user details
-      {
-        $lookup: {
-          from: "users",
-          localField: "userId",
-          foreignField: "_id",
-          as: "user",
-        },
-      },
-      { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
-      // Join photo
-      {
-        $lookup: {
-          from: "files",
-          localField: "user.photoId",
-          foreignField: "_id",
-          as: "photo",
-        },
-      },
-      {
-        $project: {
-          clientId: "$userId",
-          fullName: "$user.fullName",
-          userName: "$user.userName",
-          email: "$user.email",
-          photoUrl: { $arrayElemAt: ["$photo.path", 0] },
-          planId: 1,
-          subscriptionStatus: "$status",
-          subscribedAt: "$createdAt",
-        },
-      },
-    ]);
+    const planIds = plans.map((p: any) => p.id);
+    const planMap = new Map(plans.map((p: any) => [p.id, p]));
 
-    // 3. For each subscriber, fetch their chat thread with the coach
-    const coachObjectId = new Types.ObjectId(coachId);
-    const clientIds = subscribers.map((s) => s.clientId);
+    // 2. Get active subscriptions for those plans (handle both ACTIVE and active)
+    const { data: subscriptions, error: subsErr } = await db
+      .from(Tables.SUBSCRIPTIONS)
+      .select("id, user_id, plan_id, status, created_at")
+      .in("plan_id", planIds)
+      .or("status.eq.ACTIVE,status.eq.active")
+      .order("created_at", { ascending: false });
 
-    const threads = await ChatThread.find({
-      participants: {
-        $all: [coachObjectId],
-        $elemMatch: { $in: clientIds },
-      },
-    })
-      .select("participants lastMessageAt lastMessageText unread safetyStatus isPaused")
-      .lean();
+    if (subsErr) {
+      console.error("[coach-clients] subscriptions query error:", subsErr);
+      return res.status(500).json({ error: "Kunne ikke hente abonnementer." });
+    }
 
-    // Map threads by client ID
-    const threadByClient = new Map<string, any>();
-    for (const thread of threads) {
-      const clientParticipant = thread.participants.find(
-        (p: Types.ObjectId) => String(p) !== String(coachId)
-      );
-      if (clientParticipant) {
-        threadByClient.set(String(clientParticipant), thread);
+    if (!subscriptions || subscriptions.length === 0) {
+      return res.status(200).json({
+        clients: [],
+        summary: { total: 0, withUnread: 0, paused: 0 },
+      });
+    }
+
+    // Deduplicate: keep only the most recent subscription per user
+    const seenUsers = new Set<string>();
+    const uniqueSubs: any[] = [];
+    for (const sub of subscriptions) {
+      if (!seenUsers.has(sub.user_id)) {
+        seenUsers.add(sub.user_id);
+        uniqueSubs.push(sub);
       }
     }
 
-    // 4. Build enriched client list
-    const clients = subscribers.map((sub) => {
-      const thread = threadByClient.get(String(sub.clientId));
-      const plan = planMap.get(String(sub.planId));
+    const subscriberIds = uniqueSubs.map((s) => s.user_id);
+
+    // 3. Get user details with photos
+    const { data: users, error: usersErr } = await db
+      .from(Tables.USERS)
+      .select("id, full_name, user_name, email, photo_id")
+      .in("id", subscriberIds);
+
+    if (usersErr) {
+      console.error("[coach-clients] users query error:", usersErr);
+    }
+
+    // Resolve photo URLs
+    const photoIds = (users || []).map((u: any) => u.photo_id).filter(Boolean);
+    let photoMap = new Map<string, string>();
+    if (photoIds.length > 0) {
+      const { data: files } = await db
+        .from(Tables.FILES)
+        .select("id, path")
+        .in("id", photoIds);
+      if (files) {
+        photoMap = new Map(files.map((f: any) => [f.id, f.path]));
+      }
+    }
+
+    const userMap = new Map(
+      (users || []).map((u: any) => [
+        u.id,
+        {
+          ...u,
+          photoUrl: u.photo_id ? photoMap.get(u.photo_id) || null : null,
+        },
+      ])
+    );
+
+    // 4. Get chat threads where the coach is a participant
+    // Supabase array containment: participants @> ARRAY[coachId]::uuid[]
+    const { data: threads, error: threadsErr } = await db
+      .from(Tables.CHAT_THREADS)
+      .select("id, participants, last_message_at, last_message_text, unread, safety_status, is_paused")
+      .contains("participants", [coachId]);
+
+    if (threadsErr) {
+      console.error("[coach-clients] threads query error:", threadsErr);
+    }
+
+    // Map threads by the other participant (client) ID
+    const threadByClient = new Map<string, any>();
+    for (const thread of threads || []) {
+      const participants: string[] = thread.participants || [];
+      const clientParticipant = participants.find((p) => p !== coachId);
+      if (clientParticipant && subscriberIds.includes(clientParticipant)) {
+        threadByClient.set(clientParticipant, thread);
+      }
+    }
+
+    // 5. Build enriched client list
+    const clients = uniqueSubs.map((sub) => {
+      const user = userMap.get(sub.user_id);
+      const thread = threadByClient.get(sub.user_id);
+      const plan = planMap.get(sub.plan_id);
+
+      const unreadObj = thread?.unread || {};
+      const unreadCount = Number(unreadObj[coachId] || 0);
 
       return {
-        id: String(sub.clientId),
-        fullName: sub.fullName || "Ukjent",
-        userName: sub.userName || "",
-        email: sub.email || "",
-        photoUrl: sub.photoUrl || null,
-        // Subscription info
+        id: sub.user_id,
+        fullName: user?.full_name || "Ukjent",
+        userName: user?.user_name || "",
+        email: user?.email || "",
+        photoUrl: user?.photoUrl || null,
         plan: plan
-          ? { id: String(plan._id), title: plan.title, price: plan.price, type: plan.planType }
+          ? { id: plan.id, title: plan.title, price: plan.price, type: plan.plan_type }
           : null,
-        subscribedAt: sub.subscribedAt,
-        // Chat info
-        lastMessageAt: thread?.lastMessageAt || null,
-        lastMessageText: thread?.lastMessageText || null,
-        unreadCount: thread?.unread?.get(String(coachId)) || 0,
-        safetyStatus: thread?.safetyStatus || "green",
-        isPaused: thread?.isPaused || false,
+        subscribedAt: sub.created_at,
+        lastMessageAt: thread?.last_message_at || null,
+        lastMessageText: thread?.last_message_text || null,
+        unreadCount,
+        safetyStatus: thread?.safety_status || "green",
+        isPaused: thread?.is_paused || false,
+        threadId: thread?.id || null,
       };
     });
 
