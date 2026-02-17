@@ -2,7 +2,6 @@ import { Request, Response } from "express";
 import { UserInterface } from "../../../../types/UserInterface";
 import { db, Tables } from "../../../../lib/db";
 import { ProductType } from "../../../../types/enums/productEnum";
-import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
 import getDatesInRange from "../../../../utils/getDatesBetRange";
 
 export const getUserEarningChart = async (
@@ -13,20 +12,46 @@ export const getUserEarningChart = async (
     const user = req.user as UserInterface;
     const { startDate, endDate } = req.body;
 
-    const { data: transactions } = await db
+    // For mentors: find earnings via subscription plans they own
+    const { data: plans } = await db
+      .from(Tables.SUBSCRIPTION_PLANS)
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("is_deleted", false);
+
+    const planIds = (plans || []).map((p: any) => p.id);
+
+    let rows: any[] = [];
+
+    if (planIds.length > 0) {
+      const query = db
+        .from(Tables.TRANSACTIONS)
+        .select("amount, product_type, created_at")
+        .in("product_id", planIds);
+
+      if (startDate) query.gte("created_at", new Date(startDate).toISOString());
+      if (endDate) query.lt("created_at", new Date(endDate + "T23:59:59").toISOString());
+
+      const { data: transactions } = await query;
+      rows = transactions || [];
+    }
+
+    // Also check for direct credit transactions (tips, post purchases)
+    const directQuery = db
       .from(Tables.TRANSACTIONS)
       .select("amount, product_type, created_at")
       .eq("user_id", user.id)
-      .eq("type", TransactionType.CREDIT)
-      .gte("created_at", new Date(startDate).toISOString())
-      .lt("created_at", new Date(endDate).toISOString());
+      .eq("type", "credit");
 
-    const rows = transactions || [];
+    if (startDate) directQuery.gte("created_at", new Date(startDate).toISOString());
+    if (endDate) directQuery.lt("created_at", new Date(endDate + "T23:59:59").toISOString());
+
+    const { data: directTransactions } = await directQuery;
+    rows = rows.concat(directTransactions || []);
 
     const dateRange = getDatesInRange(startDate, endDate);
     const dateSet = new Set<string>(dateRange);
 
-    // Group by product_type and date
     const grouped: Record<string, Record<string, number>> = {
       subscription: {},
       tips: {},
