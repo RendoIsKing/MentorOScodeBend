@@ -342,6 +342,54 @@ StudentRoutes.get('/:userId/snapshot', ensureAuth as any, perUserIpLimiter({ win
   }
 });
 
+// Check if user has completed onboarding (cross-device sync)
+StudentRoutes.get('/me/onboarding-profile', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
+  try {
+    const userId = resolveUserId(req);
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+    // Check user_context for entries saved during onboarding
+    const rows = await findMany(Tables.USER_CONTEXT, { user_id: userId, source: 'onboarding' }, { select: 'key, value' });
+
+    if (!rows || rows.length === 0) {
+      return res.json({ onboarded: false, profile: null });
+    }
+
+    // Reconstruct the onboarding profile from key-value pairs
+    const ctx: Record<string, string> = {};
+    for (const row of rows) ctx[row.key] = row.value;
+
+    const genderMap: Record<string, string> = { 'Mann': 'male', 'Kvinne': 'female', 'Annet': 'other' };
+    const expMap: Record<string, string> = { 'Nybegynner': 'beginner', 'Middels erfaren': 'intermediate', 'Avansert': 'advanced' };
+    const stressMap: Record<string, string> = { 'Lavt': 'low', 'Moderat': 'moderate', 'Høyt': 'high' };
+    const equipMap: Record<string, string> = { 'Fullt treningssenter': 'full_gym', 'Hjemme med basisk utstyr': 'home_basic', 'Kun kroppsvekt': 'bodyweight_only' };
+    const goalMap: Record<string, string> = { 'Vektnedgang': 'weight_loss', 'Muskeloppbygging': 'muscle_gain', 'Styrke': 'strength', 'Generell fitness': 'general_fitness', 'Kroppsrekomposisjon': 'body_recomp' };
+
+    const profile = {
+      name: ctx['navn'] || '',
+      age: parseInt(ctx['alder'] || '0', 10),
+      gender: genderMap[ctx['kjønn'] || ''] || 'other',
+      currentWeight: parseFloat(ctx['nåværende_vekt_kg'] || '0'),
+      goalWeight: parseFloat(ctx['målvekt_kg'] || '0'),
+      height: parseInt(ctx['høyde_cm'] || '0', 10),
+      trainingDaysPerWeek: parseInt(ctx['treningsdager_per_uke'] || '3', 10),
+      experienceLevel: expMap[ctx['erfaringsnivå'] || ''] || 'beginner',
+      primaryGoal: (ctx['treningsmål'] || '').split(', ').map(g => goalMap[g] || g).filter(Boolean),
+      dietaryPreferences: (ctx['kostpreferanser'] || '').split(', ').filter(Boolean),
+      allergies: (ctx['allergier'] || '').split(', ').filter(Boolean),
+      injuries: (ctx['skader'] || '').split(', ').filter(Boolean),
+      sleepHoursPerNight: parseInt(ctx['søvn_timer_per_natt'] || '7', 10),
+      stressLevel: stressMap[ctx['stressnivå'] || ''] || 'moderate',
+      availableEquipment: equipMap[ctx['tilgjengelig_utstyr'] || ''] || 'full_gym',
+    };
+
+    return res.json({ onboarded: true, profile });
+  } catch (err: any) {
+    console.error('[student] Failed to check onboarding profile:', err?.message || err);
+    return res.status(500).json({ message: 'Failed to check onboarding profile' });
+  }
+});
+
 // Save onboarding profile data to database (called from frontend after coach onboarding flow)
 StudentRoutes.post('/me/onboarding-profile', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 10 }), async (req: Request, res: Response) => {
   try {
