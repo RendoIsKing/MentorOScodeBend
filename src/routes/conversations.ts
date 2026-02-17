@@ -36,6 +36,53 @@ function isParticipant(doc: any, userId: string): boolean {
   try { return (doc?.participants || []).map(String).includes(String(userId)); } catch { return false; }
 }
 
+// ── POST /conversations/mentor-instruct — create instruction thread for a student ──
+const mentorInstructSchema = z.object({
+  studentId: uuidString,
+}).strict();
+
+r.post(
+  '/conversations/mentor-instruct',
+  ensureAuth as any,
+  validateZod({ body: mentorInstructSchema }),
+  async (req: any, res) => {
+  try {
+    const me = String(req.user?._id || req.user?.id || '');
+    const { studentId } = req.body;
+    if (!me) return res.status(401).json({ error: 'not_authenticated' });
+    if (!req.user?.isMentor) return res.status(403).json({ error: 'not_a_mentor' });
+
+    // Find existing instruction thread for this mentor+student pair
+    const { data: existing } = await db
+      .from(Tables.CHAT_THREADS)
+      .select('*')
+      .eq('thread_type', 'mentor_instruction')
+      .contains('participants', [me])
+      .eq('metadata->>student_id', studentId)
+      .limit(1)
+      .maybeSingle();
+
+    let t = existing;
+    if (!t) {
+      // Create a new instruction thread — participants includes mentor twice (self-thread)
+      const unread: Record<string, number> = { [me]: 0 };
+      t = await insertOne(Tables.CHAT_THREADS, {
+        participants: [me, me],
+        last_message_at: new Date().toISOString(),
+        unread,
+        thread_type: 'mentor_instruction',
+        metadata: { student_id: studentId },
+      });
+      if (!t) return res.status(500).json({ error: 'create_failed' });
+    }
+
+    return res.json({ conversationId: t.id });
+  } catch (err: any) {
+    console.error('[mentor-instruct] Error:', err?.message || err);
+    return res.status(500).json({ error: 'internal' });
+  }
+});
+
 // ── POST /conversations — create or find a DM thread ────────────────────────
 r.post(
   '/conversations',
@@ -354,7 +401,9 @@ r.post(
       sseHub.publish(p, { type: 'chat:thread', payload: { id: t.id, lastMessageText: m.text, lastMessageAt: now, participants, unread: unread[p] ?? 0, isPaused: Boolean(t.is_paused), safetyStatus: String(t.safety_status || 'green') } });
     }
 
-    const receiverId = participants.find((p: string) => p !== me);
+    // For mentor instruction threads, the receiver is the mentor themselves
+    const isMentorInstruction = t.thread_type === 'mentor_instruction';
+    const receiverId = isMentorInstruction ? me : participants.find((p: string) => p !== me);
 
     // ── Safety decisions ──
     if (flag === 'red') {
@@ -413,12 +462,13 @@ r.post(
 
     // ── If receiver is a mentor, trigger AI auto-reply ──
     if (receiverId) {
-      console.log(`[mentor-ai] -- Auto-reply check START for thread=${t.id}, sender=${me}, receiver=${receiverId} --`);
+      console.log(`[mentor-ai] -- Auto-reply check START for thread=${t.id}, sender=${me}, receiver=${receiverId}, isMentorInstruction=${isMentorInstruction} --`);
       void (async () => {
         try {
-          const receiver = await findById(Tables.USERS, receiverId, 'id, is_mentor, user_name');
-          console.log(`[mentor-ai] Receiver lookup: id=${receiverId}, found=${!!receiver}, isMentor=${receiver?.is_mentor}, userName=${receiver?.user_name}`);
-          let actAsMentor = Boolean(receiver?.is_mentor);
+          // For mentor instruction threads, the mentor IS the receiver (self-thread)
+          const receiver = isMentorInstruction ? req.user : await findById(Tables.USERS, receiverId, 'id, is_mentor, user_name');
+          console.log(`[mentor-ai] Receiver lookup: id=${receiverId}, found=${!!receiver}, isMentor=${receiver?.is_mentor || receiver?.isMentor}, userName=${receiver?.user_name || receiver?.userName}`);
+          let actAsMentor = Boolean(receiver?.is_mentor || receiver?.isMentor);
 
           // Fallback: if the receiver has knowledge base documents, treat as a mentor
           if (!actAsMentor) {
@@ -463,9 +513,24 @@ r.post(
             console.warn(`[mentor-ai] Failed to load conversation history:`, histErr?.message);
           }
 
-          console.log(`[mentor-ai] Generating AI response for mentor ${receiverId}, message: "${String(m.text).slice(0, 60)}...", history: ${conversationHistory.length} msgs`);
+          // For mentor instruction threads, prefix the message with student context
+          let messageForAI = m.text;
+          if (isMentorInstruction && t.metadata?.student_id) {
+            const studentId = t.metadata.student_id;
+            try {
+              const student = await findById(Tables.USERS, studentId, 'id, full_name, user_name');
+              const { data: ctx } = await db.from(Tables.USER_CONTEXT).select('key, value').eq('user_id', studentId);
+              const ctxStr = (ctx || []).map((r: any) => `${r.key}: ${r.value}`).join(', ');
+              messageForAI = `[Mentorinstruksjon for student: ${student?.full_name || student?.user_name || studentId}. Studentdata: ${ctxStr || 'ingen data'}]\n\n${m.text}`;
+            } catch (ctxErr: any) {
+              console.warn(`[mentor-ai] Failed to load student context:`, ctxErr?.message);
+              messageForAI = `[Mentorinstruksjon for student ${t.metadata.student_id}]\n\n${m.text}`;
+            }
+          }
+
+          console.log(`[mentor-ai] Generating AI response for mentor ${receiverId}, message: "${String(messageForAI).slice(0, 60)}...", history: ${conversationHistory.length} msgs`);
           const startTime = Date.now();
-          const aiText = await generateMentorResponse(me, receiverId, m.text, m.attachments, conversationHistory);
+          const aiText = await generateMentorResponse(me, receiverId, messageForAI, m.attachments, conversationHistory);
           const elapsed = Date.now() - startTime;
           console.log(`[mentor-ai] AI response generated in ${elapsed}ms (${String(aiText || '').length} chars)`);
 
