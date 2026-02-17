@@ -464,16 +464,31 @@ StudentRoutes.get('/:userId/onboarding-profile', ensureAuth as any, async (req: 
       const eq = ctxMap.get('tilgjengelig_utstyr');
       profile.availableEquipment = eq === 'Fullt treningssenter' ? 'full_gym' : eq === 'Kun kroppsvekt' ? 'bodyweight_only' : 'home_basic';
     }
-    if (ctxMap.has('allergier')) profile.allergies = ctxMap.get('allergier')!.split(', ');
-    if (ctxMap.has('kostpreferanser')) profile.dietaryPreferences = ctxMap.get('kostpreferanser')!.split(', ');
-    if (ctxMap.has('skader')) profile.injuries = ctxMap.get('skader')!.split(', ');
+    profile.allergies = ctxMap.has('allergier') ? ctxMap.get('allergier')!.split(', ').filter(Boolean) : [];
+    profile.dietaryPreferences = ctxMap.has('kostpreferanser') ? ctxMap.get('kostpreferanser')!.split(', ').filter(Boolean) : [];
+    profile.injuries = ctxMap.has('skader') ? ctxMap.get('skader')!.split(', ').filter(Boolean) : [];
     if (ctxMap.has('treningsmål')) {
       const goalLabels: Record<string, string> = {
         'Vektnedgang': 'weight_loss', 'Muskeloppbygging': 'muscle_gain', 'Styrke': 'strength',
         'Generell fitness': 'general_fitness', 'Kroppsrekomposisjon': 'body_recomp',
       };
       profile.primaryGoal = ctxMap.get('treningsmål')!.split(', ').map((g: string) => goalLabels[g] || g);
+    } else {
+      profile.primaryGoal = [];
     }
+
+    // Ensure all numeric fields have defaults
+    profile.age = profile.age || 0;
+    profile.currentWeight = profile.currentWeight || 0;
+    profile.goalWeight = profile.goalWeight || 0;
+    profile.height = profile.height || 0;
+    profile.trainingDaysPerWeek = profile.trainingDaysPerWeek || 0;
+    profile.sleepHoursPerNight = profile.sleepHoursPerNight || 0;
+    profile.experienceLevel = profile.experienceLevel || 'beginner';
+    profile.stressLevel = profile.stressLevel || 'moderate';
+    profile.availableEquipment = profile.availableEquipment || 'full_gym';
+    profile.gender = profile.gender || 'other';
+    profile.name = profile.name || '';
 
     return res.json(profile);
   } catch (err: any) {
