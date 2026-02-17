@@ -247,7 +247,7 @@ r.get('/conversations/:id/messages/mentor-view', ensureAuth as any, async (req: 
     if (planIds.length > 0) {
       const { data: subs } = await db.from(Tables.SUBSCRIPTIONS).select('user_id').in('plan_id', planIds).eq('status', 'active');
       const subscriberIds = new Set((subs || []).map((s: any) => String(s.user_id)));
-      authorized = participants.some((p) => subscriberIds.has(p));
+      authorized = participants.some((p: string) => subscriberIds.has(p));
     }
     if (!authorized) return res.status(403).json({ error: 'forbidden: student is not your subscriber' });
 
