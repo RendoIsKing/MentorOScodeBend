@@ -133,17 +133,25 @@ async function buildSnapshot(userId: string, period: Period) {
   const merged = days.map(d => dbWeights.find(w => w.date === d)).filter(Boolean);
 
   // Plans & goals — check both legacy tables and versioned tables
+  console.log(`[snapshot] Fetching plans for user=${userId}`);
   const [legacyTrainingResult, legacyNutritionResult, versionedTrainingResult, versionedNutritionResult] = await Promise.all([
-    db.from(Tables.TRAINING_PLANS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle(),
-    db.from(Tables.NUTRITION_PLANS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle(),
-    db.from(Tables.TRAINING_PLAN_VERSIONS).select('*').eq('user_id', userId).order('version', { ascending: false }).limit(1).maybeSingle(),
-    db.from(Tables.NUTRITION_PLAN_VERSIONS).select('*').eq('user_id', userId).order('version', { ascending: false }).limit(1).maybeSingle(),
+    db.from(Tables.TRAINING_PLANS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle()
+      .then(r => { if (r.error) console.error(`[snapshot] TRAINING_PLANS query error:`, r.error.message); return r; }),
+    db.from(Tables.NUTRITION_PLANS).select('*').eq('user_id', userId).eq('is_current', true).order('version', { ascending: false }).limit(1).maybeSingle()
+      .then(r => { if (r.error) console.error(`[snapshot] NUTRITION_PLANS query error:`, r.error.message); return r; }),
+    db.from(Tables.TRAINING_PLAN_VERSIONS).select('*').eq('user_id', userId).order('version', { ascending: false }).limit(1).maybeSingle()
+      .then(r => { if (r.error) console.error(`[snapshot] TRAINING_PLAN_VERSIONS query error:`, r.error.message); return r; }),
+    db.from(Tables.NUTRITION_PLAN_VERSIONS).select('*').eq('user_id', userId).order('version', { ascending: false }).limit(1).maybeSingle()
+      .then(r => { if (r.error) console.error(`[snapshot] NUTRITION_PLAN_VERSIONS query error:`, r.error.message); return r; }),
   ]);
 
   const currentTraining = legacyTrainingResult.data;
   const currentNutrition = legacyNutritionResult.data;
   const versionedTraining = versionedTrainingResult.data;
   const versionedNutrition = versionedNutritionResult.data;
+
+  // Debug logging for training plan investigation
+  console.log(`[snapshot] user=${userId} versionedTraining=${versionedTraining ? `v${versionedTraining.version}, days_count=${Array.isArray(versionedTraining.days) ? versionedTraining.days.length : 'NOT_ARRAY'}, days_type=${typeof versionedTraining.days}` : 'NULL'} legacyTraining=${currentTraining ? 'exists' : 'NULL'}`);
 
   const changes = await findMany(Tables.CHANGE_EVENTS, { user_id: userId }, {
     orderBy: 'created_at', ascending: false, limit: 10,
