@@ -2,9 +2,8 @@ import stripeInstance from "../../../../utils/stripe";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { insertOne, Tables } from "../../../../lib/db";
 
-// Map TS enum to Supabase transaction_status enum (PENDING, COMPLETED, FAILED, REFUNDED)
-const toDbStatus = (s: TransactionStatus) =>
-  s === TransactionStatus.SUCCESS ? "COMPLETED" : s.toUpperCase();
+// Enum values now match Supabase directly (PENDING, COMPLETED, FAILED, REFUNDED)
+const toDbStatus = (s: TransactionStatus) => s;
 
 /**
  * Create a Stripe payment or setup intent and record transaction state.

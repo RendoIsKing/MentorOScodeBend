@@ -1,7 +1,6 @@
 export enum ProductType {
-    SUBSCRIPTION = "subscription",
-    TIPS = "tips",
-    POSTS = "post",
-    COACHING = "coaching",
-  }
-  
+  SUBSCRIPTION = "SUBSCRIPTION",
+  TIPS = "TIPS",
+  POSTS = "POSTS",
+  COACHING = "coaching",
+}
