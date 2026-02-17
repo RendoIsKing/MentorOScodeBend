@@ -63,33 +63,8 @@ function generateDates(period: Period): string[] {
   });
 }
 
-// Recent changes endpoint
-StudentRoutes.get('/:userId/changes', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
-  try {
-    const { userId } = req.params;
-    const limRaw = (req.query.limit as string) || '10';
-    const limit = Math.max(1, Math.min(50, Number(limRaw) || 10));
-
-    const items = await findMany(Tables.CHANGE_EVENTS, { user_id: userId }, {
-      orderBy: 'created_at', ascending: false, limit,
-    });
-
-    return res.json({
-      items: items.map((c: any) => ({
-        id: c.id,
-        date: c.created_at,
-        type: c.type,
-        summary: c.summary,
-        rationale: c.rationale,
-        actor: c.actor || undefined,
-        before: c.before,
-        after: c.after,
-      }))
-    });
-  } catch (err) {
-    return res.status(500).json({ message: 'Failed to load changes' });
-  }
-});
+// ── /me routes MUST be defined BEFORE /:userId routes ──
+// (Express treats /:userId as a catch-all that would match "me" literally)
 
 StudentRoutes.get('/me/changes', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
   try {
@@ -109,6 +84,27 @@ StudentRoutes.get('/me/changes', ensureAuth as any, perUserIpLimiter({ windowMs:
       }))
     });
   } catch {
+    return res.status(500).json({ message: 'Failed to load changes' });
+  }
+});
+
+StudentRoutes.get('/:userId/changes', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const limRaw = (req.query.limit as string) || '10';
+    const limit = Math.max(1, Math.min(50, Number(limRaw) || 10));
+
+    const items = await findMany(Tables.CHANGE_EVENTS, { user_id: userId }, {
+      orderBy: 'created_at', ascending: false, limit,
+    });
+
+    return res.json({
+      items: items.map((c: any) => ({
+        id: c.id, date: c.created_at, type: c.type, summary: c.summary,
+        rationale: c.rationale, actor: c.actor || undefined, before: c.before, after: c.after,
+      }))
+    });
+  } catch (err) {
     return res.status(500).json({ message: 'Failed to load changes' });
   }
 });
@@ -319,6 +315,20 @@ async function buildSnapshot(userId: string, period: Period) {
   return payload;
 }
 
+// /me/snapshot MUST be before /:userId/snapshot
+StudentRoutes.get('/me/snapshot', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
+  try {
+    const userId = resolveUserId(req);
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+    console.log(`[snapshot] /me/snapshot resolved userId=${userId}`);
+    const period = (req.query.period as Period) || '30d';
+    const payload = await buildSnapshot(userId, period);
+    return res.json(payload);
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to load snapshot' });
+  }
+});
+
 StudentRoutes.get('/:userId/snapshot', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
   try {
     let userId = req.params.userId;
@@ -329,18 +339,6 @@ StudentRoutes.get('/:userId/snapshot', ensureAuth as any, perUserIpLimiter({ win
     return res.status(200).json(payload);
   } catch (err) {
     return res.status(500).json({ message: 'Failed to load student snapshot' });
-  }
-});
-
-StudentRoutes.get('/me/snapshot', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }), async (req: Request, res: Response) => {
-  try {
-    const userId = resolveUserId(req);
-    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
-    const period = (req.query.period as Period) || '30d';
-    const payload = await buildSnapshot(userId, period);
-    return res.json(payload);
-  } catch (err) {
-    return res.status(500).json({ message: 'Failed to load snapshot' });
   }
 });
 
@@ -427,12 +425,13 @@ StudentRoutes.post('/me/onboarding-profile', ensureAuth as any, perUserIpLimiter
   }
 });
 
-// Exercise Progress
-StudentRoutes.get('/:userId/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
+// Exercise Progress — /me routes first
+StudentRoutes.get('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
   try {
+    const userId = resolveUserId(req);
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
     const period = (req.query.period as Period) || '30d';
     const exercise = (req.query.exercise as string) || '';
-    const { userId } = req.params;
     const days = generateDates(period);
 
     let query = db.from(Tables.EXERCISE_PROGRESS)
@@ -451,12 +450,11 @@ StudentRoutes.get('/:userId/exercise-progress', ensureAuth as any, perUserIpLimi
   }
 });
 
-StudentRoutes.get('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
+StudentRoutes.get('/:userId/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
   try {
-    const userId = resolveUserId(req);
-    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
     const period = (req.query.period as Period) || '30d';
     const exercise = (req.query.exercise as string) || '';
+    const { userId } = req.params;
     const days = generateDates(period);
 
     let query = db.from(Tables.EXERCISE_PROGRESS)
