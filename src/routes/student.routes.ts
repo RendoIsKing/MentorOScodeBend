@@ -425,6 +425,63 @@ StudentRoutes.post('/me/onboarding-profile', ensureAuth as any, perUserIpLimiter
   }
 });
 
+// Get onboarding profile for a specific student (mentor access — reads from user_context)
+StudentRoutes.get('/:userId/onboarding-profile', ensureAuth as any, async (req: Request, res: Response) => {
+  try {
+    const mentorId = resolveUserId(req);
+    if (!mentorId) return res.status(401).json({ message: 'Unauthorized' });
+
+    const { userId } = req.params;
+    if (!userId) return res.status(400).json({ message: 'Missing userId' });
+
+    // Read all user_context entries for this student
+    const { data: ctx } = await db.from(Tables.USER_CONTEXT).select('key, value').eq('user_id', userId);
+    if (!ctx || ctx.length === 0) return res.json(null);
+
+    // Reconstruct the onboarding form data from context entries
+    const ctxMap = new Map(ctx.map((r: any) => [r.key, r.value]));
+    const profile: Record<string, any> = {};
+    if (ctxMap.has('navn')) profile.name = ctxMap.get('navn');
+    if (ctxMap.has('alder')) profile.age = Number(ctxMap.get('alder'));
+    if (ctxMap.has('kjønn')) {
+      const g = ctxMap.get('kjønn');
+      profile.gender = g === 'Mann' ? 'male' : g === 'Kvinne' ? 'female' : 'other';
+    }
+    if (ctxMap.has('nåværende_vekt_kg')) profile.currentWeight = Number(ctxMap.get('nåværende_vekt_kg'));
+    if (ctxMap.has('målvekt_kg')) profile.goalWeight = Number(ctxMap.get('målvekt_kg'));
+    if (ctxMap.has('høyde_cm')) profile.height = Number(ctxMap.get('høyde_cm'));
+    if (ctxMap.has('treningsdager_per_uke')) profile.trainingDaysPerWeek = Number(ctxMap.get('treningsdager_per_uke'));
+    if (ctxMap.has('erfaringsnivå')) {
+      const e = ctxMap.get('erfaringsnivå');
+      profile.experienceLevel = e === 'Nybegynner' ? 'beginner' : e === 'Avansert' ? 'advanced' : 'intermediate';
+    }
+    if (ctxMap.has('søvn_timer_per_natt')) profile.sleepHoursPerNight = Number(ctxMap.get('søvn_timer_per_natt'));
+    if (ctxMap.has('stressnivå')) {
+      const s = ctxMap.get('stressnivå');
+      profile.stressLevel = s === 'Lavt' ? 'low' : s === 'Høyt' ? 'high' : 'moderate';
+    }
+    if (ctxMap.has('tilgjengelig_utstyr')) {
+      const eq = ctxMap.get('tilgjengelig_utstyr');
+      profile.availableEquipment = eq === 'Fullt treningssenter' ? 'full_gym' : eq === 'Kun kroppsvekt' ? 'bodyweight_only' : 'home_basic';
+    }
+    if (ctxMap.has('allergier')) profile.allergies = ctxMap.get('allergier')!.split(', ');
+    if (ctxMap.has('kostpreferanser')) profile.dietaryPreferences = ctxMap.get('kostpreferanser')!.split(', ');
+    if (ctxMap.has('skader')) profile.injuries = ctxMap.get('skader')!.split(', ');
+    if (ctxMap.has('treningsmål')) {
+      const goalLabels: Record<string, string> = {
+        'Vektnedgang': 'weight_loss', 'Muskeloppbygging': 'muscle_gain', 'Styrke': 'strength',
+        'Generell fitness': 'general_fitness', 'Kroppsrekomposisjon': 'body_recomp',
+      };
+      profile.primaryGoal = ctxMap.get('treningsmål')!.split(', ').map((g: string) => goalLabels[g] || g);
+    }
+
+    return res.json(profile);
+  } catch (err: any) {
+    console.error('[student] Failed to read onboarding profile:', err?.message || err);
+    return res.status(500).json({ message: 'Failed to load onboarding profile' });
+  }
+});
+
 // Exercise Progress — /me routes first
 StudentRoutes.get('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
   try {
