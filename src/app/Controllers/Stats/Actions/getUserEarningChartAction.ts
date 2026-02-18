@@ -12,42 +12,15 @@ export const getUserEarningChart = async (
     const user = req.user as UserInterface;
     const { startDate, endDate } = req.body;
 
-    // For mentors: find earnings via subscription plans they own
+    // 1. Get the mentor's subscription plans with prices
     const { data: plans } = await db
       .from(Tables.SUBSCRIPTION_PLANS)
-      .select("id")
+      .select("id, price")
       .eq("user_id", user.id)
       .eq("is_deleted", false);
 
     const planIds = (plans || []).map((p: any) => p.id);
-
-    let rows: any[] = [];
-
-    if (planIds.length > 0) {
-      const query = db
-        .from(Tables.TRANSACTIONS)
-        .select("amount, product_type, created_at")
-        .in("product_id", planIds);
-
-      if (startDate) query.gte("created_at", new Date(startDate).toISOString());
-      if (endDate) query.lt("created_at", new Date(endDate + "T23:59:59").toISOString());
-
-      const { data: transactions } = await query;
-      rows = transactions || [];
-    }
-
-    // Also check for direct credit transactions (tips, post purchases)
-    const directQuery = db
-      .from(Tables.TRANSACTIONS)
-      .select("amount, product_type, created_at")
-      .eq("user_id", user.id)
-      .eq("type", "credit");
-
-    if (startDate) directQuery.gte("created_at", new Date(startDate).toISOString());
-    if (endDate) directQuery.lt("created_at", new Date(endDate + "T23:59:59").toISOString());
-
-    const { data: directTransactions } = await directQuery;
-    rows = rows.concat(directTransactions || []);
+    const planPriceMap = new Map((plans || []).map((p: any) => [p.id, Number(p.price || 0)]));
 
     const dateRange = getDatesInRange(startDate, endDate);
     const dateSet = new Set<string>(dateRange);
@@ -58,17 +31,62 @@ export const getUserEarningChart = async (
       posts: {},
     };
 
-    rows.forEach((t: any) => {
+    // 2. Compute subscription revenue from subscriptions table by date
+    if (planIds.length > 0) {
+      const subsQuery = db
+        .from(Tables.SUBSCRIPTIONS)
+        .select("plan_id, created_at")
+        .in("plan_id", planIds);
+
+      if (startDate) subsQuery.gte("created_at", new Date(startDate).toISOString());
+      if (endDate) subsQuery.lt("created_at", new Date(endDate + "T23:59:59").toISOString());
+
+      const { data: subs } = await subsQuery;
+      for (const sub of subs || []) {
+        const d = new Date(sub.created_at).toISOString().slice(0, 10);
+        dateSet.add(d);
+        const price = planPriceMap.get(sub.plan_id) || 0;
+        grouped["subscription"][d] = (grouped["subscription"][d] || 0) + price;
+      }
+    }
+
+    // 3. Tips/posts from transactions
+    if (planIds.length > 0) {
+      const txQuery = db
+        .from(Tables.TRANSACTIONS)
+        .select("amount, product_type, created_at")
+        .in("product_id", planIds)
+        .neq("product_type", ProductType.SUBSCRIPTION);
+
+      if (startDate) txQuery.gte("created_at", new Date(startDate).toISOString());
+      if (endDate) txQuery.lt("created_at", new Date(endDate + "T23:59:59").toISOString());
+
+      const { data: txRows } = await txQuery;
+      for (const t of txRows || []) {
+        const d = new Date(t.created_at).toISOString().slice(0, 10);
+        dateSet.add(d);
+        const key = t.product_type === ProductType.TIPS ? "tips" : "posts";
+        grouped[key][d] = (grouped[key][d] || 0) + Number(t.amount || 0);
+      }
+    }
+
+    // Direct credit transactions
+    const directQuery = db
+      .from(Tables.TRANSACTIONS)
+      .select("amount, product_type, created_at")
+      .eq("user_id", user.id)
+      .eq("type", "credit");
+
+    if (startDate) directQuery.gte("created_at", new Date(startDate).toISOString());
+    if (endDate) directQuery.lt("created_at", new Date(endDate + "T23:59:59").toISOString());
+
+    const { data: directTx } = await directQuery;
+    for (const t of directTx || []) {
       const d = new Date(t.created_at).toISOString().slice(0, 10);
       dateSet.add(d);
-      const key =
-        t.product_type === ProductType.SUBSCRIPTION
-          ? "subscription"
-          : t.product_type === ProductType.TIPS
-          ? "tips"
-          : "posts";
-      grouped[key][d] = (grouped[key][d] || 0) + (t.amount || 0);
-    });
+      const key = t.product_type === ProductType.TIPS ? "tips" : "posts";
+      grouped[key][d] = (grouped[key][d] || 0) + Number(t.amount || 0);
+    }
 
     const dateSetArray = [...dateSet].sort();
 
