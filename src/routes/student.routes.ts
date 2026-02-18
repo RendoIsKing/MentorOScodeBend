@@ -808,4 +808,106 @@ StudentRoutes.post('/me/workouts', validateZod({ body: WorkoutLogSchema }), asyn
   }
 });
 
+// Bulk activity data sync from frontend (periodic sync of localStorage data)
+StudentRoutes.post('/me/activity-data', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 30 }), async (req: Request, res: Response) => {
+  try {
+    const userId = resolveUserId(req);
+    if (!userId) return res.status(401).json({ message: 'Unauthorized' });
+
+    const data = req.body || {};
+    const today = new Date().toISOString().slice(0, 10);
+    let synced = 0;
+
+    // Sync food diary entries as meal_logs (dedup by checking existing count for today)
+    if (Array.isArray(data.foodDiaryToday) && data.foodDiaryToday.length > 0) {
+      const { count } = await db
+        .from(Tables.MEAL_LOGS)
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('date', today)
+        .eq('source', 'frontend_sync');
+
+      if ((count || 0) === 0) {
+        const mealTypeMap: Record<string, string> = {
+          'Frokost': 'breakfast', 'Lunsj': 'lunch', 'Middag': 'dinner',
+          'Mellommåltid': 'snack', 'Kveldsmat': 'snack',
+        };
+
+        for (const entry of data.foodDiaryToday) {
+          try {
+            await insertOne(Tables.MEAL_LOGS, {
+              user_id: userId,
+              date: today,
+              meal_type: mealTypeMap[entry.mealSection] || 'snack',
+              description: entry.name || '',
+              total_calories: entry.kcal || 0,
+              total_protein_g: entry.protein || 0,
+              total_carbs_g: entry.carbs || 0,
+              total_fat_g: entry.fat || 0,
+              items: [],
+              source: 'frontend_sync',
+            });
+            synced++;
+          } catch {}
+        }
+      }
+    }
+
+    // Sync check-in weights to weight_entries
+    if (Array.isArray(data.recentCheckIns)) {
+      for (const ci of data.recentCheckIns) {
+        if (ci.weight && ci.date && /^\d{4}-\d{2}-\d{2}$/.test(ci.date)) {
+          try {
+            await upsert(Tables.WEIGHT_ENTRIES, {
+              user_id: userId,
+              date: ci.date,
+              kg: Number(ci.weight),
+            }, 'user_id,date');
+            synced++;
+          } catch {}
+        }
+      }
+    }
+
+    // Sync recent workouts to workout_logs
+    if (Array.isArray(data.recentWorkouts)) {
+      for (const w of data.recentWorkouts) {
+        if (w.date && /^\d{4}-\d{2}-\d{2}$/.test(w.date)) {
+          try {
+            await upsert(Tables.WORKOUT_LOGS, {
+              user_id: userId,
+              date: w.date,
+              entries: [],
+            }, 'user_id,date');
+            synced++;
+          } catch {}
+        }
+      }
+    }
+
+    // Store full activity snapshot as user_context (agent can read this)
+    try {
+      await upsert(Tables.USER_CONTEXT, {
+        user_id: userId,
+        key: 'latest_activity_sync',
+        value: JSON.stringify({
+          habits: data.habits,
+          goals: data.goals,
+          tasks: data.tasks,
+          stepsToday: data.stepsToday,
+          shoppingList: data.shoppingList,
+          timestamp: data.timestamp || new Date().toISOString(),
+        }),
+        source: 'frontend_sync',
+        updated_at: new Date().toISOString(),
+      }, 'user_id,key');
+      synced++;
+    } catch {}
+
+    return res.json({ ok: true, synced });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to sync activity data' });
+  }
+});
+
 export default StudentRoutes;
