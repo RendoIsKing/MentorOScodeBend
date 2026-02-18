@@ -332,7 +332,7 @@ export async function generateResponse(
     const response = await client.chat.completions.create({
       model: "gpt-4o",
       temperature: 0.7,
-      max_tokens: 1500,
+      max_tokens: 4000,
       messages,
       tools: AGENT_TOOLS,
       tool_choice: "auto",

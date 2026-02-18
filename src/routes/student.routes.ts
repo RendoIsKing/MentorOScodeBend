@@ -805,13 +805,14 @@ StudentRoutes.delete('/:userId/exercise-progress', ensureAuth as any,
 });
 
 // Log a workout
-StudentRoutes.post('/me/workouts', validateZod({ body: WorkoutLogSchema }), async (req: Request, res: Response) => {
+StudentRoutes.post('/me/workouts', ensureAuth as any, validateZod({ body: WorkoutLogSchema }), async (req: Request, res: Response) => {
   try {
     const userId = resolveUserId(req);
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
     const date = (req.body?.date as string) || new Date().toISOString().slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
-    await upsert(Tables.WORKOUT_LOGS, { user_id: userId, date, entries: [] }, 'user_id,date');
+    const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+    await upsert(Tables.WORKOUT_LOGS, { user_id: userId, date, entries }, 'user_id,date');
     await publish({ type: 'WORKOUT_LOGGED', user: userId, date });
     return res.status(200).json({ ok: true });
   } catch (err) {
