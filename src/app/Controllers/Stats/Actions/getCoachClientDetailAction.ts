@@ -1,22 +1,12 @@
 import { Request, Response } from "express";
-import { SubscriptionPlan } from "../../../Models/SubscriptionPlan";
-import { Subscription } from "../../../Models/Subscription";
-import { Types } from "mongoose";
+import { db, Tables } from "../../../../lib/db";
 import { UserInterface } from "../../../../types/UserInterface";
-import { ChatThread } from "../../../../models/chat";
-import { CoachNote } from "../../../../database/schemas/CoachNoteSchema";
-import { User } from "../../../Models/User";
-import { TrainingPlan, NutritionPlan, Goal } from "../../../Models/PlanModels";
-import { WeightEntry } from "../../../Models/WeightEntry";
-import ChangeEvent from "../../../../models/ChangeEvent";
-import WorkoutLog from "../../../../models/WorkoutLog";
 
 /**
  * GET /stats/coach-clients/:clientId
  *
  * Returns a detailed view of a single client for the authenticated coach.
- * Includes: user info, training plan, nutrition plan, weight trend,
- * recent activity, goals, notes, and chat status.
+ * Fully Supabase-based (no Mongoose).
  */
 export const getCoachClientDetail = async (
   req: Request,
@@ -28,108 +18,128 @@ export const getCoachClientDetail = async (
     const { clientId } = req.params;
 
     if (!coachId) return res.status(401).json({ error: "Unauthorized" });
-    if (!Types.ObjectId.isValid(clientId)) {
-      return res.status(400).json({ error: "Ugyldig klient-ID." });
-    }
+    if (!reqUser.isMentor) return res.status(403).json({ error: "Mentor access required" });
+    if (!clientId) return res.status(400).json({ error: "Missing clientId" });
 
     // 1. Verify coach-client relationship
-    const coachPlans = await SubscriptionPlan.find({
-      userId: coachId,
-      isDeleted: false,
-    }).select("_id title price planType").lean();
+    const { data: coachPlans } = await db
+      .from(Tables.SUBSCRIPTION_PLANS)
+      .select("id, title, price, plan_type")
+      .eq("user_id", coachId)
+      .eq("is_deleted", false);
 
-    if (coachPlans.length === 0) {
+    if (!coachPlans || coachPlans.length === 0) {
       return res.status(403).json({ error: "Du har ingen abonnementsplaner." });
     }
 
-    const planIds = coachPlans.map((p) => p._id);
-    const subscription = await Subscription.findOne({
-      userId: new Types.ObjectId(clientId),
-      planId: { $in: planIds.map((id) => new Types.ObjectId(id)) },
-      status: "active",
-    }).lean();
+    const planIds = coachPlans.map((p: any) => p.id);
+
+    const { data: subscription } = await db
+      .from(Tables.SUBSCRIPTIONS)
+      .select("id, plan_id, created_at")
+      .eq("user_id", clientId)
+      .in("plan_id", planIds)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     if (!subscription) {
       return res.status(403).json({ error: "Denne brukeren er ikke din klient." });
     }
 
-    const plan = coachPlans.find((p) => String(p._id) === String((subscription as any).planId));
+    const plan = coachPlans.find((p: any) => p.id === subscription.plan_id);
 
-    // 2. Fetch client user info (with photo)
-    const client = await User.findById(clientId).select(
-      "fullName userName email photoId status"
-    ).lean();
+    // 2. Fetch client user info
+    const { data: client } = await db
+      .from(Tables.USERS)
+      .select("id, full_name, user_name, email, photo_id")
+      .eq("id", clientId)
+      .maybeSingle();
 
     if (!client) {
       return res.status(404).json({ error: "Klient ikke funnet." });
     }
 
-    // 2b. Resolve profile photo path
+    // 2b. Resolve photo
     let photoUrl: string | null = null;
-    if ((client as any).photoId) {
-      try {
-        const { File } = await import("../../../Models/File");
-        const file = await File.findById((client as any).photoId).select("path").lean();
-        if (file) photoUrl = (file as any).path;
-      } catch (err) {
-        console.error("[coach-client-detail] Photo lookup failed:", err);
-      }
+    if (client.photo_id) {
+      const { data: file } = await db
+        .from(Tables.FILES)
+        .select("path")
+        .eq("id", client.photo_id)
+        .maybeSingle();
+      if (file) photoUrl = file.path;
     }
 
     // 3. Fetch current training plan
-    const trainingPlan = await TrainingPlan.findOne({
-      userId: new Types.ObjectId(clientId),
-      isCurrent: true,
-    }).sort({ version: -1 }).lean();
+    const { data: trainingPlan } = await db
+      .from(Tables.TRAINING_PLANS)
+      .select("*")
+      .eq("user_id", clientId)
+      .eq("is_current", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     // 4. Fetch current nutrition plan
-    const nutritionPlan = await NutritionPlan.findOne({
-      userId: new Types.ObjectId(clientId),
-      isCurrent: true,
-    }).sort({ version: -1 }).lean();
+    const { data: nutritionPlan } = await db
+      .from(Tables.NUTRITION_PLANS)
+      .select("*")
+      .eq("user_id", clientId)
+      .eq("is_current", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     // 5. Fetch weight trend (last 90 days)
     const ninetyDaysAgo = new Date();
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-    const weightEntries = await WeightEntry.find({
-      userId: new Types.ObjectId(clientId),
-      date: { $gte: ninetyDaysAgo.toISOString().slice(0, 10) },
-    }).sort({ date: 1 }).select("date kg -_id").lean();
+    const { data: weightEntries } = await db
+      .from(Tables.WEIGHT_ENTRIES)
+      .select("date, kg")
+      .eq("user_id", clientId)
+      .gte("date", ninetyDaysAgo.toISOString().slice(0, 10))
+      .order("date", { ascending: true });
 
     // 6. Fetch recent change events
-    const recentChanges = await ChangeEvent.find({
-      user: new Types.ObjectId(clientId),
-    }).sort({ createdAt: -1 }).limit(20).lean();
+    const { data: recentChanges } = await db
+      .from(Tables.CHANGE_EVENTS)
+      .select("id, type, summary, created_at")
+      .eq("user_id", clientId)
+      .order("created_at", { ascending: false })
+      .limit(20);
 
     // 7. Fetch current goal
-    const currentGoal = await Goal.findOne({
-      userId: new Types.ObjectId(clientId),
-      isCurrent: true,
-    }).sort({ version: -1 }).lean();
+    const { data: currentGoal } = await db
+      .from(Tables.GOALS)
+      .select("*")
+      .eq("user_id", clientId)
+      .eq("is_current", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     // 8. Fetch recent workout logs (last 14 days)
     const twoWeeksAgo = new Date();
     twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
-    const workoutLogs = await WorkoutLog.find({
-      user: new Types.ObjectId(clientId),
-      date: { $gte: twoWeeksAgo.toISOString().slice(0, 10) },
-    }).sort({ date: -1 }).lean();
+    const { data: workoutLogs } = await db
+      .from(Tables.WORKOUT_LOGS)
+      .select("date, entries")
+      .eq("user_id", clientId)
+      .gte("date", twoWeeksAgo.toISOString().slice(0, 10))
+      .order("date", { ascending: false });
 
     // 9. Fetch chat thread with this client
-    const chatThread = await ChatThread.find({
-      participants: { $all: [new Types.ObjectId(coachId), new Types.ObjectId(clientId)] },
-    }).select("lastMessageAt lastMessageText unread safetyStatus isPaused").lean();
+    const { data: threads } = await db
+      .from(Tables.CHAT_THREADS)
+      .select("last_message_at, last_message_text, unread, safety_status, is_paused")
+      .contains("participants", [coachId, clientId]);
 
-    const thread = chatThread[0];
+    const thread = threads?.[0];
 
-    // 10. Fetch coach notes for this client
-    const notes = await CoachNote.find({
-      coachId: new Types.ObjectId(coachId),
-      clientId: new Types.ObjectId(clientId),
-    }).sort({ pinned: -1, createdAt: -1 }).limit(50).lean();
-
-    // Build response
-    const trainingSessions = (trainingPlan as any)?.sessions?.map((s: any, idx: number) => ({
+    // Build training sessions from plan
+    const trainingSessions = (trainingPlan?.sessions || []).map((s: any, idx: number) => ({
       day: s.day,
       focus: s.focus || `Økt ${idx + 1}`,
       exercises: (s.exercises || []).map((e: any) => ({
@@ -139,69 +149,62 @@ export const getCoachClientDetail = async (
         load: e.load,
       })),
       notes: s.notes || [],
-    })) || [];
+    }));
 
     return res.status(200).json({
       client: {
-        id: String((client as any)._id),
-        fullName: (client as any).fullName || "Ukjent",
-        userName: (client as any).userName || "",
-        email: (client as any).email || "",
-        status: (client as any).status || "VISITOR",
+        id: client.id,
+        fullName: client.full_name || "Ukjent",
+        userName: client.user_name || "",
+        email: client.email || "",
         photoUrl,
       },
       subscription: {
         plan: plan
-          ? { id: String(plan._id), title: plan.title, price: plan.price, type: plan.planType }
+          ? { id: plan.id, title: plan.title, price: plan.price, type: plan.plan_type }
           : null,
-        subscribedAt: (subscription as any).createdAt,
+        subscribedAt: subscription.created_at,
       },
       training: {
         hasPlan: !!trainingPlan,
         sessions: trainingSessions,
-        guidelines: (trainingPlan as any)?.guidelines || [],
-        version: (trainingPlan as any)?.version,
+        guidelines: trainingPlan?.guidelines || [],
+        version: trainingPlan?.version,
       },
       nutrition: {
         hasPlan: !!nutritionPlan,
-        dailyTargets: (nutritionPlan as any)?.dailyTargets || null,
-        meals: (nutritionPlan as any)?.meals || [],
-        days: (nutritionPlan as any)?.days || [],
-        guidelines: (nutritionPlan as any)?.guidelines || [],
-        version: (nutritionPlan as any)?.version,
+        dailyTargets: nutritionPlan?.daily_targets || null,
+        meals: nutritionPlan?.meals || [],
+        days: nutritionPlan?.days || [],
+        guidelines: nutritionPlan?.guidelines || [],
+        version: nutritionPlan?.version,
       },
-      weightTrend: weightEntries,
+      weightTrend: (weightEntries || []).map((w: any) => ({ date: w.date, kg: w.kg })),
       goal: currentGoal
         ? {
-            targetWeightKg: (currentGoal as any).targetWeightKg,
-            strengthTargets: (currentGoal as any).strengthTargets,
-            horizonWeeks: (currentGoal as any).horizonWeeks,
+            targetWeightKg: currentGoal.target_weight_kg,
+            strengthTargets: currentGoal.strength_targets,
+            horizonWeeks: currentGoal.horizon_weeks,
           }
         : null,
-      recentActivity: recentChanges.map((c: any) => ({
-        id: String(c._id),
+      recentActivity: (recentChanges || []).map((c: any) => ({
+        id: c.id,
         type: c.type,
         summary: c.summary,
-        date: c.createdAt,
+        date: c.created_at,
       })),
-      workoutLogs: workoutLogs.map((w: any) => ({
+      workoutLogs: (workoutLogs || []).map((w: any) => ({
         date: w.date,
         entries: w.entries || [],
       })),
       chat: {
-        lastMessageAt: thread?.lastMessageAt || null,
-        lastMessageText: thread?.lastMessageText || null,
-        unreadCount: (thread as any)?.unread?.get(String(coachId)) || 0,
-        safetyStatus: thread?.safetyStatus || "green",
-        isPaused: thread?.isPaused || false,
+        lastMessageAt: thread?.last_message_at || null,
+        lastMessageText: thread?.last_message_text || null,
+        unreadCount: thread?.unread?.[coachId] || 0,
+        safetyStatus: thread?.safety_status || "green",
+        isPaused: thread?.is_paused || false,
       },
-      notes: notes.map((n: any) => ({
-        id: String(n._id),
-        text: n.text,
-        pinned: n.pinned,
-        createdAt: n.createdAt,
-        updatedAt: n.updatedAt,
-      })),
+      notes: [],
     });
   } catch (error) {
     console.error("[coach-client-detail] Error:", error);

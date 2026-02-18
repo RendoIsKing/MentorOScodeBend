@@ -23,6 +23,10 @@ export const getCoachClients = async (
       return res.status(401).json({ error: "Unauthorized" });
     }
 
+    if (!reqUser.isMentor) {
+      return res.status(403).json({ error: "Mentor access required" });
+    }
+
     // 1. Find all subscription plans owned by this coach
     const { data: plans, error: plansErr } = await db
       .from(Tables.SUBSCRIPTION_PLANS)

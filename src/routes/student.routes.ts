@@ -479,8 +479,19 @@ StudentRoutes.get('/:userId/onboarding-profile', ensureAuth as any, async (req: 
     const mentorId = resolveUserId(req);
     if (!mentorId) return res.status(401).json({ message: 'Unauthorized' });
 
+    const reqUser = req.user as any;
+    if (!reqUser?.isMentor) return res.status(403).json({ message: 'Mentor access required' });
+
     const { userId } = req.params;
     if (!userId) return res.status(400).json({ message: 'Missing userId' });
+
+    // Verify mentor-client relationship via subscriptions + subscription_plans
+    const { data: mentorPlans } = await db.from(Tables.SUBSCRIPTION_PLANS).select('id').eq('user_id', mentorId).eq('is_deleted', false);
+    const planIds = (mentorPlans || []).map((p: any) => p.id);
+    if (planIds.length === 0) return res.status(403).json({ message: 'No mentor-client relationship' });
+
+    const { data: activeSub } = await db.from(Tables.SUBSCRIPTIONS).select('id').in('plan_id', planIds).eq('user_id', userId).eq('status', 'active').limit(1).maybeSingle();
+    if (!activeSub) return res.status(403).json({ message: 'No mentor-client relationship' });
 
     // Read all user_context entries for this student
     const { data: ctx } = await db.from(Tables.USER_CONTEXT).select('key, value').eq('user_id', userId);
