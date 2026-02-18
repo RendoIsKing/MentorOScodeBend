@@ -26,6 +26,13 @@ import TTSRoutes from "./tts.routes";
 import MealRoutes from "./meals.routes";
 import AvatarRoutes from "./avatar.routes";
 import PointsRoutes from "./points.routes";
+import StudentTagsRoutes from "./studentTags.routes";
+import SafetyRoutes from "./safety.routes";
+import GoalSuggestionsRoutes from "./goalSuggestions.routes";
+import MentorAnalyticsRoutes from "./mentorAnalytics.routes";
+import MentorSettingsRoutes from "./mentorSettings.routes";
+import InviteLinkRoutes from "./inviteLinks.routes";
+import DiscountCodeRoutes from "./discountCodes.routes";
 
 export {
   AuthRoutes,
@@ -56,4 +63,11 @@ export {
   MealRoutes,
   AvatarRoutes,
   PointsRoutes,
+  StudentTagsRoutes,
+  SafetyRoutes,
+  GoalSuggestionsRoutes,
+  MentorAnalyticsRoutes,
+  MentorSettingsRoutes,
+  InviteLinkRoutes,
+  DiscountCodeRoutes,
 };

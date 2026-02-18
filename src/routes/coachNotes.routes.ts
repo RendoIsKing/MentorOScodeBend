@@ -1,151 +1,153 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { Auth, validateZod } from "../app/Middlewares";
-import { CoachNote } from "../database/schemas/CoachNoteSchema";
-import { Types } from "mongoose";
+import { db, Tables, insertOne, findById, updateById } from "../lib/db";
 import { UserInterface } from "../types/UserInterface";
-import { objectIdParam } from "../app/Validation/requestSchemas";
 
 const CoachNotesRoutes: Router = Router();
 
 const noteBodySchema = z.object({
   text: z.string().trim().min(1).max(5000),
+  category: z.string().max(100).optional(),
   pinned: z.boolean().optional(),
 });
 
-// GET /coach-notes/:clientId — List notes for a client
+// GET /coach-notes/:clientId
 CoachNotesRoutes.get(
   "/:clientId",
   Auth as any,
-  validateZod({ params: objectIdParam("clientId") }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
       const { clientId } = req.params;
-
       if (!coachId) return res.status(401).json({ message: "Unauthorized" });
 
-      const notes = await CoachNote.find({
-        coachId: new Types.ObjectId(coachId),
-        clientId: new Types.ObjectId(clientId),
-      })
-        .sort({ pinned: -1, createdAt: -1 })
-        .limit(100)
-        .lean();
+      const { data: notes } = await db
+        .from(Tables.COACH_NOTES)
+        .select("*")
+        .eq("coach_id", coachId)
+        .eq("client_id", clientId)
+        .eq("is_deleted", false)
+        .order("pinned", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(100);
 
       return res.json({
-        notes: notes.map((n: any) => ({
-          id: String(n._id),
+        notes: (notes || []).map((n: any) => ({
+          id: n.id,
           text: n.text,
+          category: n.category || "general",
           pinned: n.pinned,
-          createdAt: n.createdAt,
-          updatedAt: n.updatedAt,
+          createdAt: n.created_at,
+          updatedAt: n.updated_at,
         })),
       });
     } catch (err) {
-      console.error("[coach-notes] Failed to list notes:", err);
+      console.error("[coach-notes] list error:", err);
       return res.status(500).json({ message: "Kunne ikke hente notater." });
     }
   }
 );
 
-// POST /coach-notes/:clientId — Create a note
+// POST /coach-notes/:clientId
 CoachNotesRoutes.post(
   "/:clientId",
   Auth as any,
-  validateZod({ params: objectIdParam("clientId"), body: noteBodySchema }),
+  validateZod({ body: noteBodySchema }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
       const { clientId } = req.params;
-      const { text, pinned } = req.body;
-
+      const { text, category, pinned } = req.body;
       if (!coachId) return res.status(401).json({ message: "Unauthorized" });
 
-      const note = await CoachNote.create({
-        coachId: new Types.ObjectId(coachId),
-        clientId: new Types.ObjectId(clientId),
+      const note = await insertOne(Tables.COACH_NOTES, {
+        coach_id: coachId,
+        client_id: clientId,
         text,
+        category: category || "general",
         pinned: pinned ?? false,
       });
 
+      if (!note) return res.status(500).json({ message: "Kunne ikke opprette notat." });
+
       return res.status(201).json({
         note: {
-          id: String(note._id),
+          id: note.id,
           text: note.text,
+          category: note.category,
           pinned: note.pinned,
-          createdAt: note.createdAt,
-          updatedAt: note.updatedAt,
+          createdAt: note.created_at,
+          updatedAt: note.updated_at,
         },
       });
     } catch (err) {
-      console.error("[coach-notes] Failed to create note:", err);
+      console.error("[coach-notes] create error:", err);
       return res.status(500).json({ message: "Kunne ikke opprette notat." });
     }
   }
 );
 
-// PUT /coach-notes/note/:noteId — Update a note
+// PUT /coach-notes/note/:noteId
 CoachNotesRoutes.put(
   "/note/:noteId",
   Auth as any,
-  validateZod({ params: objectIdParam("noteId"), body: noteBodySchema }),
+  validateZod({ body: noteBodySchema }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
       const { noteId } = req.params;
-      const { text, pinned } = req.body;
-
+      const { text, category, pinned } = req.body;
       if (!coachId) return res.status(401).json({ message: "Unauthorized" });
 
-      const note = await CoachNote.findOneAndUpdate(
-        { _id: new Types.ObjectId(noteId), coachId: new Types.ObjectId(coachId) },
-        { $set: { text, ...(pinned !== undefined ? { pinned } : {}) } },
-        { new: true }
-      ).lean();
+      const existing = await findById(Tables.COACH_NOTES, noteId);
+      if (!existing || existing.coach_id !== coachId) {
+        return res.status(404).json({ message: "Notat ikke funnet." });
+      }
 
-      if (!note) return res.status(404).json({ message: "Notat ikke funnet." });
+      const updates: any = { text };
+      if (category !== undefined) updates.category = category;
+      if (pinned !== undefined) updates.pinned = pinned;
+
+      const note = await updateById(Tables.COACH_NOTES, noteId, updates);
+      if (!note) return res.status(500).json({ message: "Kunne ikke oppdatere notat." });
 
       return res.json({
         note: {
-          id: String((note as any)._id),
-          text: (note as any).text,
-          pinned: (note as any).pinned,
-          createdAt: (note as any).createdAt,
-          updatedAt: (note as any).updatedAt,
+          id: note.id,
+          text: note.text,
+          category: note.category,
+          pinned: note.pinned,
+          createdAt: note.created_at,
+          updatedAt: note.updated_at,
         },
       });
     } catch (err) {
-      console.error("[coach-notes] Failed to update note:", err);
+      console.error("[coach-notes] update error:", err);
       return res.status(500).json({ message: "Kunne ikke oppdatere notat." });
     }
   }
 );
 
-// DELETE /coach-notes/note/:noteId — Delete a note
+// DELETE /coach-notes/note/:noteId
 CoachNotesRoutes.delete(
   "/note/:noteId",
   Auth as any,
-  validateZod({ params: objectIdParam("noteId") }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
       const { noteId } = req.params;
-
       if (!coachId) return res.status(401).json({ message: "Unauthorized" });
 
-      const result = await CoachNote.deleteOne({
-        _id: new Types.ObjectId(noteId),
-        coachId: new Types.ObjectId(coachId),
-      });
-
-      if (result.deletedCount === 0) {
+      const existing = await findById(Tables.COACH_NOTES, noteId);
+      if (!existing || existing.coach_id !== coachId) {
         return res.status(404).json({ message: "Notat ikke funnet." });
       }
 
+      await updateById(Tables.COACH_NOTES, noteId, { is_deleted: true, deleted_at: new Date().toISOString() });
       return res.json({ ok: true });
     } catch (err) {
-      console.error("[coach-notes] Failed to delete note:", err);
+      console.error("[coach-notes] delete error:", err);
       return res.status(500).json({ message: "Kunne ikke slette notat." });
     }
   }

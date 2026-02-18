@@ -1,15 +1,8 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { Auth as ensureAuth, validateZod } from "../app/Middlewares";
-import { Types } from "mongoose";
+import { db, Tables, insertOne } from "../lib/db";
 import { UserInterface } from "../types/UserInterface";
-import { TrainingPlan, NutritionPlan, Goal } from "../app/Models/PlanModels";
-import { SubscriptionPlan } from "../app/Models/SubscriptionPlan";
-import { Subscription } from "../app/Models/Subscription";
-import { WeightEntry } from "../app/Models/WeightEntry";
-import ChangeEvent from "../models/ChangeEvent";
-import { publish } from "../services/events/publish";
-import { objectIdParam } from "../app/Validation/requestSchemas";
 
 const CoachPlansRoutes: Router = Router();
 
@@ -59,24 +52,32 @@ const nutritionPlanSchema = z.object({
 /* ─── Helper: verify coach-client relationship ───── */
 
 async function verifyCoachClient(coachId: string, clientId: string): Promise<boolean> {
-  const plans = await SubscriptionPlan.find({ userId: coachId, isDeleted: false }).select("_id").lean();
-  if (plans.length === 0) return false;
-  const planIds = plans.map((p) => p._id);
-  const sub = await Subscription.findOne({
-    userId: new Types.ObjectId(clientId),
-    planId: { $in: planIds.map((id) => new Types.ObjectId(id)) },
-    status: "active",
-  }).lean();
+  const { data: plans } = await db
+    .from(Tables.SUBSCRIPTION_PLANS)
+    .select("id")
+    .eq("user_id", coachId)
+    .eq("is_deleted", false);
+  if (!plans || plans.length === 0) return false;
+
+  const planIds = plans.map((p: any) => p.id);
+  const { data: sub } = await db
+    .from(Tables.SUBSCRIPTIONS)
+    .select("id")
+    .in("plan_id", planIds)
+    .eq("user_id", clientId)
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+
   return !!sub;
 }
 
 /* ─── Training Plan Endpoints ──────────────────────── */
 
-// PUT /coach-plans/:clientId/training — Create or update training plan
 CoachPlansRoutes.put(
   "/:clientId/training",
   ensureAuth as any,
-  validateZod({ params: objectIdParam("clientId"), body: trainingPlanSchema }),
+  validateZod({ body: trainingPlanSchema }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
@@ -88,61 +89,54 @@ CoachPlansRoutes.put(
 
       const { sessions, guidelines } = req.body;
 
-      // Get latest version number
-      const latest = await TrainingPlan.findOne({ userId: new Types.ObjectId(clientId) })
-        .sort({ version: -1 })
+      const { data: latest } = await db
+        .from(Tables.TRAINING_PLANS)
         .select("version")
-        .lean();
+        .eq("user_id", clientId)
+        .order("version", { ascending: false })
+        .limit(1)
+        .maybeSingle();
       const nextVersion = ((latest as any)?.version || 0) + 1;
 
-      // Mark all previous as not current
-      await TrainingPlan.updateMany(
-        { userId: new Types.ObjectId(clientId), isCurrent: true },
-        { $set: { isCurrent: false } }
-      );
+      await db
+        .from(Tables.TRAINING_PLANS)
+        .update({ is_current: false })
+        .eq("user_id", clientId)
+        .eq("is_current", true);
 
-      // Create new plan
-      const plan = await TrainingPlan.create({
-        userId: new Types.ObjectId(clientId),
+      const plan = await insertOne(Tables.TRAINING_PLANS, {
+        user_id: clientId,
         version: nextVersion,
-        isCurrent: true,
+        is_current: true,
         sessions,
         guidelines: guidelines || [],
       });
 
-      // Log change event
+      if (!plan) return res.status(500).json({ message: "Kunne ikke lagre treningsplan." });
+
       try {
-        await ChangeEvent.create({
-          user: new Types.ObjectId(clientId),
+        await insertOne(Tables.CHANGE_EVENTS, {
+          user_id: clientId,
           type: "PLAN_EDIT",
           summary: `Treningsplan v${nextVersion} opprettet av coach`,
-          actor: new Types.ObjectId(coachId),
-          after: { version: nextVersion, sessionCount: sessions.length },
+          actor: { id: coachId, role: "coach" },
+          after_data: { version: nextVersion, sessionCount: sessions.length },
         });
-      } catch (err) {
-        console.error("[coach-plans] Failed to log change event:", err);
-      }
+      } catch {}
 
-      return res.status(200).json({
-        plan: {
-          id: String(plan._id),
-          version: nextVersion,
-          sessions: plan.sessions,
-          guidelines: plan.guidelines,
-        },
+      return res.json({
+        plan: { id: plan.id, version: nextVersion, sessions: plan.sessions, guidelines: plan.guidelines },
       });
     } catch (err) {
-      console.error("[coach-plans] Failed to save training plan:", err);
+      console.error("[coach-plans] training save error:", err);
       return res.status(500).json({ message: "Kunne ikke lagre treningsplan." });
     }
   }
 );
 
-// GET /coach-plans/:clientId/training — Get current training plan
 CoachPlansRoutes.get(
   "/:clientId/training",
   ensureAuth as any,
-  validateZod({ params: objectIdParam("clientId") }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
@@ -152,25 +146,22 @@ CoachPlansRoutes.get(
       const isCoach = await verifyCoachClient(coachId, clientId);
       if (!isCoach) return res.status(403).json({ message: "Ikke din klient." });
 
-      const plan = await TrainingPlan.findOne({
-        userId: new Types.ObjectId(clientId),
-        isCurrent: true,
-      })
-        .sort({ version: -1 })
-        .lean();
+      const { data: plan } = await db
+        .from(Tables.TRAINING_PLANS)
+        .select("*")
+        .eq("user_id", clientId)
+        .eq("is_current", true)
+        .order("version", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
       if (!plan) return res.json({ plan: null });
 
       return res.json({
-        plan: {
-          id: String((plan as any)._id),
-          version: (plan as any).version,
-          sessions: (plan as any).sessions,
-          guidelines: (plan as any).guidelines || [],
-        },
+        plan: { id: plan.id, version: plan.version, sessions: plan.sessions, guidelines: plan.guidelines || [] },
       });
     } catch (err) {
-      console.error("[coach-plans] Failed to get training plan:", err);
+      console.error("[coach-plans] training get error:", err);
       return res.status(500).json({ message: "Kunne ikke hente treningsplan." });
     }
   }
@@ -178,11 +169,10 @@ CoachPlansRoutes.get(
 
 /* ─── Nutrition Plan Endpoints ─────────────────────── */
 
-// PUT /coach-plans/:clientId/nutrition — Create or update nutrition plan
 CoachPlansRoutes.put(
   "/:clientId/nutrition",
   ensureAuth as any,
-  validateZod({ params: objectIdParam("clientId"), body: nutritionPlanSchema }),
+  validateZod({ body: nutritionPlanSchema }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
@@ -194,65 +184,63 @@ CoachPlansRoutes.put(
 
       const { dailyTargets, meals, days, guidelines } = req.body;
 
-      // Get latest version
-      const latest = await NutritionPlan.findOne({ userId: new Types.ObjectId(clientId) })
-        .sort({ version: -1 })
+      const { data: latest } = await db
+        .from(Tables.NUTRITION_PLANS)
         .select("version")
-        .lean();
+        .eq("user_id", clientId)
+        .order("version", { ascending: false })
+        .limit(1)
+        .maybeSingle();
       const nextVersion = ((latest as any)?.version || 0) + 1;
 
-      // Mark previous as not current
-      await NutritionPlan.updateMany(
-        { userId: new Types.ObjectId(clientId), isCurrent: true },
-        { $set: { isCurrent: false } }
-      );
+      await db
+        .from(Tables.NUTRITION_PLANS)
+        .update({ is_current: false })
+        .eq("user_id", clientId)
+        .eq("is_current", true);
 
-      // Create new plan
-      const plan = await NutritionPlan.create({
-        userId: new Types.ObjectId(clientId),
+      const plan = await insertOne(Tables.NUTRITION_PLANS, {
+        user_id: clientId,
         version: nextVersion,
-        isCurrent: true,
-        dailyTargets,
+        is_current: true,
+        daily_targets: dailyTargets,
         meals: meals || [],
         days: days || [],
         guidelines: guidelines || [],
       });
 
-      // Log change event
+      if (!plan) return res.status(500).json({ message: "Kunne ikke lagre ernæringsplan." });
+
       try {
-        await ChangeEvent.create({
-          user: new Types.ObjectId(clientId),
+        await insertOne(Tables.CHANGE_EVENTS, {
+          user_id: clientId,
           type: "NUTRITION_EDIT",
           summary: `Ernæringsplan v${nextVersion} opprettet av coach (${dailyTargets.kcal} kcal)`,
-          actor: new Types.ObjectId(coachId),
-          after: { version: nextVersion, dailyTargets },
+          actor: { id: coachId, role: "coach" },
+          after_data: { version: nextVersion, dailyTargets },
         });
-      } catch (err) {
-        console.error("[coach-plans] Failed to log change event:", err);
-      }
+      } catch {}
 
-      return res.status(200).json({
+      return res.json({
         plan: {
-          id: String(plan._id),
+          id: plan.id,
           version: nextVersion,
-          dailyTargets: plan.dailyTargets,
+          dailyTargets: plan.daily_targets,
           meals: plan.meals,
           days: plan.days,
           guidelines: plan.guidelines,
         },
       });
     } catch (err) {
-      console.error("[coach-plans] Failed to save nutrition plan:", err);
+      console.error("[coach-plans] nutrition save error:", err);
       return res.status(500).json({ message: "Kunne ikke lagre ernæringsplan." });
     }
   }
 );
 
-// GET /coach-plans/:clientId/nutrition — Get current nutrition plan
 CoachPlansRoutes.get(
   "/:clientId/nutrition",
   ensureAuth as any,
-  validateZod({ params: objectIdParam("clientId") }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
@@ -262,50 +250,41 @@ CoachPlansRoutes.get(
       const isCoach = await verifyCoachClient(coachId, clientId);
       if (!isCoach) return res.status(403).json({ message: "Ikke din klient." });
 
-      const plan = await NutritionPlan.findOne({
-        userId: new Types.ObjectId(clientId),
-        isCurrent: true,
-      })
-        .sort({ version: -1 })
-        .lean();
+      const { data: plan } = await db
+        .from(Tables.NUTRITION_PLANS)
+        .select("*")
+        .eq("user_id", clientId)
+        .eq("is_current", true)
+        .order("version", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
       if (!plan) return res.json({ plan: null });
 
       return res.json({
         plan: {
-          id: String((plan as any)._id),
-          version: (plan as any).version,
-          dailyTargets: (plan as any).dailyTargets,
-          meals: (plan as any).meals || [],
-          days: (plan as any).days || [],
-          guidelines: (plan as any).guidelines || [],
+          id: plan.id,
+          version: plan.version,
+          dailyTargets: plan.daily_targets,
+          meals: plan.meals || [],
+          days: plan.days || [],
+          guidelines: plan.guidelines || [],
         },
       });
     } catch (err) {
-      console.error("[coach-plans] Failed to get nutrition plan:", err);
+      console.error("[coach-plans] nutrition get error:", err);
       return res.status(500).json({ message: "Kunne ikke hente ernæringsplan." });
     }
   }
 );
 
-/* ─── Weight Management Endpoints ──────────────────── */
+/* ─── Weight Management ──────────────────────────── */
 
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-const weightLogSchema = z.object({
-  date: IsoDate,
-  kg: z.number().min(20).max(500),
-});
-
-const weightDeleteSchema = z.object({
-  date: IsoDate,
-});
-
-// GET /coach-plans/:clientId/weights?period=90d — Get weight history
 CoachPlansRoutes.get(
   "/:clientId/weights",
   ensureAuth as any,
-  validateZod({ params: objectIdParam("clientId") }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
@@ -319,27 +298,25 @@ CoachPlansRoutes.get(
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - periodDays);
 
-      const entries = await WeightEntry.find({
-        userId: new Types.ObjectId(clientId),
-        date: { $gte: startDate.toISOString().slice(0, 10) },
-      })
-        .sort({ date: 1 })
-        .select("date kg -_id")
-        .lean();
+      const { data: entries } = await db
+        .from(Tables.WEIGHT_ENTRIES)
+        .select("date, kg")
+        .eq("user_id", clientId)
+        .gte("date", startDate.toISOString().slice(0, 10))
+        .order("date", { ascending: true });
 
-      return res.json({ weights: entries });
+      return res.json({ weights: entries || [] });
     } catch (err) {
-      console.error("[coach-plans] Failed to get weights:", err);
+      console.error("[coach-plans] weights get error:", err);
       return res.status(500).json({ message: "Kunne ikke hente vektdata." });
     }
   }
 );
 
-// POST /coach-plans/:clientId/weights — Log weight for client
 CoachPlansRoutes.post(
   "/:clientId/weights",
   ensureAuth as any,
-  validateZod({ params: objectIdParam("clientId"), body: weightLogSchema }),
+  validateZod({ body: z.object({ date: IsoDate, kg: z.number().min(20).max(500) }) }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
@@ -350,45 +327,34 @@ CoachPlansRoutes.post(
       if (!isCoach) return res.status(403).json({ message: "Ikke din klient." });
 
       const { date, kg } = req.body;
-
-      // Validate date not in future
       const todayIso = new Date().toISOString().slice(0, 10);
-      if (date > todayIso) {
-        return res.status(400).json({ message: "Dato kan ikke være i fremtiden." });
-      }
+      if (date > todayIso) return res.status(400).json({ message: "Dato kan ikke være i fremtiden." });
 
-      await WeightEntry.updateOne(
-        { userId: new Types.ObjectId(clientId), date },
-        { $set: { kg } },
-        { upsert: true }
-      );
+      await db
+        .from(Tables.WEIGHT_ENTRIES)
+        .upsert({ user_id: clientId, date, kg }, { onConflict: "user_id,date" });
 
       try {
-        await ChangeEvent.create({
-          user: new Types.ObjectId(clientId),
+        await insertOne(Tables.CHANGE_EVENTS, {
+          user_id: clientId,
           type: "WEIGHT_LOG",
           summary: `Vekt ${kg} kg registrert (${date}) av coach`,
-          actor: new Types.ObjectId(coachId),
-          after: { date, kg },
+          actor: { id: coachId, role: "coach" },
+          after_data: { date, kg },
         });
-        await publish({ type: "WEIGHT_LOGGED", user: new Types.ObjectId(clientId) as any, date, kg });
-      } catch (err) {
-        console.error("[coach-plans] Failed to log weight change event:", err);
-      }
+      } catch {}
 
-      return res.status(200).json({ ok: true, date, kg });
+      return res.json({ ok: true, date, kg });
     } catch (err) {
-      console.error("[coach-plans] Failed to log weight:", err);
+      console.error("[coach-plans] weight log error:", err);
       return res.status(500).json({ message: "Kunne ikke registrere vekt." });
     }
   }
 );
 
-// DELETE /coach-plans/:clientId/weights?date=YYYY-MM-DD — Delete weight entry
 CoachPlansRoutes.delete(
   "/:clientId/weights",
   ensureAuth as any,
-  validateZod({ params: objectIdParam("clientId"), query: weightDeleteSchema }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
@@ -399,28 +365,16 @@ CoachPlansRoutes.delete(
       const isCoach = await verifyCoachClient(coachId, clientId);
       if (!isCoach) return res.status(403).json({ message: "Ikke din klient." });
 
-      await WeightEntry.deleteOne({ userId: new Types.ObjectId(clientId), date });
-
-      try {
-        await ChangeEvent.create({
-          user: new Types.ObjectId(clientId),
-          type: "WEIGHT_LOG",
-          summary: `Vektregistrering for ${date} slettet av coach`,
-          actor: new Types.ObjectId(coachId),
-        });
-      } catch (err) {
-        console.error("[coach-plans] Failed to log weight delete event:", err);
-      }
-
+      await db.from(Tables.WEIGHT_ENTRIES).delete().eq("user_id", clientId).eq("date", date);
       return res.json({ ok: true });
     } catch (err) {
-      console.error("[coach-plans] Failed to delete weight:", err);
+      console.error("[coach-plans] weight delete error:", err);
       return res.status(500).json({ message: "Kunne ikke slette vektregistrering." });
     }
   }
 );
 
-/* ─── Goal Management Endpoints ────────────────────── */
+/* ─── Goal Management ────────────────────────────── */
 
 const goalSchema = z.object({
   targetWeightKg: z.number().min(20).max(500).optional(),
@@ -428,11 +382,10 @@ const goalSchema = z.object({
   horizonWeeks: z.number().int().min(1).max(260).optional(),
 });
 
-// PUT /coach-plans/:clientId/goal — Create or update goal
 CoachPlansRoutes.put(
   "/:clientId/goal",
   ensureAuth as any,
-  validateZod({ params: objectIdParam("clientId"), body: goalSchema }),
+  validateZod({ body: goalSchema }),
   async (req: Request, res: Response) => {
     try {
       const coachId = (req.user as UserInterface)?.id;
@@ -444,52 +397,38 @@ CoachPlansRoutes.put(
 
       const { targetWeightKg, strengthTargets, horizonWeeks } = req.body;
 
-      const latest = await Goal.findOne({ userId: new Types.ObjectId(clientId) })
-        .sort({ version: -1 })
+      const { data: latest } = await db
+        .from(Tables.GOALS)
         .select("version")
-        .lean();
+        .eq("user_id", clientId)
+        .order("version", { ascending: false })
+        .limit(1)
+        .maybeSingle();
       const nextVersion = ((latest as any)?.version || 0) + 1;
 
-      await Goal.updateMany(
-        { userId: new Types.ObjectId(clientId), isCurrent: true },
-        { $set: { isCurrent: false } }
-      );
+      await db.from(Tables.GOALS).update({ is_current: false }).eq("user_id", clientId).eq("is_current", true);
 
-      const goal = await Goal.create({
-        userId: new Types.ObjectId(clientId),
+      const goal = await insertOne(Tables.GOALS, {
+        user_id: clientId,
         version: nextVersion,
-        isCurrent: true,
-        targetWeightKg,
-        strengthTargets,
-        horizonWeeks,
+        is_current: true,
+        target_weight_kg: targetWeightKg,
+        strength_targets: strengthTargets,
+        horizon_weeks: horizonWeeks,
       });
 
-      try {
-        const parts: string[] = [];
-        if (targetWeightKg) parts.push(`${targetWeightKg} kg`);
-        if (strengthTargets) parts.push(strengthTargets);
-        if (horizonWeeks) parts.push(`${horizonWeeks} uker`);
-        await ChangeEvent.create({
-          user: new Types.ObjectId(clientId),
-          type: "GOAL_EDIT",
-          summary: `Mål oppdatert av coach: ${parts.join(", ")}`,
-          actor: new Types.ObjectId(coachId),
-          after: { targetWeightKg, strengthTargets, horizonWeeks },
-        });
-      } catch (err) {
-        console.error("[coach-plans] Failed to log goal change:", err);
-      }
+      if (!goal) return res.status(500).json({ message: "Kunne ikke lagre mål." });
 
       return res.json({
         goal: {
-          targetWeightKg: (goal as any).targetWeightKg,
-          strengthTargets: (goal as any).strengthTargets,
-          horizonWeeks: (goal as any).horizonWeeks,
+          targetWeightKg: goal.target_weight_kg,
+          strengthTargets: goal.strength_targets,
+          horizonWeeks: goal.horizon_weeks,
           version: nextVersion,
         },
       });
     } catch (err) {
-      console.error("[coach-plans] Failed to save goal:", err);
+      console.error("[coach-plans] goal save error:", err);
       return res.status(500).json({ message: "Kunne ikke lagre mål." });
     }
   }

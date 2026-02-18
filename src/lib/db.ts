@@ -65,6 +65,15 @@ export const Tables = {
   USER_POINTS_SUMMARY: "user_points_summary",
   COMPETITIONS: "competitions",
   COMPETITION_PARTICIPANTS: "competition_participants",
+  COACH_NOTES: "coach_notes",
+  STUDENT_TAGS: "student_tags",
+  SAFETY_FLAG_LOGS: "safety_flag_logs",
+  DISCOUNT_CODES: "discount_codes",
+  PUSH_SUBSCRIPTIONS: "push_subscriptions",
+  INVITE_LINKS: "invite_links",
+  GOAL_SUGGESTIONS: "goal_suggestions",
+  MENTOR_BRANDING: "mentor_branding",
+  MENTOR_CHECKLIST: "mentor_checklist",
 } as const;
 
 // ── Common query helpers ─────────────────────────────────────────────────────

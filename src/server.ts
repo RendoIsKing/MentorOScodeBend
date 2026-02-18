@@ -39,6 +39,13 @@ import {
   MealRoutes,
   AvatarRoutes,
   PointsRoutes,
+  StudentTagsRoutes,
+  SafetyRoutes,
+  GoalSuggestionsRoutes,
+  MentorAnalyticsRoutes,
+  MentorSettingsRoutes,
+  InviteLinkRoutes,
+  DiscountCodeRoutes,
 } from "./routes";
 
 import { local, jwt } from "./utils/strategies";
@@ -359,6 +366,13 @@ export class Server {
     this.app.use('/api/backend/v1/chat', conversationsRoutes);
     this.app.use('/api/backend/v1', chatStream);
     this.app.use('/api/backend/v1', devSeed);
+    this.app.use("/api/backend/v1/student-tags", Auth, StudentTagsRoutes);
+    this.app.use("/api/backend/v1/safety", Auth, SafetyRoutes);
+    this.app.use("/api/backend/v1/goal-suggestions", Auth, GoalSuggestionsRoutes);
+    this.app.use("/api/backend/v1/mentor-analytics", Auth, MentorAnalyticsRoutes);
+    this.app.use("/api/backend/v1/mentor-settings", Auth, MentorSettingsRoutes);
+    this.app.use("/api/backend/v1/invite-links", InviteLinkRoutes);
+    this.app.use("/api/backend/v1/discount-codes", DiscountCodeRoutes);
     this.app.use("/", downloadRouter);
   }
 
