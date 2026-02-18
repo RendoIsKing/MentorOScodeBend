@@ -60,7 +60,7 @@ export async function generateResponse(
           message: userMessage,
           conversation_history: conversationHistory || [],
         }),
-        signal: AbortSignal.timeout(60_000), // 60s timeout
+        signal: AbortSignal.timeout(120_000), // 120s for complex tool operations like plan generation
       });
       if (resp.ok) {
         const data = await resp.json() as { response?: string; agent_name?: string; tools_called?: string[] };
