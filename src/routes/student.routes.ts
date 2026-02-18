@@ -26,6 +26,19 @@ function resolveUserId(req: Request): string | null {
   return userId;
 }
 
+// Authorization: verify the caller either owns the data or is a mentor
+async function authorizeUserAccess(req: Request, targetUserId: string): Promise<boolean> {
+  const callerId = resolveUserId(req);
+  if (!callerId) return false;
+  if (callerId === targetUserId) return true;
+  try {
+    const { data: caller } = await db.from(Tables.USERS).select('is_mentor').eq('id', callerId).maybeSingle();
+    return !!(caller?.is_mentor);
+  } catch {
+    return false;
+  }
+}
+
 // Zod schemas for validation
 const NonEmptyString = z.string().trim().min(1);
 const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -91,6 +104,7 @@ StudentRoutes.get('/me/changes', ensureAuth as any, perUserIpLimiter({ windowMs:
 StudentRoutes.get('/:userId/changes', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
+    if (!await authorizeUserAccess(req, userId)) return res.status(403).json({ message: 'Forbidden' });
     const limRaw = (req.query.limit as string) || '10';
     const limit = Math.max(1, Math.min(50, Number(limRaw) || 10));
 
@@ -334,6 +348,7 @@ StudentRoutes.get('/:userId/snapshot', ensureAuth as any, perUserIpLimiter({ win
     let userId = req.params.userId;
     if (!userId) userId = resolveUserId(req) || '';
     if (!userId) return res.status(400).json({ message: 'Bad userId' });
+    if (!await authorizeUserAccess(req, userId)) return res.status(403).json({ message: 'Forbidden' });
     const period = (req.query.period as Period) || '30d';
     const payload = await buildSnapshot(userId, period);
     return res.status(200).json(payload);
@@ -478,6 +493,7 @@ StudentRoutes.get('/:userId/onboarding-profile', ensureAuth as any, async (req: 
   try {
     const mentorId = resolveUserId(req);
     if (!mentorId) return res.status(401).json({ message: 'Unauthorized' });
+    if (!await authorizeUserAccess(req, req.params.userId)) return res.status(403).json({ message: 'Forbidden' });
 
     const reqUser = req.user as any;
     if (!reqUser?.isMentor) return res.status(403).json({ message: 'Mentor access required' });
@@ -583,9 +599,10 @@ StudentRoutes.get('/me/exercise-progress', ensureAuth as any, perUserIpLimiter({
 
 StudentRoutes.get('/:userId/exercise-progress', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 120 }), async (req: Request, res: Response) => {
   try {
+    const { userId } = req.params;
+    if (!await authorizeUserAccess(req, userId)) return res.status(403).json({ message: 'Forbidden' });
     const period = (req.query.period as Period) || '30d';
     const exercise = (req.query.exercise as string) || '';
-    const { userId } = req.params;
     const days = generateDates(period);
 
     let query = db.from(Tables.EXERCISE_PROGRESS)
@@ -653,6 +670,7 @@ StudentRoutes.post('/:userId/weights', ensureAuth as any, perUserIpLimiter({ win
   validateZod({ body: WeightLogSchema }), async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
+    if (!await authorizeUserAccess(req, userId)) return res.status(403).json({ message: 'Forbidden' });
     const parsed = WeightLogSchema.safeParse(req.body || {});
     if (!parsed.success) return res.status(422).json({ message: 'validation_failed', details: parsed.error.flatten() });
     const { date, kg } = parsed.data;
@@ -675,6 +693,7 @@ StudentRoutes.put('/:userId/weights', ensureAuth as any, perUserIpLimiter({ wind
   validateZod({ body: WeightLogSchema }), async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
+    if (!await authorizeUserAccess(req, userId)) return res.status(403).json({ message: 'Forbidden' });
     const parsed = WeightLogSchema.safeParse(req.body || {});
     if (!parsed.success) return res.status(422).json({ message: 'validation_failed', details: parsed.error.flatten() });
     const { date, kg } = parsed.data;
@@ -696,8 +715,9 @@ StudentRoutes.put('/:userId/weights', ensureAuth as any, perUserIpLimiter({ wind
 StudentRoutes.delete('/:userId/weights', ensureAuth as any, perUserIpLimiter({ windowMs: 60_000, max: 60 }),
   async (req: Request, res: Response) => {
   try {
-    const date = req.query.date as string | undefined;
     const { userId } = req.params;
+    if (!await authorizeUserAccess(req, userId)) return res.status(403).json({ message: 'Forbidden' });
+    const date = req.query.date as string | undefined;
     if (!date) return res.status(400).json({ message: 'date query param is required' });
 
     await db.from(Tables.WEIGHT_ENTRIES).delete().eq('user_id', userId).eq('date', date);
@@ -766,6 +786,7 @@ StudentRoutes.post('/:userId/exercise-progress', ensureAuth as any,
   validateZod({ body: ExerciseProgressSchema }), async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
+    if (!await authorizeUserAccess(req, userId)) return res.status(403).json({ message: 'Forbidden' });
     const { exercise, date, value } = req.body || {};
     if (!exercise || !date || typeof value !== 'number') return res.status(400).json({ message: 'exercise, date, value required' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });
@@ -780,6 +801,7 @@ StudentRoutes.put('/:userId/exercise-progress', ensureAuth as any,
   validateZod({ body: ExerciseProgressSchema }), async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
+    if (!await authorizeUserAccess(req, userId)) return res.status(403).json({ message: 'Forbidden' });
     const { exercise, date, value } = req.body || {};
     if (!exercise || !date || typeof value !== 'number') return res.status(400).json({ message: 'exercise, date, value required' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ message: 'date must be YYYY-MM-DD' });

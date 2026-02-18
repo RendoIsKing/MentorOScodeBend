@@ -196,6 +196,117 @@ r.post("/:id/favorite", ensureAuth as any, async (req: any, res) => {
   }
 });
 
+// ── TEXT SEARCH via OpenFoodFacts ────────────────────────────────────────────
+
+r.get("/search", ensureAuth as any, async (req: any, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q || q.length < 2) {
+      return res.status(400).json({ error: "query_too_short", results: [] });
+    }
+
+    const cc = String(req.query.cc || "no").toLowerCase();
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(50, Math.max(5, Number(req.query.page_size) || 25));
+
+    const params = new URLSearchParams({
+      search_terms: q,
+      search_simple: "1",
+      action: "process",
+      json: "1",
+      page: String(page),
+      page_size: String(pageSize),
+      fields: "product_name,brands,nutriments,image_small_url,quantity,code,countries_tags",
+      sort_by: "unique_scans_n",
+    });
+
+    if (cc === "no") {
+      params.set("tagtype_0", "countries");
+      params.set("tag_contains_0", "contains");
+      params.set("tag_0", "norway");
+    }
+
+    const offRes = await fetch(
+      `https://world.openfoodfacts.org/cgi/search.pl?${params.toString()}`,
+      { signal: AbortSignal.timeout(8000) },
+    );
+
+    if (!offRes.ok) {
+      // Fallback: search without country filter
+      params.delete("tagtype_0");
+      params.delete("tag_contains_0");
+      params.delete("tag_0");
+      const fallbackRes = await fetch(
+        `https://world.openfoodfacts.org/cgi/search.pl?${params.toString()}`,
+        { signal: AbortSignal.timeout(8000) },
+      );
+      if (!fallbackRes.ok) return res.json({ results: [], total: 0 });
+      const fbData: any = await fallbackRes.json();
+      return res.json(mapOffResults(fbData));
+    }
+
+    const data: any = await offRes.json();
+    const mapped = mapOffResults(data);
+
+    // If Norway-specific search returned too few results, supplement with global
+    if (mapped.results.length < 5 && page === 1) {
+      params.delete("tagtype_0");
+      params.delete("tag_contains_0");
+      params.delete("tag_0");
+      try {
+        const globalRes = await fetch(
+          `https://world.openfoodfacts.org/cgi/search.pl?${params.toString()}`,
+          { signal: AbortSignal.timeout(6000) },
+        );
+        if (globalRes.ok) {
+          const globalData: any = await globalRes.json();
+          const globalMapped = mapOffResults(globalData);
+          const existingCodes = new Set(mapped.results.map((r: any) => r.barcode));
+          for (const item of globalMapped.results) {
+            if (!existingCodes.has(item.barcode)) {
+              mapped.results.push(item);
+              existingCodes.add(item.barcode);
+            }
+          }
+          mapped.total = Math.max(mapped.total, mapped.results.length);
+        }
+      } catch {}
+    }
+
+    return res.json(mapped);
+  } catch (err: any) {
+    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+      return res.status(504).json({ error: "upstream_timeout", results: [] });
+    }
+    return res.status(500).json({ error: "internal", results: [] });
+  }
+});
+
+function mapOffResults(data: any) {
+  const products = (data?.products || []) as any[];
+  const results = products
+    .filter((p: any) => p.product_name)
+    .map((p: any) => {
+      const n = p.nutriments || {};
+      return {
+        name: p.product_name,
+        brand: p.brands || "",
+        barcode: p.code || "",
+        image_url: p.image_small_url || null,
+        quantity: p.quantity || "",
+        per_100g: {
+          calories: Math.round(n["energy-kcal_100g"] || n["energy-kcal"] || 0),
+          protein_g: Math.round((n.proteins_100g || 0) * 10) / 10,
+          carbs_g: Math.round((n.carbohydrates_100g || 0) * 10) / 10,
+          fat_g: Math.round((n.fat_100g || 0) * 10) / 10,
+          fiber_g: Math.round((n.fiber_100g || 0) * 10) / 10,
+        },
+      };
+    });
+
+  return { results, total: Number(data?.count || results.length), page: Number(data?.page || 1) };
+}
+
 // ── BARCODE LOOKUP via OpenFoodFacts (free, no API key needed) ───────────────
 
 r.get("/barcode/:code", ensureAuth as any, async (req: any, res) => {
