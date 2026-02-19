@@ -109,6 +109,14 @@ const updateMeSchema = z.object({
   mentorAiNutritionPhilosophy: z.string().optional(),
   mentorAiMacroApproach: z.string().optional(),
   mentorAiDietaryNotes: z.string().optional(),
+  welcomeMessage: z.string().optional(),
+  websiteLink: z.string().optional(),
+  notificationPreferences: z.object({
+    new_subscriber: z.boolean().optional(),
+    new_message: z.boolean().optional(),
+    payment_received: z.boolean().optional(),
+    safety_flag: z.boolean().optional(),
+  }).optional(),
 }).strict();
 
 auth.post("/register", validateZod({ body: registerSchema }), AuthController.regsiter);

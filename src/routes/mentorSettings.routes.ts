@@ -20,10 +20,9 @@ MentorSettingsRoutes.get("/", Auth as any, async (req: Request, res: Response) =
       .eq("mentor_id", user.id)
       .maybeSingle();
 
-    // Payment info (from users table)
     const { data: userRow } = await db
       .from(Tables.USERS)
-      .select("payout_bank_name, payout_account_number, payout_routing_number, stripe_connect_id, platform_fee_percent")
+      .select("payout_bank_name, payout_account_number, payout_routing_number, stripe_connect_id, platform_fee_percent, welcome_message, website_link, notification_preferences, full_name, user_name, bio, gender, photo_id, instagram_link, youtube_link, tiktok_link, facebook_link, mentor_expertise, mentor_certifications, mentor_years_experience")
       .eq("id", user.id)
       .maybeSingle();
 
@@ -65,6 +64,32 @@ MentorSettingsRoutes.get("/", Auth as any, async (req: Request, res: Response) =
         completed: c.completed,
         completedAt: c.completed_at,
       })),
+      profile: {
+        fullName: userRow?.full_name || "",
+        userName: userRow?.user_name || "",
+        bio: userRow?.bio || "",
+        gender: userRow?.gender || "",
+        photoId: userRow?.photo_id || "",
+      },
+      socialLinks: {
+        instagramLink: userRow?.instagram_link || "",
+        youtubeLink: userRow?.youtube_link || "",
+        tiktokLink: userRow?.tiktok_link || "",
+        facebookLink: userRow?.facebook_link || "",
+        websiteLink: userRow?.website_link || "",
+      },
+      welcomeMessage: userRow?.welcome_message || "",
+      notificationPreferences: userRow?.notification_preferences || {
+        new_subscriber: true,
+        new_message: true,
+        payment_received: true,
+        safety_flag: true,
+      },
+      expertise: {
+        mentorExpertise: userRow?.mentor_expertise || [],
+        mentorCertifications: userRow?.mentor_certifications || [],
+        mentorYearsExperience: userRow?.mentor_years_experience ?? 0,
+      },
     });
   } catch (err) {
     console.error("[mentor-settings] get error:", err);

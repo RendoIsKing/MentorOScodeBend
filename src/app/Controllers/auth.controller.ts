@@ -88,6 +88,20 @@ function toUserPayload(user: any) {
     hasDocumentUploaded: user.has_document_uploaded,
     hasDocumentVerified: user.has_document_verified,
     isFreeSubscription: user.is_free_subscription,
+    bio: user.bio,
+    gender: user.gender,
+    dob: user.dob,
+    youtubeLink: user.youtube_link,
+    instagramLink: user.instagram_link,
+    tiktokLink: user.tiktok_link,
+    facebookLink: user.facebook_link,
+    websiteLink: user.website_link,
+    welcomeMessage: user.welcome_message,
+    notificationPreferences: user.notification_preferences,
+    mentorExpertise: user.mentor_expertise,
+    mentorCertifications: user.mentor_certifications,
+    mentorYearsExperience: user.mentor_years_experience,
+    mentorHasFreeTrial: user.mentor_has_free_trial,
     createdAt: user.created_at,
     updatedAt: user.updated_at,
   };
@@ -1037,6 +1051,9 @@ class AuthController {
       if (body.instagramLink !== undefined) updateData.instagram_link = body.instagramLink;
       if (body.tiktokLink !== undefined) updateData.tiktok_link = body.tiktokLink;
       if (body.facebookLink !== undefined) updateData.facebook_link = body.facebookLink;
+      if (body.welcomeMessage !== undefined) updateData.welcome_message = body.welcomeMessage;
+      if (body.websiteLink !== undefined) updateData.website_link = body.websiteLink;
+      if (body.notificationPreferences !== undefined) updateData.notification_preferences = body.notificationPreferences;
 
       // If password change, update via Supabase Auth
       if (body.password && user.auth_id) {
