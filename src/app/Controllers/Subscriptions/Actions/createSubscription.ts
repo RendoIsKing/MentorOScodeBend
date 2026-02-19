@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import stripeInstance from "../../../../utils/stripe";
 import { UserInterface } from "../../../../types/UserInterface";
-import { findOne, findById, insertOne, Tables } from "../../../../lib/db";
+import { db, findOne, findById, insertOne, Tables } from "../../../../lib/db";
 import { SubscriptionStatusEnum } from "../../../../types/enums/SubscriptionStatusEnum";
 import { TransactionStatus } from "../../../../types/enums/transactionStatusEnum";
 import { TransactionType } from "../../../../types/enums/transactionTypeEnum";
@@ -12,7 +12,7 @@ export const createSubscription = async (
   req: Request,
   res: Response
 ): Promise<Response> => {
-  const { planId } = req.body;
+  const { planId, promoCode } = req.body;
   const reqUser = req.user as UserInterface;
 
   try {
@@ -65,7 +65,37 @@ export const createSubscription = async (
     );
     console.log("paymentMethod ", paymentMethod);
 
-    const subscription = await stripeInstance.subscriptions.create({
+    let stripeCouponId: string | undefined;
+    let discountRow: any = null;
+
+    if (promoCode) {
+      const { data: discResult } = await db
+        .from(Tables.DISCOUNT_CODES)
+        .select("*")
+        .eq("code", promoCode.toUpperCase())
+        .eq("mentor_id", plan.user_id)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (discResult) {
+        const now = new Date();
+        const expired = discResult.valid_until && new Date(discResult.valid_until) < now;
+        const maxedOut = discResult.max_uses && discResult.current_uses >= discResult.max_uses;
+        const wrongPlan = discResult.plan_id && discResult.plan_id !== planId;
+
+        if (!expired && !maxedOut && !wrongPlan) {
+          discountRow = discResult;
+          const coupon = await stripeInstance.coupons.create(
+            discResult.discount_percent
+              ? { percent_off: discResult.discount_percent, duration: "once" }
+              : { amount_off: Math.round(Number(discResult.discount_amount) * 100), currency: process.env.STRIPE_CURRENCY || "usd", duration: "once" }
+          );
+          stripeCouponId = coupon.id;
+        }
+      }
+    }
+
+    const subscriptionParams: any = {
       customer: user.stripe_client_id,
       default_payment_method: card.payment_method_id,
       items: [
@@ -76,7 +106,13 @@ export const createSubscription = async (
       payment_behavior: "default_incomplete",
       payment_settings: { save_default_payment_method: "on_subscription" },
       expand: ["latest_invoice.payment_intent"],
-    });
+    };
+
+    if (stripeCouponId) {
+      subscriptionParams.coupon = stripeCouponId;
+    }
+
+    const subscription = await stripeInstance.subscriptions.create(subscriptionParams);
     console.log("subscription ", subscription);
 
     const latestInvoice = subscription.latest_invoice;
@@ -114,10 +150,18 @@ export const createSubscription = async (
       status: TransactionStatus.PENDING,
     });
 
+    if (discountRow) {
+      await db
+        .from(Tables.DISCOUNT_CODES)
+        .update({ current_uses: (discountRow.current_uses || 0) + 1 })
+        .eq("id", discountRow.id);
+    }
+
     return res.status(200).send({
       status: true,
       subscriptionId: subscription.id,
       clientSecret,
+      discountApplied: !!discountRow,
     });
   } catch (error) {
     console.error("Error creating subscription:", error);

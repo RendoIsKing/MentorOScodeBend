@@ -370,7 +370,7 @@ export class Server {
     this.app.use("/api/backend/v1/safety", Auth, SafetyRoutes);
     this.app.use("/api/backend/v1/goal-suggestions", Auth, GoalSuggestionsRoutes);
     this.app.use("/api/backend/v1/mentor-analytics", Auth, MentorAnalyticsRoutes);
-    this.app.use("/api/backend/v1/mentor-settings", Auth, MentorSettingsRoutes);
+    this.app.use("/api/backend/v1/mentor-settings", MentorSettingsRoutes);
     this.app.use("/api/backend/v1/invite-links", InviteLinkRoutes);
     this.app.use("/api/backend/v1/discount-codes", DiscountCodeRoutes);
     this.app.use("/", downloadRouter);

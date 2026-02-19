@@ -8,7 +8,8 @@ const SubscriptionRoutes: Router = Router();
 
 const createSubscriptionSchema = z.object({
   planId: objectId,
-}).strict();
+  promoCode: z.string().trim().max(30).optional(),
+});
 
 const tipSchema = z.object({
   creatorId: objectId,

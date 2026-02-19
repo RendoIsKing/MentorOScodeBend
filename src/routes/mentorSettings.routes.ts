@@ -164,4 +164,24 @@ MentorSettingsRoutes.post(
   }
 );
 
+// GET /mentor-settings/branding/:mentorId — public: fetch branding for a mentor
+MentorSettingsRoutes.get("/branding/:mentorId", async (req: Request, res: Response) => {
+  try {
+    const { data: branding } = await db
+      .from(Tables.MENTOR_BRANDING)
+      .select("primary_color, secondary_color, accent_color")
+      .eq("mentor_id", req.params.mentorId)
+      .maybeSingle();
+
+    return res.json({
+      primaryColor: branding?.primary_color || "#0078D7",
+      secondaryColor: branding?.secondary_color || "#00AEEF",
+      accentColor: branding?.accent_color || "#10B981",
+    });
+  } catch (err) {
+    console.error("[mentor-settings] public branding error:", err);
+    return res.json({ primaryColor: "#0078D7", secondaryColor: "#00AEEF", accentColor: "#10B981" });
+  }
+});
+
 export default MentorSettingsRoutes;
