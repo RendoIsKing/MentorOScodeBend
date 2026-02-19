@@ -114,12 +114,12 @@ export const getCoachClients = async (
       ])
     );
 
-    // 4. Get chat threads where the coach is a participant
-    // Supabase array containment: participants @> ARRAY[coachId]::uuid[]
+    // 4. Get direct chat threads where the coach is a participant (not agent threads)
     const { data: threads, error: threadsErr } = await db
       .from(Tables.CHAT_THREADS)
       .select("id, participants, last_message_at, last_message_text, unread, safety_status, is_paused")
-      .contains("participants", [coachId]);
+      .contains("participants", [coachId])
+      .eq("thread_type", "direct");
 
     if (threadsErr) {
       console.error("[coach-clients] threads query error:", threadsErr);

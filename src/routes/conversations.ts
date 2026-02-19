@@ -83,6 +83,51 @@ r.post(
   }
 });
 
+// ── POST /conversations/direct — mentor starts a direct DM with a student ───
+const directConversationSchema = z.object({
+  studentId: uuidString,
+}).strict();
+
+r.post(
+  '/conversations/direct',
+  ensureAuth as any,
+  validateZod({ body: directConversationSchema }),
+  async (req: any, res) => {
+  try {
+    const me = String(req.user?._id || req.user?.id || '');
+    const { studentId } = req.body;
+    if (!me) return res.status(401).json({ error: 'not_authenticated' });
+    if (!req.user?.isMentor) return res.status(403).json({ error: 'not_a_mentor' });
+
+    const pair = [me, String(studentId)].sort();
+
+    const { data: existing } = await db
+      .from(Tables.CHAT_THREADS)
+      .select('*')
+      .eq('thread_type', 'direct')
+      .contains('participants', pair)
+      .limit(1)
+      .maybeSingle();
+
+    let t = existing;
+    if (!t) {
+      const unread: Record<string, number> = { [me]: 0, [String(studentId)]: 0 };
+      t = await insertOne(Tables.CHAT_THREADS, {
+        participants: pair,
+        last_message_at: new Date().toISOString(),
+        unread,
+        thread_type: 'direct',
+      });
+      if (!t) return res.status(500).json({ error: 'create_failed' });
+    }
+
+    return res.json({ conversationId: t.id });
+  } catch (err: any) {
+    console.error('[direct-conversation] Error:', err?.message || err);
+    return res.status(500).json({ error: 'internal' });
+  }
+});
+
 // ── POST /conversations — create or find a DM thread ────────────────────────
 r.post(
   '/conversations',
