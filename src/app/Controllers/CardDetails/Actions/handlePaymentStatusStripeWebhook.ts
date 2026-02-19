@@ -63,6 +63,9 @@ export const handlePaymentStatusWebhookStripe = async (
     case "checkout.session.completed":
       await handleCheckoutSessionCompleted(event);
       break;
+    case "invoice.payment_succeeded":
+      await handleInvoicePaymentSucceeded(event);
+      break;
     case "invoice.payment_failed":
     case "payment_intent.payment_failed":
       await handlePaymentFailed(event);
@@ -276,6 +279,64 @@ const handleCheckoutSessionCompleted = async (event: any) => {
     } catch {}
   } catch (error) {
     console.error("[checkout.session.completed] Error:", error);
+  }
+};
+
+/**
+ * When a subscription invoice is paid, transfer the mentor's share to their Stripe Connect account.
+ */
+const handleInvoicePaymentSucceeded = async (event: any) => {
+  const invoice = event.data.object;
+  try {
+    const subscriptionId = invoice.subscription;
+    if (!subscriptionId) return;
+
+    const amountPaid = invoice.amount_paid; // in smallest currency unit (e.g. øre)
+    if (!amountPaid || amountPaid <= 0) return;
+
+    const sub = await findOne(Tables.SUBSCRIPTIONS, { stripe_subscription_id: subscriptionId });
+    if (!sub?.stripe_price_id) return;
+
+    const plan = await findOne(Tables.SUBSCRIPTION_PLANS, { stripe_price_id: sub.stripe_price_id });
+    if (!plan?.user_id) return;
+
+    const { data: mentor } = await db
+      .from(Tables.USERS)
+      .select("id, stripe_connect_id, platform_fee_percent")
+      .eq("id", plan.user_id)
+      .maybeSingle();
+
+    if (!mentor?.stripe_connect_id) return;
+
+    const feePercent = mentor.platform_fee_percent ?? 20;
+    const platformFee = Math.round(amountPaid * (feePercent / 100));
+    const mentorShare = amountPaid - platformFee;
+
+    if (mentorShare <= 0) return;
+
+    const transfer = await stripeInstance.transfers.create({
+      amount: mentorShare,
+      currency: invoice.currency || "nok",
+      destination: mentor.stripe_connect_id,
+      transfer_group: `sub_${subscriptionId}`,
+      metadata: { invoiceId: invoice.id, mentorId: mentor.id },
+    });
+
+    await db.from(Tables.PAYOUTS).insert({
+      mentor_id: mentor.id,
+      amount: mentorShare / 100,
+      currency: invoice.currency || "nok",
+      platform_fee: platformFee / 100,
+      stripe_transfer_id: transfer.id,
+      subscription_id: sub.id,
+      invoice_id: invoice.id,
+      status: "completed",
+    });
+
+    console.log(`[webhook] Transferred ${mentorShare} to mentor ${mentor.id} (fee: ${platformFee})`);
+  } catch (err) {
+    console.error("[webhook] invoice.payment_succeeded transfer error:", err);
+    Sentry.captureException(err);
   }
 };
 

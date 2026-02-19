@@ -1,8 +1,9 @@
-import { Router } from "express";
+import { Router, Request, Response } from "express";
 import { z } from "zod";
 import OnlyAdmins from "../app/Middlewares/onlyAdmins";
 import { validateZod } from "../app/Middlewares/validateZod";
 import { objectIdParam } from "../app/Validation/requestSchemas";
+import { updateById, Tables } from "../lib/db";
 import { getDashboardStats } from "../app/Controllers/Admin/Dashboard/getDashboardStats";
 import { impersonateUser } from "../app/Controllers/Admin/Users/impersonateUserAction";
 import { getAdminTransactions } from "../app/Controllers/Admin/Transactions/getAdminTransactions";
@@ -65,6 +66,26 @@ AdminRoutes.post(
   OnlyAdmins,
   validateZod({ params: objectIdParam("id"), body: z.object({}).strict() }),
   resolveReport
+);
+
+AdminRoutes.put(
+  "/users/:id/commission",
+  OnlyAdmins,
+  validateZod({
+    params: objectIdParam("id"),
+    body: z.object({ platformFeePercent: z.number().min(0).max(100) }),
+  }),
+  async (req: Request, res: Response) => {
+    try {
+      await updateById(Tables.USERS, req.params.id, {
+        platform_fee_percent: req.body.platformFeePercent,
+      });
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[admin] commission update error:", err);
+      return res.status(500).json({ error: "Failed to update commission" });
+    }
+  }
 );
 
 export default AdminRoutes;

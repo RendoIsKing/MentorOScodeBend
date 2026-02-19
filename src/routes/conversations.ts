@@ -790,6 +790,4 @@ r.get('/debug-ai', async (req: any, res) => {
   }
 
   return res.json({ userName, mentorId, testMessage, steps });
-});
-
-export default r;
+});export default r;

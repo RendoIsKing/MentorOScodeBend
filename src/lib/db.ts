@@ -74,6 +74,7 @@ export const Tables = {
   GOAL_SUGGESTIONS: "goal_suggestions",
   MENTOR_BRANDING: "mentor_branding",
   MENTOR_CHECKLIST: "mentor_checklist",
+  PAYOUTS: "payouts",
 } as const;
 
 // ── Common query helpers ─────────────────────────────────────────────────────
