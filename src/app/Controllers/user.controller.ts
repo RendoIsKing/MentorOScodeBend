@@ -950,29 +950,37 @@ export class UsersControllers {
           .json({ error: { message: "User to delete does not exists." } });
       }
 
-      // Soft-delete in public.users
-      await updateById(Tables.USERS, id, {
-        is_deleted: true,
-        deleted_at: new Date().toISOString(),
-      });
-
-      // Also remove from Supabase Auth so the email/phone can be re-used
+      // 1. Delete from Supabase Auth
       if (existingUser.auth_id) {
-        try {
-          const { supabaseAdmin } = await import("../../lib/supabase");
-          const { error: authDeleteErr } = await supabaseAdmin.auth.admin.deleteUser(
-            existingUser.auth_id
-          );
-          if (authDeleteErr) {
-            console.error("[destroy] Failed to delete Supabase Auth user:", authDeleteErr.message);
-          }
-        } catch (authErr) {
-          console.error("[destroy] Error deleting Supabase Auth user:", authErr);
+        const { supabaseAdmin: adminClient } = await import("../../lib/supabase");
+        const { error: authDeleteErr } = await adminClient.auth.admin.deleteUser(
+          existingUser.auth_id
+        );
+        if (authDeleteErr) {
+          console.error("[destroy] Failed to delete Supabase Auth user:", authDeleteErr.message);
+          return res.status(500).json({
+            error: { message: `Failed to delete from Supabase Auth: ${authDeleteErr.message}` },
+          });
         }
+      }
+
+      // 2. Hard delete from public.users
+      const { supabaseAdmin: adminClient } = await import("../../lib/supabase");
+      const { error: dbDeleteErr } = await adminClient
+        .from(Tables.USERS)
+        .delete()
+        .eq("id", id);
+
+      if (dbDeleteErr) {
+        console.error("[destroy] Failed to delete from public.users:", dbDeleteErr.message);
+        return res.status(500).json({
+          error: { message: `Failed to delete user record: ${dbDeleteErr.message}` },
+        });
       }
 
       return res.json({ message: "User deleted successfully." });
     } catch (err) {
+      console.error("[destroy] error:", err);
       return res
         .status(500)
         .json({ error: { message: "Something went wrong." } });
