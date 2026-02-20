@@ -1046,6 +1046,19 @@ class AuthController {
       if (body.welcomeMessage !== undefined) updateData.welcome_message = body.welcomeMessage;
       if (body.websiteLink !== undefined) updateData.website_link = body.websiteLink;
       if (body.notificationPreferences !== undefined) updateData.notification_preferences = body.notificationPreferences;
+      if (body.hasConfirmedAge !== undefined) updateData.has_confirmed_age = body.hasConfirmedAge;
+      if (body.hasPersonalInfo !== undefined) updateData.has_personal_info = body.hasPersonalInfo;
+      if (body.hasPhotoInfo !== undefined) updateData.has_photo_info = body.hasPhotoInfo;
+      if (body.hasSelectedInterest !== undefined) updateData.has_selected_interest = body.hasSelectedInterest;
+      if (body.hasDocumentUploaded !== undefined) updateData.has_document_uploaded = body.hasDocumentUploaded;
+      if (body.hasDocumentVerified !== undefined) updateData.has_document_verified = body.hasDocumentVerified;
+      if (body.firstName !== undefined) updateData.first_name = body.firstName;
+      if (body.lastName !== undefined) updateData.last_name = body.lastName;
+      if (body.interests !== undefined) updateData.interests = body.interests;
+      if (body.location !== undefined) updateData.location = body.location;
+      if (body.fcmToken !== undefined) updateData.fcm_token = body.fcmToken;
+      if (body.acceptedTosAt !== undefined) updateData.accepted_tos_at = body.acceptedTosAt;
+      if (body.tosVersion !== undefined) updateData.tos_version = body.tosVersion;
 
       // If password change, update via Supabase Auth
       if (body.password && user.auth_id) {

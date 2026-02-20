@@ -123,6 +123,19 @@ const updateMeSchema = z.object({
     payment_received: z.boolean().optional(),
     safety_flag: z.boolean().optional(),
   }).optional(),
+  hasConfirmedAge: z.boolean().optional(),
+  hasPersonalInfo: z.boolean().optional(),
+  hasPhotoInfo: z.boolean().optional(),
+  hasSelectedInterest: z.boolean().optional(),
+  hasDocumentUploaded: z.boolean().optional(),
+  hasDocumentVerified: z.boolean().optional(),
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
+  interests: z.array(z.string()).optional(),
+  location: z.string().optional(),
+  fcmToken: z.string().optional(),
+  acceptedTosAt: z.string().optional(),
+  tosVersion: z.string().optional(),
 }).strict();
 
 auth.post("/register", validateZod({ body: registerSchema }), AuthController.regsiter);
