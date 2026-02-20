@@ -920,35 +920,60 @@ class AuthController {
         .select("*")
         .single();
 
-      // Generate real Supabase Auth tokens
+      // Generate real Supabase Auth tokens via generateLink (avoids password
+      // changes which can revoke existing sessions/refresh tokens).
       let accessToken = "";
       let refreshToken = "";
 
       if (updatedUser?.auth_id) {
-        // Get the auth user's actual email (may differ from public.users email
-        // if user was created via phone with a placeholder email)
         const { data: authUserData, error: authLookupErr } = await supabaseAdmin.auth.admin.getUserById(updatedUser.auth_id);
         const authEmail = authUserData?.user?.email;
         console.log("[verifyOtp] auth_id:", updatedUser.auth_id, "authEmail:", authEmail, "publicEmail:", updatedUser.email, "authLookupErr:", authLookupErr?.message);
 
         if (authEmail) {
-          const tempPw = crypto.randomBytes(32).toString("hex");
-          const { error: pwErr } = await supabaseAdmin.auth.admin.updateUserById(updatedUser.auth_id, {
-            password: tempPw,
-          });
-          if (pwErr) console.error("[verifyOtp] password update error:", pwErr.message);
+          // Strategy 1: generateLink + verifyOtp (no password change needed)
+          try {
+            const { data: linkData, error: linkError } =
+              await supabaseAdmin.auth.admin.generateLink({
+                type: "magiclink",
+                email: authEmail,
+              });
+            if (!linkError && linkData?.properties?.hashed_token) {
+              const { data: otpSession, error: otpError } =
+                await supabasePublic.auth.verifyOtp({
+                  type: "magiclink",
+                  token_hash: linkData.properties.hashed_token,
+                });
+              if (otpSession?.session) {
+                accessToken = otpSession.session.access_token;
+                refreshToken = otpSession.session.refresh_token;
+                console.log("[verifyOtp] tokens generated via generateLink, access_token length:", accessToken.length);
+              }
+              if (otpError) console.error("[verifyOtp] generateLink verifyOtp failed:", otpError.message);
+            }
+            if (linkError) console.error("[verifyOtp] generateLink failed:", linkError.message);
+          } catch (e) {
+            console.error("[verifyOtp] generateLink threw:", e);
+          }
 
-          const { data: session, error: signInErr } = await supabasePublic.auth.signInWithPassword({
-            email: authEmail,
-            password: tempPw,
-          });
-          if (signInErr) console.error("[verifyOtp] signIn error:", signInErr.message);
-          if (session?.session) {
-            accessToken = session.session.access_token;
-            refreshToken = session.session.refresh_token;
-            console.log("[verifyOtp] tokens generated successfully, access_token length:", accessToken.length);
-          } else {
-            console.error("[verifyOtp] no session returned from signInWithPassword");
+          // Strategy 2: fallback to password-based sign-in if generateLink failed
+          if (!accessToken) {
+            console.log("[verifyOtp] Falling back to password sign-in for:", authEmail);
+            const tempPw = crypto.randomBytes(32).toString("hex");
+            await supabaseAdmin.auth.admin.updateUserById(updatedUser.auth_id, {
+              password: tempPw,
+            });
+            await new Promise((r) => setTimeout(r, 300));
+            const { data: session, error: signInErr } = await supabasePublic.auth.signInWithPassword({
+              email: authEmail,
+              password: tempPw,
+            });
+            if (signInErr) console.error("[verifyOtp] signIn error:", signInErr.message);
+            if (session?.session) {
+              accessToken = session.session.access_token;
+              refreshToken = session.session.refresh_token;
+              console.log("[verifyOtp] tokens generated via password fallback");
+            }
           }
         } else {
           console.error("[verifyOtp] no authEmail found for auth_id:", updatedUser.auth_id);
@@ -1461,9 +1486,10 @@ class AuthController {
         await supabaseAdmin.auth.refreshSession({ refresh_token: refreshToken });
 
       if (error || !session.session) {
-        // Clear cookies
-        res.cookie("auth_token", "", { maxAge: 0, path: "/" });
-        res.cookie("refresh_token", "", { maxAge: 0, path: "/" });
+        // Don't clear cookies here - the client may have a newer token in
+        // mentorio_token/mentorio_refresh that's still valid.  Clearing
+        // httpOnly cookies on a single failed refresh permanently logs out
+        // the user even if their access token hasn't expired yet.
         return res.status(401).json({
           error: { message: "Refresh token expired", code: "REFRESH_EXPIRED" },
         });
