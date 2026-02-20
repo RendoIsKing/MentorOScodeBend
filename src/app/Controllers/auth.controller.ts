@@ -1,6 +1,15 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
+import { createClient } from "@supabase/supabase-js";
 import { supabaseAdmin, supabasePublic } from "../../lib/supabase";
+
+function createFreshPublicClient() {
+  return createClient(
+    process.env.SUPABASE_URL!,
+    process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } },
+  );
+}
 import { OAuth2Client } from "google-auth-library";
 import { addMinutes } from "date-fns";
 import otpGenerator from "../../utils/otpGenerator";
@@ -224,9 +233,10 @@ class AuthController {
         user = inserted;
       }
 
-      // Sign in to get tokens
+      // Sign in to get tokens (use fresh client to avoid singleton session interference)
+      const freshRegClient = createFreshPublicClient();
       const { data: session, error: signInError } =
-        await supabasePublic.auth.signInWithPassword({ email, password });
+        await freshRegClient.auth.signInWithPassword({ email, password });
 
       if (signInError || !session.session) {
         // User created but can't sign in — return success with user data
@@ -261,9 +271,10 @@ class AuthController {
     try {
       const { email, password } = req.body;
 
-      // Try direct sign-in first
+      // Try direct sign-in first (fresh client per request)
+      const freshLoginClient = createFreshPublicClient();
       let { data: session, error } =
-        await supabasePublic.auth.signInWithPassword({ email, password });
+        await freshLoginClient.auth.signInWithPassword({ email, password });
 
       if (error || !session?.session) {
         return res
@@ -528,9 +539,10 @@ class AuthController {
         return res.status(400).json({ message: "Invalid login credentials" });
       }
 
-      // Sign in with Supabase Auth (use public/anon client for proper JWT)
+      // Sign in with Supabase Auth (fresh client per request)
+      const freshUserLoginClient = createFreshPublicClient();
       let { data: session, error: signInError } =
-        await supabasePublic.auth.signInWithPassword({
+        await freshUserLoginClient.auth.signInWithPassword({
           email: authEmail,
           password,
         });
@@ -540,17 +552,15 @@ class AuthController {
       if (signInError && user.auth_id) {
         console.log("[userLogin] direct sign-in failed:", signInError.message, "for", user.user_name, "- syncing auth credentials");
 
-        // Determine which email to use for Supabase Auth
         const syncEmail = user.email || authEmail;
 
-        // Strategy 1: sync credentials and retry signInWithPassword
         const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
           user.auth_id,
           { email: syncEmail!, password, email_confirm: true },
         );
         if (!updateErr) {
           await new Promise((r) => setTimeout(r, 300));
-          const retry = await supabasePublic.auth.signInWithPassword({
+          const retry = await freshUserLoginClient.auth.signInWithPassword({
             email: syncEmail!,
             password,
           });
@@ -572,7 +582,7 @@ class AuthController {
               });
             if (!linkError && linkData?.properties?.hashed_token) {
               const { data: otpSession, error: otpError } =
-                await supabasePublic.auth.verifyOtp({
+                await freshUserLoginClient.auth.verifyOtp({
                   type: "magiclink",
                   token_hash: linkData.properties.hashed_token,
                 });
@@ -780,70 +790,54 @@ class AuthController {
         return res.status(500).json({ message: "Auth account missing email. Please try again." });
       }
 
-      // Strategy 1: signInWithPassword (fast path)
-      const stablePw = crypto.randomBytes(32).toString("hex");
-      await supabaseAdmin.auth.admin.updateUserById(authId, { password: stablePw });
+      // Use a fresh client per request to avoid singleton session interference
+      const freshGoogleClient = createFreshPublicClient();
 
-      const { data: session, error: signInError } = await supabasePublic.auth.signInWithPassword({
-        email: authEmail,
-        password: stablePw,
-      });
+      // Strategy 1: generateLink + verifyOtp (preferred, no password change)
+      try {
+        const { data: linkData, error: linkError } =
+          await supabaseAdmin.auth.admin.generateLink({
+            type: "magiclink",
+            email: authEmail,
+          });
 
-      if (session?.session) {
-        accessToken = session.session.access_token;
-        refreshToken = session.session.refresh_token;
+        if (!linkError && linkData?.properties?.hashed_token) {
+          const { data: otpSession, error: otpError } =
+            await freshGoogleClient.auth.verifyOtp({
+              type: "magiclink",
+              token_hash: linkData.properties.hashed_token,
+            });
+
+          if (otpSession?.session) {
+            accessToken = otpSession.session.access_token;
+            refreshToken = otpSession.session.refresh_token;
+            console.log("[GoogleLogin] tokens via generateLink");
+          }
+          if (otpError) console.error("[GoogleLogin] verifyOtp failed:", otpError.message);
+        }
+        if (linkError) console.error("[GoogleLogin] generateLink failed:", linkError.message);
+      } catch (e) {
+        console.error("[GoogleLogin] generateLink threw:", e);
       }
 
-      // Retry once if first attempt failed (password propagation delay)
-      if (!accessToken && signInError) {
-        console.warn("[GoogleLogin] signInWithPassword attempt 1 failed:", signInError.message);
-        await new Promise((r) => setTimeout(r, 800));
-        const { data: retrySession, error: retryError } = await supabasePublic.auth.signInWithPassword({
+      // Strategy 2: signInWithPassword fallback
+      if (!accessToken) {
+        console.log("[GoogleLogin] Falling back to password sign-in for:", authEmail);
+        const stablePw = crypto.randomBytes(32).toString("hex");
+        await supabaseAdmin.auth.admin.updateUserById(authId, { password: stablePw });
+        await new Promise((r) => setTimeout(r, 300));
+
+        const { data: session, error: signInError } = await freshGoogleClient.auth.signInWithPassword({
           email: authEmail,
           password: stablePw,
         });
-        if (retrySession?.session) {
-          accessToken = retrySession.session.access_token;
-          refreshToken = retrySession.session.refresh_token;
-        }
-        if (retryError) {
-          console.warn("[GoogleLogin] signInWithPassword attempt 2 failed:", retryError.message);
-        }
-      }
 
-      // Strategy 2: generateLink + verifyOtp fallback
-      // Works even when email+password auth is restricted or password
-      // hasn't propagated yet — doesn't require a password at all.
-      if (!accessToken) {
-        console.log("[GoogleLogin] Falling back to generateLink for:", authEmail);
-        try {
-          const { data: linkData, error: linkError } =
-            await supabaseAdmin.auth.admin.generateLink({
-              type: "magiclink",
-              email: authEmail,
-            });
-
-          if (linkError) {
-            console.error("[GoogleLogin] generateLink failed:", linkError.message);
-          } else if (linkData?.properties?.hashed_token) {
-            const { data: otpSession, error: otpError } =
-              await supabasePublic.auth.verifyOtp({
-                type: "magiclink",
-                token_hash: linkData.properties.hashed_token,
-              });
-
-            if (otpSession?.session) {
-              accessToken = otpSession.session.access_token;
-              refreshToken = otpSession.session.refresh_token;
-              console.log("[GoogleLogin] generateLink fallback succeeded");
-            }
-            if (otpError) {
-              console.error("[GoogleLogin] verifyOtp failed:", otpError.message);
-            }
-          }
-        } catch (fallbackErr) {
-          console.error("[GoogleLogin] generateLink fallback threw:", fallbackErr);
+        if (session?.session) {
+          accessToken = session.session.access_token;
+          refreshToken = session.session.refresh_token;
+          console.log("[GoogleLogin] tokens via password fallback");
         }
+        if (signInError) console.error("[GoogleLogin] signIn error:", signInError.message);
       }
 
       if (!accessToken) {
@@ -931,6 +925,10 @@ class AuthController {
         console.log("[verifyOtp] auth_id:", updatedUser.auth_id, "authEmail:", authEmail, "publicEmail:", updatedUser.email, "authLookupErr:", authLookupErr?.message);
 
         if (authEmail) {
+          // Use a fresh (non-singleton) client so that concurrent requests
+          // on the shared supabasePublic don't interfere with session state.
+          const freshClient = createFreshPublicClient();
+
           // Strategy 1: generateLink + verifyOtp (no password change needed)
           try {
             const { data: linkData, error: linkError } =
@@ -940,7 +938,7 @@ class AuthController {
               });
             if (!linkError && linkData?.properties?.hashed_token) {
               const { data: otpSession, error: otpError } =
-                await supabasePublic.auth.verifyOtp({
+                await freshClient.auth.verifyOtp({
                   type: "magiclink",
                   token_hash: linkData.properties.hashed_token,
                 });
@@ -964,7 +962,7 @@ class AuthController {
               password: tempPw,
             });
             await new Promise((r) => setTimeout(r, 300));
-            const { data: session, error: signInErr } = await supabasePublic.auth.signInWithPassword({
+            const { data: session, error: signInErr } = await freshClient.auth.signInWithPassword({
               email: authEmail,
               password: tempPw,
             });
@@ -1481,32 +1479,58 @@ class AuthController {
         });
       }
 
-      // Refresh via Supabase
+      // Strategy 1: standard Supabase refresh
       const { data: session, error } =
         await supabaseAdmin.auth.refreshSession({ refresh_token: refreshToken });
 
-      if (error || !session.session) {
-        // Don't clear cookies here - the client may have a newer token in
-        // mentorio_token/mentorio_refresh that's still valid.  Clearing
-        // httpOnly cookies on a single failed refresh permanently logs out
-        // the user even if their access token hasn't expired yet.
-        return res.status(401).json({
-          error: { message: "Refresh token expired", code: "REFRESH_EXPIRED" },
+      if (!error && session?.session) {
+        setAuthCookies(res, session.session.access_token, session.session.refresh_token, true);
+        return res.json({
+          message: "Token refreshed",
+          token: session.session.access_token,
+          refreshToken: session.session.refresh_token,
         });
       }
 
-      // On refresh, always use long-lived cookies (user was already "remembered")
-      setAuthCookies(
-        res,
-        session.session.access_token,
-        session.session.refresh_token,
-        true,
-      );
+      // Strategy 2: if refresh failed (session_not_found / token revoked),
+      // try to identify the user from the Bearer token and mint a fresh session.
+      const bearerToken = req.headers.authorization?.startsWith("Bearer ")
+        ? req.headers.authorization.slice(7)
+        : null;
+      if (bearerToken) {
+        try {
+          const parts = bearerToken.split(".");
+          if (parts.length === 3) {
+            const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+            if (payload?.sub && payload?.exp && payload.exp > Math.floor(Date.now() / 1000)) {
+              const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(payload.sub);
+              const authEmail = authUser?.user?.email;
+              if (authEmail) {
+                const freshRefreshClient = createFreshPublicClient();
+                const { data: linkData, error: linkError } =
+                  await supabaseAdmin.auth.admin.generateLink({ type: "magiclink", email: authEmail });
+                if (!linkError && linkData?.properties?.hashed_token) {
+                  const { data: otpSession } = await freshRefreshClient.auth.verifyOtp({
+                    type: "magiclink",
+                    token_hash: linkData.properties.hashed_token,
+                  });
+                  if (otpSession?.session) {
+                    setAuthCookies(res, otpSession.session.access_token, otpSession.session.refresh_token, true);
+                    return res.json({
+                      message: "Token refreshed (re-authenticated)",
+                      token: otpSession.session.access_token,
+                      refreshToken: otpSession.session.refresh_token,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
+      }
 
-      return res.json({
-        message: "Token refreshed",
-        token: session.session.access_token,
-        refreshToken: session.session.refresh_token,
+      return res.status(401).json({
+        error: { message: "Refresh token expired", code: "REFRESH_EXPIRED" },
       });
     } catch (error) {
       return res
