@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
-import { supabaseAdmin, supabasePublic } from "../../lib/supabase";
+import { supabaseAdmin } from "../../lib/supabase";
 
 function createFreshPublicClient() {
   return createClient(
