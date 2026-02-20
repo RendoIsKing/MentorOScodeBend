@@ -751,9 +751,7 @@ r.post(
     if (!t || !isParticipant(t, me)) return res.status(403).json({ error: 'forbidden' });
     const others = (t.participants || []).filter((p: string) => p !== me);
     const payload = { threadId: t.id, userId: me };
-    for (const uid of others) {
-      ssePush(uid, 'chat:typing', payload);
-    }
+    sseHub.publishMany(others, { type: 'chat:typing', payload });
     return res.json({ ok: true });
   } catch { return res.status(500).json({ error: 'internal' }); }
 });
