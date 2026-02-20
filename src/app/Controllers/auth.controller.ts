@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import crypto from "crypto";
 import { supabaseAdmin, supabasePublic } from "../../lib/supabase";
 import { OAuth2Client } from "google-auth-library";
 import { addMinutes } from "date-fns";
@@ -264,38 +265,6 @@ class AuthController {
       let { data: session, error } =
         await supabasePublic.auth.signInWithPassword({ email, password });
 
-      // If direct sign-in fails, the user may have registered via phone OTP
-      // and the Supabase Auth email is a placeholder. Look up by email in
-      // public.users and migrate their Auth credentials.
-      if (error && email) {
-        console.log("[login] direct sign-in failed, checking public.users for:", email);
-        const { data: publicUser } = await supabaseAdmin
-          .from("users")
-          .select("auth_id, email, is_deleted, is_active")
-          .ilike("email", email)
-          .eq("is_deleted", false)
-          .limit(1)
-          .maybeSingle();
-
-        if (publicUser?.auth_id) {
-          console.log("[login] found public.users entry with auth_id:", publicUser.auth_id);
-          // Update the Supabase Auth user's email and password to the real ones
-          const { error: updateErr } = await supabaseAdmin.auth.admin.updateUserById(
-            publicUser.auth_id,
-            { email, password, email_confirm: true },
-          );
-          if (updateErr) {
-            console.error("[login] failed to update auth user credentials:", updateErr.message);
-          } else {
-            // Retry sign-in with the updated credentials
-            const retry = await supabasePublic.auth.signInWithPassword({ email, password });
-            session = retry.data;
-            error = retry.error;
-            console.log("[login] retry sign-in result:", error ? error.message : "success");
-          }
-        }
-      }
-
       if (error || !session?.session) {
         return res
           .status(401)
@@ -316,12 +285,12 @@ class AuthController {
       if (user.is_deleted) {
         return res
           .status(401)
-          .json({ error: "User is deleted. Please contact admin" });
+          .json({ error: { message: "User is deleted. Please contact admin" } });
       }
       if (!user.is_active) {
         return res
           .status(401)
-          .json({ error: "User not active. Please contact admin." });
+          .json({ error: { message: "User not active. Please contact admin." } });
       }
 
       // Auto-promote admin if email matches
@@ -812,7 +781,7 @@ class AuthController {
       }
 
       // Strategy 1: signInWithPassword (fast path)
-      const stablePw = `goo_${authId}_${process.env.SESSION_SECRET || "mentorio"}`;
+      const stablePw = crypto.randomBytes(32).toString("hex");
       await supabaseAdmin.auth.admin.updateUserById(authId, { password: stablePw });
 
       const { data: session, error: signInError } = await supabasePublic.auth.signInWithPassword({
@@ -963,7 +932,7 @@ class AuthController {
         console.log("[verifyOtp] auth_id:", updatedUser.auth_id, "authEmail:", authEmail, "publicEmail:", updatedUser.email, "authLookupErr:", authLookupErr?.message);
 
         if (authEmail) {
-          const tempPw = `otp_verified_${updatedUser.auth_id}_${Date.now()}`;
+          const tempPw = crypto.randomBytes(32).toString("hex");
           const { error: pwErr } = await supabaseAdmin.auth.admin.updateUserById(updatedUser.auth_id, {
             password: tempPw,
           });

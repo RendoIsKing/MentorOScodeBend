@@ -73,6 +73,12 @@ const forgotPasswordSchema = z.object({
   phoneNumber: nonEmptyString,
 }).strict();
 
+const forgotPasswordOtpSchema = z.object({
+  dialCode: nonEmptyString,
+  phoneNumber: nonEmptyString,
+  otp: nonEmptyString,
+}).strict();
+
 const resetPasswordSchema = z.object({
   dialCode: nonEmptyString,
   phoneNumber: nonEmptyString,
@@ -127,7 +133,7 @@ auth.post("/verify-otp", validateZod({ body: otpSchema }), AuthController.verify
 auth.post("/me", Auth, validateZod({ body: updateMeSchema }), AuthController.updateMe);
 auth.post("/checkUser", validateZod({ body: checkUserSchema }), AuthController.checkUser);
 auth.post("/forget-password", validateZod({ body: forgotPasswordSchema }), AuthController.sendForgotPasswordOtp);
-auth.post("/validate-otp", validateZod({ body: otpSchema }), AuthController.validateForgotPasswordOtp);
+auth.post("/validate-otp", validateZod({ body: forgotPasswordOtpSchema }), AuthController.validateForgotPasswordOtp);
 auth.put("/reset-password", validateZod({ body: resetPasswordSchema }), AuthController.resetPassword);
 
 auth.get("/me", Auth, AuthController.me);
