@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { Auth as ensureAuth, validateZod } from '../app/Middlewares';
 import { db, findById, findMany, insertOne, updateById, count, Tables } from '../lib/db';
-import { sseHub, ssePush, getOnlineUserIds } from '../lib/sseHub';
+import { sseHub, getOnlineUserIds } from '../lib/sseHub';
 import { createMulterInstance, uploadToSupabase } from '../app/Middlewares/fileUpload';
 import { z } from 'zod';
 import { nonEmptyString } from '../app/Validation/requestSchemas';
